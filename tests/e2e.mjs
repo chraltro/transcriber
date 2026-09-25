@@ -9,11 +9,27 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const ORIGIN = 'https://transcriber.test';
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
 
+// Latest episode of a show as an Apple Podcasts link, looked up at test time so it never goes stale.
+async function appleEpisodeLink(term, country) {
+  const s = await (await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=podcast&limit=1&country=${country}`)).json();
+  const id = s.results[0].collectionId;
+  const l = await (await fetch(`https://itunes.apple.com/lookup?id=${id}&entity=podcastEpisode&limit=1&country=${country}`)).json();
+  const ep = l.results.find((r) => r.wrapperType === 'podcastEpisode');
+  return { url: `https://podcasts.apple.com/${country}/podcast/x/id${id}?i=${ep.trackId}`, title: ep.trackName };
+}
+
+const nrk = await appleEpisodeLink('Abels tårn', 'no');
+const omny = await appleEpisodeLink('Millionærklubben', 'dk');
+
 const CASES = [
-  { name: 'Pocket Casts episode', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english' },
+  { name: 'Pocket Casts episode', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 2, title: 'Xi’s Just Not That Into You' },
+  { name: 'Pocket Casts short link', url: 'https://pca.st/okm7xj7g', lang: 'english', resolveOnly: true, title: 'Xi’s Just Not That Into You' },
+  { name: 'Apple, Norwegian (NRK)', url: nrk.url, lang: 'norwegian', segments: 1, title: nrk.title },
+  { name: 'Apple, Danish (Omny)', url: omny.url, lang: 'danish', segments: 1, title: omny.title },
+  { name: 'Spotify show', url: 'https://open.spotify.com/show/3IM0lmZxpFAY7CwMuv9H4g', lang: 'english', expectList: true },
+  { name: 'RSS feed', url: 'https://feeds.megaphone.fm/hubermanlab', lang: 'english', expectList: true },
   ...(process.env.EXTRA_CASES ? JSON.parse(process.env.EXTRA_CASES) : []),
 ];
-const SEGMENTS_NEEDED = Number(process.env.SEGMENTS_NEEDED || 2);
 const TIMEOUT_MS = Number(process.env.CASE_TIMEOUT_MS || 12 * 60 * 1000);
 
 const browser = await chromium.launch();
@@ -62,7 +78,13 @@ for (const c of CASES) {
     if (line !== last) { console.log(`  ${Math.round((Date.now() - start) / 1000)}s ${line}`); last = line; }
     if (s.error) { result = `error: ${s.error}`; break; }
     if (s.episodes) { result = `episode list (${s.episodes})`; break; }
-    if (s.segments.length >= SEGMENTS_NEEDED) {
+    if (c.resolveOnly && s.stage === 'Downloading episode') {
+      result = s.title === c.title ? 'ok' : `wrong episode: "${s.title}"`;
+      console.log(`  title: ${s.title}`);
+      break;
+    }
+    if (s.segments.length >= (c.segments || 1)) {
+      if (c.title && s.title !== c.title) { result = `wrong episode: "${s.title}"`; break; }
       result = 'ok';
       console.log(`  title: ${s.title}`);
       s.segments.forEach((t) => console.log(`  > ${t}`));
@@ -70,7 +92,7 @@ for (const c of CASES) {
     }
     await page.waitForTimeout(2000);
   }
-  const ok = result === 'ok' || (c.expectList && result.startsWith('episode list'));
+  const ok = c.expectList ? result.startsWith('episode list') : result === 'ok';
   console.log(`  RESULT: ${ok ? 'PASS' : 'FAIL'} (${result})`);
   if (!ok) failures++;
   await ctx.close();
