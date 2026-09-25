@@ -193,7 +193,7 @@ for (const c of CASES) {
       const text = s.segments.join(' ');
       const score = languageScore(text, c.lang);
       console.log(`  ${c.lang} common-word share: ${(score * 100).toFixed(0)}% of ${text.split(/\s+/).length} words`);
-      if (score < 0.12) { result = `transcript does not look ${c.lang} (${(score * 100).toFixed(0)}% common words)`; break; }
+      if (score < 0.12 && !c.skipLanguageCheck) { result = `transcript does not look ${c.lang} (${(score * 100).toFixed(0)}% common words)`; break; }
       if (c.gpu) {
         const device = await page.evaluate(() => document.querySelector('#detail').textContent + ' ' + document.querySelector('#device-hint').textContent);
         console.log(`  device: ${device.slice(0, 160)}`);

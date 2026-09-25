@@ -5,6 +5,15 @@ on:
     branches: ['claude/**']
     paths: ['app.js', 'worker.js', 'index.html', 'style.css', 'lib/**', 'tests/**', '.github/workflows/e2e.yml']
   workflow_dispatch:
+    inputs:
+      only:
+        description: Regex of case names to run (empty runs all)
+        required: false
+        default: ''
+      extra_cases:
+        description: JSON array of extra cases
+        required: false
+        default: ''
 
 jobs:
   unit:
@@ -33,3 +42,6 @@ jobs:
           npx playwright install --with-deps chromium webkit firefox
       - name: Run e2e
         run: node tests/e2e.mjs
+        env:
+          ONLY: ${{ github.event.inputs.only }}
+          EXTRA_CASES: ${{ github.event.inputs.extra_cases }}
