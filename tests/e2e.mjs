@@ -1,16 +1,19 @@
 // End-to-end test: loads the app in headless Chromium with real network access,
 // pastes real podcast links and waits for actual Whisper output.
 // Run: node tests/e2e.mjs  (needs `npm i playwright` and `npx playwright install chromium`)
-import { chromium } from 'playwright';
+import { chromium, webkit, devices } from 'playwright';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { execSync } from 'node:child_process';
 
 // Peak resident memory of Chromium's renderer processes (the tab), sampled once a second.
 // A tab that runs out of memory gets killed, and mobile browsers then silently reload it.
+// Every iOS browser (Brave included) runs on WebKit, so one case runs in Playwright's WebKit
+// with an iPhone profile. Its web process is WPEWebProcess on Linux.
+let memPattern = '--type=renderer';
 function rendererRssMB() {
   try {
-    const out = execSync("ps -eo rss,args | grep -- '--type=renderer' | grep -v grep", { encoding: 'utf8' });
+    const out = execSync(`ps -eo rss,args | grep -E -- '${memPattern}' | grep -v grep`, { encoding: 'utf8' });
     return out.trim().split('\n').reduce((sum, line) => sum + (parseInt(line) || 0), 0) / 1024;
   } catch { return 0; }
 }
@@ -37,6 +40,9 @@ const CASES = [
   { name: 'Resume after reload', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 6, reloadAfter: 3, title: 'Xi’s Just Not That Into You' },
   // Memory must stay flat over a longer run, or a long episode eventually gets the tab killed.
   { name: 'Memory over a long run', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 30, leakCheck: true, title: 'Xi’s Just Not That Into You' },
+  // WebKit needed 6 to 7 GB here before the app switched to the plain ONNX Runtime build.
+  // The WebKit test browser itself idles at about 450 MB, hence the higher limit.
+  { name: 'iPhone (WebKit)', engine: 'webkit', model: 'tiny', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 8, memoryLimitMB: 2000, title: 'Xi’s Just Not That Into You' },
   { name: 'Pocket Casts short link', url: 'https://pca.st/okm7xj7g', lang: 'english', resolveOnly: true, title: 'Xi’s Just Not That Into You' },
   { name: 'Apple, Norwegian (NRK)', url: nrk.url, lang: 'norwegian', segments: 1, title: nrk.title },
   { name: 'Apple, Danish (Omny)', url: omny.url, lang: 'danish', segments: 1, title: omny.title },
@@ -48,13 +54,17 @@ const CASES = [
 const MEMORY_LIMIT_MB = Number(process.env.MEMORY_LIMIT_MB || 1200);
 const TIMEOUT_MS = Number(process.env.CASE_TIMEOUT_MS || 12 * 60 * 1000);
 
-const browser = await chromium.launch();
+const browsers = {};
+const launch = async (engine) => (browsers[engine] ??= await (engine === 'webkit' ? webkit : chromium).launch());
 let failures = 0;
 
 for (const c of CASES) {
   console.log(`\n=== ${c.name}: ${c.url} (${c.lang})`);
   // The public CORS proxies treat localhost specially, so serve the app from a fake https origin instead.
-  const ctx = await browser.newContext({ serviceWorkers: 'block' });
+  const engine = c.engine || 'chromium';
+  memPattern = engine === 'webkit' ? 'WPEWebProcess|WebKitWebProcess' : '--type=renderer';
+  const browser = await launch(engine);
+  const ctx = await browser.newContext(engine === 'webkit' ? { ...devices['iPhone 15'], serviceWorkers: 'block' } : { serviceWorkers: 'block' });
   await ctx.route(`${ORIGIN}/**`, async (route) => {
     let path = new URL(route.request().url()).pathname.replace(/^\/+/, '') || 'index.html';
     try {
@@ -74,7 +84,7 @@ for (const c of CASES) {
 
   await page.goto(`${ORIGIN}/index.html`);
   await page.click(`input[value=${c.lang}] + span`);
-  await page.click('input[name=model][value=base]');
+  await page.click(`input[name=model][value=${c.model || 'base'}]`);
   await page.fill('#url', c.url);
   await page.click('#go');
 
@@ -148,12 +158,13 @@ for (const c of CASES) {
   }
   clearInterval(sampler);
   if (navigations > 0 && result === 'ok') result = `page reloaded ${navigations}x during the run`;
-  if (peakMB > MEMORY_LIMIT_MB && result === 'ok') result = `peak tab memory ${Math.round(peakMB)} MB is over ${MEMORY_LIMIT_MB} MB`;
+  const limit = c.memoryLimitMB || MEMORY_LIMIT_MB;
+  if (peakMB > limit && result === 'ok') result = `peak tab memory ${Math.round(peakMB)} MB is over ${limit} MB`;
   const ok = c.expectList ? result.startsWith('episode list') : result === 'ok';
   console.log(`  RESULT: ${ok ? 'PASS' : 'FAIL'} (${result}) peak tab memory ${Math.round(peakMB)} MB`);
   if (!ok) failures++;
   await ctx.close();
 }
 
-await browser.close();
+for (const b of Object.values(browsers)) await b.close();
 process.exit(failures ? 1 : 0);

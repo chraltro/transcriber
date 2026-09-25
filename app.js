@@ -9,7 +9,8 @@ const MODELS = {
   turbo: { id: 'onnx-community/whisper-large-v3-turbo', name: 'Large v3 Turbo', note: 'Best, especially for Norwegian and Danish', mb: { cpu: 1085, gpu16: 564, gpu32: 759 } },
 };
 
-const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const IS_MOBILE = IS_IOS || /Android/i.test(navigator.userAgent);
 
 const AUDIO_EXT = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac|mp4|m4b|webm)$/i;
 const AUDIO_URL_IN_TEXT = /https?:\\?\/\\?\/[^"'\s<>()]+?\.(?:mp3|m4a|aac|ogg|opus|wav|m4b)(?:\?[^"'\s<>()]*)?(?=["'\s<>()]|$)/gi;
@@ -956,6 +957,9 @@ function offerResume(job) {
 /* ---------- setup ---------- */
 
 async function detectGpu() {
+  // Every iOS browser runs on WebKit, where the GPU path needs a WebAssembly build that
+  // takes gigabytes to compile. The CPU path stays well within an iPhone's memory.
+  if (IS_IOS) return;
   try {
     const adapter = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });
     if (adapter) {
@@ -1008,6 +1012,7 @@ function updateModelHint() {
   const parts = [state.gpu.available
     ? 'Your browser can use the GPU, so an hour-long episode takes minutes.'
     : 'No GPU access in this browser, so transcription runs on the CPU and can take about as long as the episode.'];
+  if (IS_IOS) parts.push('On iPhone and iPad, keep this page open with the screen on until it finishes: iOS pauses pages in the background.');
   if (IS_MOBILE && mb > 300) parts.push('This model may be too big for a phone, and the browser can reload the page if it runs out of memory. Pick Base or Tiny if that happens.');
   else if (!state.gpu.available && key === 'turbo') parts.push('Large v3 Turbo is very slow on a CPU.');
   els.deviceHint.textContent = parts.join(' ');

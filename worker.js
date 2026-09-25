@@ -14,6 +14,15 @@ const HALLUCINATIONS = /^\s*[("[]?\s*(teksting av|tekstet av|undertekst(er)? av|
 let asr = null;
 let loadedKey = null;
 
+// transformers.js loads ONNX Runtime's 27 MB "asyncify" WebAssembly build by default.
+// WebKit, which every iOS browser runs on, needs several gigabytes to compile it and iOS
+// kills the tab. The plain 14 MB build is all the CPU path needs (measured in WebKit:
+// about 1 GB instead of 6 to 7 GB).
+function usePlainWasmBuild() {
+  const dir = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${env.backends.onnx.versions.web}/dist/`;
+  env.backends.onnx.wasm.wasmPaths = { mjs: `${dir}ort-wasm-simd-threaded.mjs`, wasm: `${dir}ort-wasm-simd-threaded.wasm` };
+}
+
 // Audio arrives in pieces while the episode is still being decoded, so the whole episode
 // never has to sit in memory at once. `pending` holds audio not yet transcribed.
 let job = null;
@@ -40,6 +49,7 @@ async function load(model, device, hasF16) {
     loadedKey = null;
   }
   const progress_callback = (p) => post({ type: 'model-progress', ...p });
+  if (device !== 'webgpu' && !loadedKey) usePlainWasmBuild();
   try {
     asr = await pipeline('automatic-speech-recognition', model, {
       device,
