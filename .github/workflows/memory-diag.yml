@@ -6,7 +6,7 @@ on:
 jobs:
   diag:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,9 +17,5 @@ jobs:
           npx playwright install --with-deps chromium webkit
       - run: node tests/e2e.mjs
         env:
-          ONLY: '^X |iPhone'
-          EXTRA_CASES: >-
-            [{"name":"X stock tiny, NRK audio","engine":"webkit","model":"tiny","url":"https://podcasts.apple.com/no/podcast/x/id1198538093?i=1000780388828","lang":"english","segments":3,"memoryLimitMB":4000,"skipLanguageCheck":true},
-             {"name":"X NB tiny, English audio","engine":"webkit","model":"tiny","url":"https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b","lang":"norwegian","segments":3,"memoryLimitMB":4000,"skipLanguageCheck":true},
-             {"name":"X NB base, NRK audio","engine":"webkit","model":"base","url":"https://podcasts.apple.com/no/podcast/x/id1198538093?i=1000780388828","lang":"norwegian","segments":3,"memoryLimitMB":4000},
-             {"name":"X stock base, English audio","engine":"webkit","model":"base","url":"https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b","lang":"english","segments":3,"memoryLimitMB":4000}]
+          ONLY: '^X '
+          EXTRA_CASES: '[{"name": "X stock tiny q8", "engine": "webkit", "model": "tiny", "url": "https://podcasts.apple.com/no/podcast/x/id1198538093?i=1000780388828", "lang": "english", "segments": 3, "memoryLimitMB": 4000, "skipLanguageCheck": true}, {"name": "X NB tiny q8", "engine": "webkit", "model": "tiny", "url": "https://podcasts.apple.com/no/podcast/x/id1198538093?i=1000780388828", "lang": "norwegian", "segments": 3, "memoryLimitMB": 4000, "skipLanguageCheck": true}, {"name": "X NB tiny q4", "engine": "webkit", "model": "tiny", "url": "https://podcasts.apple.com/no/podcast/x/id1198538093?i=1000780388828", "lang": "norwegian", "segments": 3, "memoryLimitMB": 4000, "skipLanguageCheck": true, "query": "?dtype=q4"}, {"name": "X NB tiny q8 enc + q4 dec", "engine": "webkit", "model": "tiny", "url": "https://podcasts.apple.com/no/podcast/x/id1198538093?i=1000780388828", "lang": "norwegian", "segments": 3, "memoryLimitMB": 4000, "skipLanguageCheck": true, "query": "?dtype={\"encoder_model\":\"q8\",\"decoder_model_merged\":\"q4\"}"}, {"name": "X NB tiny uint8", "engine": "webkit", "model": "tiny", "url": "https://podcasts.apple.com/no/podcast/x/id1198538093?i=1000780388828", "lang": "norwegian", "segments": 3, "memoryLimitMB": 4000, "skipLanguageCheck": true, "query": "?dtype=uint8"}, {"name": "X NB tiny int8", "engine": "webkit", "model": "tiny", "url": "https://podcasts.apple.com/no/podcast/x/id1198538093?i=1000780388828", "lang": "norwegian", "segments": 3, "memoryLimitMB": 4000, "skipLanguageCheck": true, "query": "?dtype=int8"}, {"name": "X NB tiny bnb4", "engine": "webkit", "model": "tiny", "url": "https://podcasts.apple.com/no/podcast/x/id1198538093?i=1000780388828", "lang": "norwegian", "segments": 3, "memoryLimitMB": 4000, "skipLanguageCheck": true, "query": "?dtype=bnb4"}, {"name": "X NB tiny fp32", "engine": "webkit", "model": "tiny", "url": "https://podcasts.apple.com/no/podcast/x/id1198538093?i=1000780388828", "lang": "norwegian", "segments": 3, "memoryLimitMB": 4000, "skipLanguageCheck": true, "query": "?dtype=fp32"}, {"name": "X stock tiny q4", "engine": "webkit", "model": "tiny", "url": "https://podcasts.apple.com/no/podcast/x/id1198538093?i=1000780388828", "lang": "english", "segments": 3, "memoryLimitMB": 4000, "skipLanguageCheck": true, "query": "?dtype=q4"}]'

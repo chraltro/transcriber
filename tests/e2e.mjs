@@ -118,7 +118,7 @@ for (const c of CASES) {
     if (!u.startsWith(base) && !/huggingface|jsdelivr|hf\.co|xethub/.test(u)) console.log(`  [${r.status()}] ${u.slice(0, 150)}`);
   });
 
-  await page.goto(`${base}/index.html`);
+  await page.goto(`${base}/index.html${c.query || ''}`);
   // The page settles on GPU or CPU before the model list is final.
   await page.waitForSelector('input[name=model]');
   await page.waitForTimeout(500);

@@ -639,6 +639,13 @@ class GpuFailed extends Error {}
 // give up instead of spinning forever. Progress is saved, so Resume continues from there.
 const WATCHDOG_MS = 10 * 60 * 1000;
 
+// For measuring other weight formats: ?dtype=q4 or ?dtype={"encoder_model":"q8","decoder_model_merged":"q4"}.
+const DTYPE_OVERRIDE = (() => {
+  const v = new URLSearchParams(location.search).get('dtype');
+  if (!v) return undefined;
+  try { return v.startsWith('{') ? JSON.parse(v) : v; } catch { return undefined; }
+})();
+
 async function transcribeAudio(blob, fromSec = 0) {
   const worker = getWorker();
   const id = ++state.jobSeq;
@@ -730,6 +737,7 @@ async function transcribeAudio(blob, fromSec = 0) {
       model: model.id,
       device: state.gpu.available ? 'webgpu' : 'wasm',
       hasF16: state.gpu.f16,
+      dtype: DTYPE_OVERRIDE,
       offsetSec: fromSec,
     });
 

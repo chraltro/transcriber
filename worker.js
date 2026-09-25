@@ -32,8 +32,9 @@ const stream = new StreamingTranscriber({
 
 class GpuFailed extends Error {}
 
-async function load(model, device, hasF16) {
-  const key = `${model}|${device}|${hasF16}`;
+async function load(model, device, hasF16, dtypeOverride) {
+  const dtype = dtypeOverride || dtypeFor(model, device, hasF16);
+  const key = `${model}|${device}|${JSON.stringify(dtype)}`;
   if (asr && loadedKey === key) return;
   if (asr) {
     await asr.dispose?.();
@@ -45,7 +46,7 @@ async function load(model, device, hasF16) {
   try {
     asr = await pipeline('automatic-speech-recognition', model, {
       device,
-      dtype: dtypeFor(model, device, hasF16),
+      dtype,
       progress_callback: (p) => post({ type: 'model-progress', ...p }),
     });
   } catch (err) {
@@ -70,7 +71,7 @@ self.onmessage = async ({ data }) => {
     if (data.type === 'start') {
       stream.start(id, data);
       post({ type: 'status', id, text: 'Loading speech model' });
-      await load(data.model, data.device, data.hasF16);
+      await load(data.model, data.device, data.hasF16, data.dtype);
       if (stream.job?.id !== id) return;
       post({ type: 'ready', id, device: data.device });
       await stream.ready(id);
