@@ -18,6 +18,33 @@ const page = await ctx.newPage();
 page.on('console', (m) => console.log(`  [console.${m.type()}] ${m.text().slice(0, 400)}`));
 await page.goto(`${ORIGIN}/index.html`);
 
+// Top-level worker scripts: which ones start under the routed fake origin?
+const startTest = () => page.evaluate(async () => {
+  const tryStart = (url, type) => new Promise((res) => {
+    const w = new Worker(url, { type });
+    w.onerror = (e) => res(`${url} (${type}): onerror ${e.constructor.name} ${e.message}`);
+    w.onmessage = () => res(`${url} (${type}): started`);
+    setTimeout(() => res(`${url} (${type}): no error within 3 s (started)`), 3000);
+    if (type === 'module') w.postMessage({ type: 'cancel', id: 0 });
+  });
+  const blob = URL.createObjectURL(new Blob([`self.postMessage('hi')`], { type: 'text/javascript' }));
+  return [await tryStart(blob, 'module'), await tryStart('lib/text.js', 'module'), await tryStart('worker.js', 'module'), await tryStart('coi-sw.js', 'classic')];
+});
+console.log('routed origin:', await startTest());
+
+// Same checks with the site served by a real HTTP server.
+const { createServer } = await import('node:http');
+const server = createServer(async (req, res) => {
+  const path = decodeURIComponent(new URL(req.url, 'http://x').pathname).replace(/^\/+/, '') || 'index.html';
+  try {
+    const body = await readFile(join(ROOT, path));
+    res.writeHead(200, { 'content-type': { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' }[extname(path)] || 'application/octet-stream' });
+    res.end(body);
+  } catch { res.writeHead(404); res.end(); }
+}).listen(8765);
+await page.goto('http://localhost:8765/index.html');
+console.log('real server:', await startTest());
+
 // The full app flow on a generated 70 s WAV (tone bursts with pauses), as a user would.
 function wav(seconds) {
   const sr = 16000, n = sr * seconds, buf = Buffer.alloc(44 + n * 2);
@@ -44,3 +71,4 @@ for (let i = 0; i < 150; i++) {
   await page.waitForTimeout(2000);
 }
 await browser.close();
+server.close();
