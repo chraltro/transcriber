@@ -31,12 +31,15 @@ if (typeof window === 'undefined') {
     if (window.crossOriginIsolated || !window.isSecureContext || !('serviceWorker' in navigator)) return;
     // Already controlled but still not isolated: the browser doesn't support it. Don't loop.
     if (navigator.serviceWorker.controller) return;
-    if (sessionStorage.getItem('coi-reloaded')) return;
+    // sessionStorage throws in some privacy modes; without it there is no loop guard, so do nothing.
+    let store;
+    try { store = window.sessionStorage; store.getItem('x'); } catch { return; }
+    if (store.getItem('coi-reloaded')) return;
 
     const reload = () => {
       // Never throw away work in progress; isolation then kicks in on the next visit.
       if (window.__transcriberBusy) return;
-      sessionStorage.setItem('coi-reloaded', '1');
+      store.setItem('coi-reloaded', '1');
       location.reload();
     };
     navigator.serviceWorker.register(document.currentScript.src).then((reg) => {

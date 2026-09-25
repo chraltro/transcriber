@@ -1,29 +1,25 @@
-const $ = (sel) => document.querySelector(sel);
+import { indexMp3 } from './lib/mp3.js';
+import { MODELS } from './lib/models.js';
+import { AUDIO_EXT, audioCandidates, parseFeed, looksLikeFeed, findAudioInHtml } from './lib/links.js';
+import { fmtTime, normTitle, bestTitleMatch, sameShow } from './lib/text.js';
+import { indexWav, wavPiece } from './lib/wav.js';
+import { toSrt, toVtt } from './lib/subtitles.js';
 
-// Download sizes (MB) of the weights each device actually loads: CPU uses 8-bit weights,
-// GPUs use fp16/4-bit when they support 16-bit floats, fp32/4-bit otherwise.
-const MODELS = {
-  tiny: { id: 'onnx-community/whisper-tiny', name: 'Tiny', note: 'Fastest, rough text', mb: { cpu: 41, gpu16: 104, gpu32: 120 } },
-  base: { id: 'onnx-community/whisper-base', name: 'Base', note: 'Fast, weak on Norwegian and Danish', mb: { cpu: 77, gpu16: 165, gpu32: 206 } },
-  small: { id: 'onnx-community/whisper-small', name: 'Small', note: 'Good balance', mb: { cpu: 249, gpu16: 410, gpu32: 586 } },
-  turbo: { id: 'onnx-community/whisper-large-v3-turbo', name: 'Large v3 Turbo', note: 'Best, especially for Norwegian and Danish', mb: { cpu: 1085, gpu16: 564, gpu32: 759 } },
-};
+const $ = (sel) => document.querySelector(sel);
 
 const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const IS_MOBILE = IS_IOS || /Android/i.test(navigator.userAgent);
 
-const AUDIO_EXT = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac|mp4|m4b|webm)$/i;
-const AUDIO_URL_IN_TEXT = /https?:\\?\/\\?\/[^"'\s<>()]+?\.(?:mp3|m4a|aac|ogg|opus|wav|m4b)(?:\?[^"'\s<>()]*)?(?=["'\s<>()]|$)/gi;
-
 const els = {
   form: $('#url-form'), url: $('#url'), go: $('#go'), models: $('#models'), file: $('#file'), proxy: $('#proxy'),
   deviceHint: $('#device-hint'),
-  episodesCard: $('#episodes-card'), feedTitle: $('#feed-title'), episodes: $('#episodes'), filter: $('#episode-filter'),
+  episodesCard: $('#episodes-card'), feedTitle: $('#feed-title'), episodesNote: $('#episodes-note'), episodes: $('#episodes'), filter: $('#episode-filter'),
   progressCard: $('#progress-card'), stage: $('#stage'), bar: $('#bar-fill'), detail: $('#detail'), cancel: $('#cancel'),
   errorCard: $('#error-card'), error: $('#error'),
-  resumeCard: $('#resume-card'), resumeText: $('#resume-text'),
+  resumeCard: $('#resume-card'), resumeText: $('#resume-text'), resumeWhy: $('#resume-why'),
   resultCard: $('#result-card'), title: $('#episode-title'), transcript: $('#transcript'),
-  copy: $('#copy'), download: $('#download'), timestamps: $('#timestamps'),
+  copy: $('#copy'), download: $('#download'), downloadSrt: $('#download-srt'), downloadVtt: $('#download-vtt'), timestamps: $('#timestamps'),
+  announce: $('#announce'),
 };
 
 const state = {
@@ -37,6 +33,7 @@ const state = {
   wakeLock: null,
   rejectRun: null,
   job: null,
+  jobSeq: 0,
 };
 
 /* ---------- small helpers ---------- */
@@ -46,14 +43,8 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
 };
 
-function fmtTime(sec) {
-  sec = Math.max(0, Math.round(sec));
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  const mm = String(m).padStart(h ? 2 : 1, '0');
-  return `${h ? h + ':' : ''}${mm}:${String(s).padStart(2, '0')}`;
-}
+
+const cancelled = () => new DOMException('Cancelled', 'AbortError');
 
 function fmtBytes(n) {
   if (!n) return '0 MB';
@@ -91,24 +82,35 @@ function progress(stage, fraction, detail = '') {
   if (fraction == null) {
     els.bar.classList.add('indeterminate');
     els.bar.style.width = '';
+    els.bar.parentElement.removeAttribute('aria-valuenow');
   } else {
+    const pct = Math.min(100, fraction * 100);
     els.bar.classList.remove('indeterminate');
-    els.bar.style.width = `${Math.min(100, fraction * 100).toFixed(1)}%`;
+    els.bar.style.width = `${pct.toFixed(1)}%`;
+    els.bar.parentElement.setAttribute('aria-valuenow', Math.round(pct));
   }
   els.detail.textContent = detail;
 }
 
 async function acquireWakeLock() {
-  try { state.wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
+  if (state.wakeLock) return;
+  try {
+    const lock = await navigator.wakeLock?.request('screen');
+    // The job may have finished while the request was pending.
+    if (state.busy && !state.wakeLock) state.wakeLock = lock;
+    else lock?.release().catch(() => {});
+  } catch {}
 }
 
 function releaseWakeLock() {
-  state.wakeLock?.release().catch(() => {});
+  state.wakeLock?.release?.().catch(() => {});
   state.wakeLock = null;
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (state.busy && document.visibilityState === 'visible') acquireWakeLock();
+  if (document.visibilityState !== 'visible') return;
+  state.wakeLock = null; // browsers release the lock when the page is hidden
+  if (state.busy) acquireWakeLock();
 });
 
 /* ---------- network ---------- */
@@ -149,11 +151,20 @@ async function fetchText(url) {
 }
 
 function jsonp(url, timeout = 15000) {
+  const signal = state.abort?.signal;
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(cancelled());
     const cb = `__jsonp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const script = document.createElement('script');
-    const cleanup = () => { delete window[cb]; script.remove(); clearTimeout(timer); };
+    const cleanup = () => {
+      window[cb] = () => {}; // a late response must not hit an undefined function
+      script.remove();
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const onAbort = () => { cleanup(); reject(cancelled()); };
     const timer = setTimeout(() => { cleanup(); reject(new Error('Request timed out')); }, timeout);
+    signal?.addEventListener('abort', onAbort);
     window[cb] = (data) => { cleanup(); resolve(data); };
     script.onerror = () => { cleanup(); reject(new Error('Request failed')); };
     script.src = `${url}${url.includes('?') ? '&' : '?'}callback=${cb}`;
@@ -161,23 +172,6 @@ function jsonp(url, timeout = 15000) {
   });
 }
 
-// Podcast audio URLs are often wrapped in tracking redirects, e.g.
-// https://dts.podtrac.com/redirect.mp3/audioboom.com/posts/1.mp3. Some of those hops don't
-// allow browser downloads even when the real host does, so also try each embedded URL.
-function audioCandidates(url) {
-  const out = [url];
-  let u;
-  try { u = new URL(url); } catch { return out; }
-  const encoded = u.pathname.match(/https?%3A%2F%2F.+$/i);
-  if (encoded) out.push(decodeURIComponent(encoded[0]));
-  const segs = u.pathname.split('/');
-  const inner = [];
-  for (let i = 1; i < segs.length - 1; i++) {
-    if (/^(?:[a-z0-9-]+\.)+[a-z]{2,}$/i.test(segs[i])) inner.push(`https://${segs.slice(i).join('/')}${u.search}`);
-  }
-  out.push(...inner.reverse());
-  return [...new Set(out)];
-}
 
 // Episodes are kept in the browser's disk cache (Cache Storage) and read back a piece at a
 // time, so a 100 MB file never sits in memory, and a reloaded page can resume without
@@ -190,104 +184,89 @@ async function openAudioCache() {
 }
 
 async function cachedAudio(key) {
-  const cache = await openAudioCache();
-  const hit = await cache?.match(key);
-  return hit ? hit.blob() : null;
+  try {
+    const hit = await (await openAudioCache())?.match(key);
+    return hit ? await hit.blob() : null;
+  } catch {
+    return null;
+  }
 }
 
-async function storeAudio(key, response) {
+// Stores the response on disk and returns a Blob backed by it. `fallback` produces the audio
+// another way (in memory) when Cache Storage is missing, full, or evicts the entry.
+async function storeAudio(key, response, fallback) {
   const cache = await openAudioCache();
-  if (!cache) return response.blob(); // no Cache Storage (some private modes): keep it in memory
-  for (const old of await cache.keys()) await cache.delete(old);
-  await cache.put(key, response);
-  return (await cache.match(key)).blob();
+  if (cache) {
+    try {
+      for (const old of await cache.keys()) if (old.url !== key) await cache.delete(old);
+      await cache.put(key, response);
+      const hit = await cache.match(key);
+      if (hit) return await hit.blob();
+    } catch (err) {
+      if (err.name === 'AbortError') throw err;
+      console.warn('Could not keep the episode in Cache Storage, using memory instead', err);
+    }
+  }
+  return fallback();
 }
 
-async function forgetAudio() {
-  try { await caches.delete(AUDIO_CACHE); } catch {}
+async function forgetAudio(key) {
+  try { await (await openAudioCache())?.delete(key); } catch {}
+}
+
+async function openAudio(url) {
+  for (const candidate of audioCandidates(url)) {
+    try {
+      return await smartFetch(candidate);
+    } catch (err) {
+      if (err.name === 'AbortError') throw err;
+    }
+  }
+  throw new UserError(
+    "The podcast's host doesn't allow web pages to download its audio, so this episode can't be fetched from the browser.\n\n" +
+    'Download the episode yourself and pick the file under "More options", or add your own CORS proxy there.'
+  );
+}
+
+function counting(res, label) {
+  const total = Number(res.headers.get('content-length')) || 0;
+  let got = 0;
+  return res.body.pipeThrough(new TransformStream({
+    transform(chunk, ctl) {
+      got += chunk.length;
+      progress(label, total ? got / total : null, total ? `${fmtBytes(got)} of ${fmtBytes(total)}` : fmtBytes(got));
+      ctl.enqueue(chunk);
+    },
+  }));
 }
 
 async function downloadAudio(url, key) {
   const cached = await cachedAudio(key);
   if (cached) return cached;
 
-  progress('Downloading episode', null, 'Connecting');
-  let res = null;
-  for (const candidate of audioCandidates(url)) {
+  // Mobile connections drop; start over (from the cache-busting fresh request) a couple of times.
+  for (let attempt = 1; ; attempt++) {
+    progress('Downloading episode', null, attempt > 1 ? `Connection dropped, retrying (${attempt} of 3)` : 'Connecting');
     try {
-      res = await smartFetch(candidate);
-      break;
+      const res = await openAudio(url);
+      const type = res.headers.get('content-type') || 'audio/mpeg';
+      return await storeAudio(key, new Response(counting(res, 'Downloading episode'), { headers: { 'content-type': type } }),
+        async () => (await openAudio(url)).blob());
     } catch (err) {
-      if (err.name === 'AbortError') throw err;
+      if (err instanceof UserError || err.name === 'AbortError' || attempt >= 3) {
+        if (err instanceof UserError || err.name === 'AbortError') throw err;
+        throw new UserError(`The download kept failing (${err.message || 'network error'}). Check the connection and try again.`);
+      }
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
     }
   }
-  if (!res) {
-    throw new UserError(
-      "The podcast's host doesn't allow web pages to download its audio, so this episode can't be fetched from the browser.\n\n" +
-      'Download the episode yourself and pick the file under "More options", or add your own CORS proxy there.'
-    );
-  }
-  const total = Number(res.headers.get('content-length')) || 0;
-  let got = 0;
-  const counted = res.body.pipeThrough(new TransformStream({
-    transform(chunk, ctl) {
-      got += chunk.length;
-      progress('Downloading episode', total ? got / total : null, total ? `${fmtBytes(got)} of ${fmtBytes(total)}` : fmtBytes(got));
-      ctl.enqueue(chunk);
-    },
-  }));
-  return storeAudio(key, new Response(counted, { headers: { 'content-type': res.headers.get('content-type') || 'audio/mpeg' } }));
 }
 
 /* ---------- link resolution ---------- */
 
-function textOf(parent, tag) {
-  return parent.getElementsByTagName(tag)[0]?.textContent?.trim() || '';
-}
 
-function parseFeed(xml) {
-  const doc = new DOMParser().parseFromString(xml, 'text/xml');
-  if (doc.querySelector('parsererror')) return null;
-  const channel = doc.getElementsByTagName('channel')[0] || doc.documentElement;
-  const title = textOf(channel, 'title');
-  const episodes = [];
-  for (const item of doc.getElementsByTagName('item')) {
-    const enc = item.getElementsByTagName('enclosure')[0];
-    const url = enc?.getAttribute('url') || textOf(item, 'media:content');
-    if (!url) continue;
-    episodes.push({
-      title: textOf(item, 'title') || 'Untitled episode',
-      url,
-      date: textOf(item, 'pubDate'),
-      duration: textOf(item, 'itunes:duration'),
-    });
-  }
-  return { title, episodes };
-}
 
-const looksLikeFeed = (text) => /<(rss|feed)[\s>]/i.test(text.slice(0, 2000)) && /<(item|entry)[\s>]/i.test(text);
 
-function findAudioInHtml(html, baseUrl) {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const abs = (u) => { try { return new URL(u, baseUrl).href; } catch { return null; } };
-  const title = doc.querySelector('meta[property="og:title"]')?.content || doc.title || '';
-
-  const direct =
-    doc.querySelector('meta[property="og:audio"], meta[property="og:audio:url"], meta[property="og:audio:secure_url"]')?.content ||
-    doc.querySelector('meta[name="twitter:player:stream"]')?.content ||
-    doc.querySelector('audio[src]')?.getAttribute('src') ||
-    doc.querySelector('audio source[src]')?.getAttribute('src');
-  if (direct) return { kind: 'audio', url: abs(direct), title };
-
-  // Only trust a bare audio URL in the page source if it's the only one; pages listing
-  // several episodes would otherwise hand us the wrong one.
-  const found = new Set((html.match(AUDIO_URL_IN_TEXT) || []).map((m) => m.replace(/\\\//g, '/').replace(/\\u0026/gi, '&').replace(/&amp;/g, '&')));
-  if (found.size === 1) return { kind: 'audio', url: [...found][0], title };
-
-  const feed = doc.querySelector('link[type="application/rss+xml"], link[type="application/atom+xml"]')?.getAttribute('href');
-  if (feed) return { kind: 'feed', url: abs(feed), title };
-  return null;
-}
 
 async function resolveFeed(url, preferTitle) {
   const { text } = await fetchText(url);
@@ -300,23 +279,7 @@ async function resolveFeed(url, preferTitle) {
   return { kind: 'list', ...feed };
 }
 
-const normTitle = (s) => s.toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
-function bestTitleMatch(episodes, title) {
-  const want = normTitle(title);
-  if (!want) return null;
-  const exact = episodes.find((e) => normTitle(e.title) === want);
-  if (exact) return exact;
-  const wantWords = new Set(want.split(' '));
-  let best = null;
-  let bestScore = 0;
-  for (const e of episodes) {
-    const words = normTitle(e.title).split(' ');
-    const overlap = words.filter((w) => wantWords.has(w)).length / Math.max(wantWords.size, words.length);
-    if (overlap > bestScore) { bestScore = overlap; best = e; }
-  }
-  return bestScore >= 0.6 ? best : null;
-}
 
 const ITUNES_COUNTRIES = ['us', 'no', 'dk', 'se', 'gb'];
 
@@ -350,11 +313,6 @@ async function itunesSearch(term, entity, keep = () => true) {
   return [];
 }
 
-const sameShow = (a, b) => {
-  const x = normTitle(a || '');
-  const y = normTitle(b || '');
-  return !!x && !!y && (x === y || x.includes(y) || y.includes(x));
-};
 
 async function resolveApple(u) {
   const showId = u.pathname.match(/id(\d+)/)?.[1];
@@ -427,8 +385,19 @@ async function resolveSpotify(u) {
   if (!title) throw new UserError("Spotify didn't recognise that link. Try the Apple Podcasts or Pocket Casts link for the same podcast.");
 
   if (isEpisode) {
-    const found = await findByName('', title);
-    if (found) return found;
+    // Spotify doesn't say which show the episode is from, so only an exact title match is used
+    // automatically; otherwise the user picks from the closest matches.
+    const eps = await itunesSearch(title, 'podcastEpisode', (e) => e.episodeUrl);
+    const exact = eps.filter((e) => normTitle(e.trackName) === normTitle(title));
+    if (exact.length === 1) return { kind: 'audio', url: exact[0].episodeUrl, title: exact[0].trackName };
+    const words = new Set(normTitle(title).split(' '));
+    const close = (exact.length ? exact : eps)
+      .map((e) => ({ e, shared: normTitle(e.trackName).split(' ').filter((w) => words.has(w)).length }))
+      .filter((x) => x.shared >= Math.min(2, words.size))
+      .sort((a, b) => b.shared - a.shared)
+      .slice(0, 10)
+      .map(({ e }) => ({ title: `${e.trackName} (${e.collectionName})`, url: e.episodeUrl, date: e.releaseDate, duration: e.trackTimeMillis ? fmtTime(e.trackTimeMillis / 1000) : '' }));
+    if (close.length) return { kind: 'list', title: `Which episode is "${title}"?`, episodes: close };
     throw new UserError(
       `Couldn't find "${title}" in Apple's podcast directory. Spotify links don't say which show an episode belongs to, ` +
       `so it has to be found by title, and very new episodes (the last day or two) aren't searchable yet. ` +
@@ -493,7 +462,8 @@ async function resolveLink(raw) {
   progress('Reading link', null, u.host);
   const res = await smartFetch(u.href);
   const type = res.headers.get('content-type') || '';
-  if (/^(audio|video)\//i.test(type)) {
+  const size = Number(res.headers.get('content-length')) || 0;
+  if (/^(audio|video)\/|octet-stream/i.test(type) || size > 20e6) {
     res.body?.cancel().catch(() => {});
     return { kind: 'audio', url: u.href, title: decodeURIComponent(u.pathname.split('/').pop()) || u.host };
   }
@@ -513,10 +483,13 @@ async function resolveLink(raw) {
 function showEpisodes(feed) {
   state.episodeList = feed.episodes;
   els.feedTitle.textContent = feed.title || 'Pick an episode';
+  els.episodesNote.textContent = feed.note || '';
+  els.episodesNote.classList.toggle('hidden', !feed.note);
   els.filter.value = '';
   renderEpisodes();
   els.episodesCard.classList.remove('hidden');
   els.episodesCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  els.filter.focus({ preventScroll: true });
 }
 
 function renderEpisodes() {
@@ -561,77 +534,8 @@ const SAMPLE_RATE = 16000;
 const PIECE_SECONDS = 60;
 const MAX_AHEAD_SECONDS = 90; // decoded audio allowed to wait for the worker
 
-const MP3_KBPS = {
-  V1L1: [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
-  V1L2: [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
-  V1L3: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
-  V2L1: [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
-  V2L23: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
-};
-const MP3_RATES = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] };
 
-function mp3FrameAt(b, i) {
-  if (i + 4 > b.length || b[i] !== 0xff || (b[i + 1] & 0xe0) !== 0xe0) return null;
-  const version = (b[i + 1] >> 3) & 3; // 3 = MPEG1, 2 = MPEG2, 0 = MPEG2.5
-  const layer = (b[i + 1] >> 1) & 3;   // 3 = I, 2 = II, 1 = III
-  const brIndex = b[i + 2] >> 4;
-  const srIndex = (b[i + 2] >> 2) & 3;
-  const pad = (b[i + 2] >> 1) & 1;
-  if (version === 1 || layer === 0 || brIndex === 0 || brIndex === 15 || srIndex === 3) return null;
-  const v1 = version === 3;
-  const table = v1 ? ['', 'V1L3', 'V1L2', 'V1L1'][layer] : layer === 3 ? 'V2L1' : 'V2L23';
-  const bitrate = MP3_KBPS[table][brIndex] * 1000;
-  const sr = MP3_RATES[version][srIndex];
-  if (layer === 3) return { len: (Math.floor((12 * bitrate) / sr) + pad) * 4, spf: 384, sr };
-  if (layer === 2) return { len: Math.floor((144 * bitrate) / sr) + pad, spf: 1152, sr };
-  return { len: Math.floor(((v1 ? 144 : 72) * bitrate) / sr) + pad, spf: v1 ? 1152 : 576, sr };
-}
 
-// Byte offset of every audio frame, or null if this isn't a (clean) MP3. Reads the file
-// 4 MB at a time so it never has to be in memory whole.
-async function indexMp3(blob) {
-  const size = blob.size;
-  const WINDOW = 4 << 20;
-  const OVERLAP = 8192; // larger than any MP3 frame, so a frame and the next header always fit
-  let win = new Uint8Array(await blob.slice(0, WINDOW + OVERLAP).arrayBuffer());
-  let winStart = 0;
-  let i = 0;
-  if (win[0] === 0x49 && win[1] === 0x44 && win[2] === 0x33) {
-    i = 10 + (((win[6] & 127) << 21) | ((win[7] & 127) << 14) | ((win[8] & 127) << 7) | (win[9] & 127)) + (win[5] & 0x10 ? 10 : 0);
-  }
-  const offsets = [];
-  let spf = 0;
-  let sr = 0;
-  let covered = 0;
-  let first = '';
-  while (i < size - 4) {
-    if (i - winStart + OVERLAP > win.length && winStart + win.length < size) {
-      winStart = i;
-      win = new Uint8Array(await blob.slice(i, i + WINDOW + OVERLAP).arrayBuffer());
-    }
-    const j = i - winStart;
-    const f = mp3FrameAt(win, j);
-    // The next frame has to line up as well, so stray 0xFF bytes aren't taken for frames.
-    if (f && f.len > 4 && (i + f.len >= size - 4 || mp3FrameAt(win, j + f.len))) {
-      if (!sr) {
-        ({ sr, spf } = f);
-        first = String.fromCharCode(...win.subarray(j, j + Math.min(f.len, 64)));
-      }
-      if (f.sr === sr && f.spf === spf) {
-        offsets.push(i);
-        covered += f.len;
-      }
-      i += f.len;
-    } else {
-      i++;
-      if (!offsets.length && i > 1 << 20) return null;
-    }
-  }
-  if (offsets.length < 50 || covered < size * 0.8) return null;
-  // Skip the Xing/Info/VBRI header frame: it holds metadata, and some decoders size their output from it.
-  if (/Xing|Info|VBRI/.test(first)) offsets.shift();
-  return { offsets, spf, sr };
-}
 
 async function decodeMono16k(arrayBuffer) {
   const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
@@ -651,31 +555,68 @@ async function decodeMono16k(arrayBuffer) {
   return out;
 }
 
+// Formats that can't be cut into pieces are decoded whole, which needs roughly 10x the file
+// size in memory. Phones kill tabs long before that for a full episode.
+const WHOLE_DECODE_LIMIT = IS_MOBILE ? 40e6 : 400e6;
+
 // Yields 16 kHz mono audio a piece at a time, starting at fromSec. Calls onTotal(seconds) first.
 async function* decodePieces(blob, onTotal, fromSec = 0) {
   const skip = Math.round(fromSec * SAMPLE_RATE);
   const mp3 = await indexMp3(blob);
-  if (!mp3) {
-    // Not an MP3 (for example AAC in an .m4a). Those containers can't be cut up, so decode it whole.
-    const whole = await decodeMono16k(await blob.arrayBuffer());
-    onTotal(whole.length / SAMPLE_RATE);
-    const step = PIECE_SECONDS * SAMPLE_RATE;
-    for (let s = skip; s < whole.length; s += step) yield whole.slice(s, s + step);
+  if (mp3) {
+    yield* mp3Pieces(blob, mp3, onTotal, skip);
     return;
   }
-  const { offsets, spf, sr } = mp3;
-  onTotal((offsets.length * spf) / sr);
+  const wav = await indexWav(blob);
+  if (wav && wav.format !== 0xfffe) {
+    yield* wavPieces(blob, wav, onTotal, skip);
+    return;
+  }
+  if (blob.size > WHOLE_DECODE_LIMIT) {
+    throw new UserError(
+      `This episode's audio format (${blob.type || 'not MP3'}) can't be decoded in pieces, and at ${fmtBytes(blob.size)} it needs more memory ` +
+      `than ${IS_MOBILE ? 'a phone' : 'this browser'} allows. Try it on a computer, or find an MP3 version of the episode.`
+    );
+  }
+  const whole = await decodeMono16k(await blob.arrayBuffer());
+  onTotal(whole.length / SAMPLE_RATE);
+  const step = PIECE_SECONDS * SAMPLE_RATE;
+  for (let s = skip; s < whole.length; s += step) yield whole.slice(s, s + step);
+}
+
+async function* mp3Pieces(blob, { offsets, spf, sr }, onTotal, skip) {
+  const n = offsets.length;
+  onTotal((n * spf) / sr);
   const per = Math.ceil((PIECE_SECONDS * sr) / spf);
+  const toSamples = (frames) => Math.round((frames * spf * SAMPLE_RATE) / sr);
   // MP3 frames can borrow bits from the frames before them, so decode two extra and drop their audio.
   const WARMUP = 2;
-  for (let k = 0; k < offsets.length; k += per) {
-    const pieceStart = Math.round((k * spf * SAMPLE_RATE) / sr);
-    const pieceEnd = Math.round((Math.min(k + per, offsets.length) * spf * SAMPLE_RATE) / sr);
-    if (pieceEnd <= skip) continue;
+  for (let k = 0; k < n; k += per) {
+    const last = k + per >= n;
+    const pieceStart = toSamples(k);
+    if (toSamples(Math.min(k + per, n)) <= skip) continue;
     const from = Math.max(0, k - WARMUP);
-    const end = k + per < offsets.length ? offsets[k + per] : blob.size;
-    const pcm = await decodeMono16k(await blob.slice(offsets[from], end).arrayBuffer());
-    const drop = Math.round(((k - from) * spf * SAMPLE_RATE) / sr) + Math.max(0, skip - pieceStart);
+    const pcm = await decodeMono16k(await blob.slice(offsets[from], last ? blob.size : offsets[k + per]).arrayBuffer());
+    // Line pieces up from their end: decoders differ in how much they emit for the first
+    // frames of a slice, but every one of them produces the piece's own frames at the end.
+    const expected = toSamples(Math.min(k + per, n) - k);
+    let drop = !last && pcm.length >= expected ? pcm.length - expected : toSamples(k - from);
+    drop += Math.max(0, skip - pieceStart);
+    yield drop ? pcm.slice(drop) : pcm;
+  }
+}
+
+async function* wavPieces(blob, info, onTotal, skip) {
+  const frames = info.dataSize / info.blockAlign;
+  onTotal(frames / info.sampleRate);
+  const per = PIECE_SECONDS * info.sampleRate;
+  for (let f = 0; f < frames; f += per) {
+    const pieceEnd = Math.round(((f + per) * SAMPLE_RATE) / info.sampleRate);
+    if (pieceEnd <= skip) continue;
+    const a = info.dataStart + f * info.blockAlign;
+    const b = info.dataStart + Math.min(frames, f + per) * info.blockAlign;
+    const pcm = await decodeMono16k(wavPiece(info, new Uint8Array(await blob.slice(a, b).arrayBuffer())).buffer);
+    const drop = Math.max(0, skip - Math.round((f * SAMPLE_RATE) / info.sampleRate));
     yield drop ? pcm.slice(drop) : pcm;
   }
 }
@@ -692,24 +633,39 @@ function killWorker() {
   state.worker = null;
 }
 
+class GpuFailed extends Error {}
+
+// If the model goes quiet this long (a worker that ran out of memory often dies silently),
+// give up instead of spinning forever. Progress is saved, so Resume continues from there.
+const WATCHDOG_MS = 10 * 60 * 1000;
+
 async function transcribeAudio(blob, fromSec = 0) {
   const worker = getWorker();
+  const id = ++state.jobSeq;
   const model = MODELS[selectedModel()];
   const files = new Map();
   let total = 0;
   let buffered = 0;
   let ready = false;
   let wake = null;
+  let lastHeard = Date.now();
   let finish;
   let fail;
   const finished = new Promise((res, rej) => { finish = res; fail = rej; });
   finished.catch(() => {});
   state.rejectRun = fail;
   const nudge = () => { const w = wake; wake = null; w?.(); };
+  const watchdog = setInterval(() => {
+    if (Date.now() - lastHeard < WATCHDOG_MS) return;
+    fail(new UserError('The speech model stopped responding, most likely because the browser ran out of memory. Try a smaller model, then Resume: your progress is saved.'));
+    nudge();
+  }, 15000);
 
   progress('Loading speech model', null, 'First run downloads the model, then it is cached');
 
   worker.onmessage = ({ data: m }) => {
+    if (m.id !== id) return; // from an earlier job in this worker
+    lastHeard = Date.now();
     switch (m.type) {
       case 'status':
         if (!ready) progress(m.text, null, '');
@@ -730,8 +686,7 @@ async function transcribeAudio(blob, fromSec = 0) {
       }
       case 'ready':
         ready = true;
-        state.device = m.device;
-        progress('Transcribing', 0, m.device === 'webgpu' ? 'Using your GPU' : 'Using your CPU. This is slower than a GPU.');
+        progress('Transcribing', total ? fromSec / total : 0, m.device === 'webgpu' ? 'Using your GPU' : 'Using your CPU. This is slower than a GPU.');
         break;
       case 'buffered':
         buffered = m.seconds;
@@ -741,8 +696,8 @@ async function transcribeAudio(blob, fromSec = 0) {
         buffered = m.buffered;
         addSegment(m);
         saveProgress(m.end, total);
-        const rate = m.end / Math.max(m.elapsed, 0.001);
-        const eta = (total - m.end) / rate;
+        const rate = (m.end - fromSec) / Math.max(m.elapsed, 0.001);
+        const eta = (total - m.end) / Math.max(rate, 0.001);
         progress(
           'Transcribing',
           total ? m.end / total : null,
@@ -755,33 +710,39 @@ async function transcribeAudio(blob, fromSec = 0) {
         finish();
         break;
       case 'error':
-        fail(new Error(m.message));
+        fail(m.gpuFailed ? new GpuFailed(m.message) : new Error(m.message));
         nudge();
         break;
     }
   };
   worker.onerror = (e) => { fail(new Error(e.message || 'The transcription worker crashed. Try a smaller model.')); nudge(); };
 
-  worker.postMessage({
-    type: 'start',
-    language: language(),
-    model: model.id,
-    device: state.gpu.available ? 'webgpu' : 'wasm',
-    hasF16: state.gpu.f16,
-    offsetSec: fromSec,
-  });
+  try {
+    worker.postMessage({
+      type: 'start',
+      id,
+      language: language(),
+      model: model.id,
+      device: state.gpu.available ? 'webgpu' : 'wasm',
+      hasF16: state.gpu.f16,
+      offsetSec: fromSec,
+    });
 
-  // Decode while the model loads and while earlier pieces are transcribed, but never run
-  // more than MAX_AHEAD_SECONDS ahead of the worker, so memory stays flat.
-  let pieces = 0;
-  for await (const piece of decodePieces(blob, (t) => { total = t; }, fromSec)) {
-    if (!pieces++ && !fromSec && piece.length < SAMPLE_RATE) throw new UserError('That audio is empty or too short to transcribe.');
-    buffered += piece.length / SAMPLE_RATE;
-    worker.postMessage({ type: 'audio', samples: piece }, [piece.buffer]);
-    while (buffered > MAX_AHEAD_SECONDS) await Promise.race([new Promise((r) => { wake = r; }), finished]);
+    // Decode while the model loads and while earlier pieces are transcribed, but never run
+    // more than MAX_AHEAD_SECONDS ahead of the worker, so memory stays flat.
+    let pieces = 0;
+    for await (const piece of decodePieces(blob, (t) => { total = t; }, fromSec)) {
+      if (!pieces++ && !fromSec && piece.length < SAMPLE_RATE) throw new UserError('That audio is empty or too short to transcribe.');
+      buffered += piece.length / SAMPLE_RATE;
+      worker.postMessage({ type: 'audio', id, samples: piece }, [piece.buffer]);
+      while (buffered > MAX_AHEAD_SECONDS) await Promise.race([new Promise((r) => { wake = r; }), finished]);
+    }
+    worker.postMessage({ type: 'audio', id, samples: new Float32Array(0), final: true });
+    await finished;
+  } finally {
+    clearInterval(watchdog);
+    state.rejectRun = null;
   }
-  worker.postMessage({ type: 'audio', samples: new Float32Array(0), final: true });
-  await finished;
 }
 
 /* ---------- transcript output ---------- */
@@ -803,10 +764,10 @@ function restoreTranscript(job) {
   for (const seg of job.segments) addSegment(seg);
 }
 
-function addSegment({ start, text }) {
+function addSegment({ start, end, text }) {
   if (!text) return;
   if (!state.segments.length) els.transcript.replaceChildren();
-  state.segments.push({ start, text });
+  state.segments.push({ start, end, text });
   const nearBottom = els.transcript.scrollHeight - els.transcript.scrollTop - els.transcript.clientHeight < 40;
   const p = document.createElement('p');
   const ts = document.createElement('span');
@@ -841,16 +802,21 @@ async function copyTranscript() {
   setTimeout(() => { els.copy.textContent = 'Copy'; }, 1800);
 }
 
-function downloadTranscript() {
-  const text = transcriptText();
-  if (!text) return;
-  const blob = new Blob([`${state.title}\n\n${text}\n`], { type: 'text/plain;charset=utf-8' });
+function saveFile(content, ext, type) {
+  if (!state.segments.length) return;
+  const blob = new Blob([content], { type: `${type};charset=utf-8` });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `${state.title.replace(/[\\/:*?"<>|]+/g, '').slice(0, 100) || 'transcript'}.txt`;
+  a.download = `${state.title.replace(/[\\/:*?"<>|]+/g, '').slice(0, 100).trim() || 'transcript'}.${ext}`;
+  document.body.append(a);
   a.click();
+  a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
+
+const downloadTranscript = () => saveFile(`${state.title}\n\n${transcriptText()}\n`, 'txt', 'text/plain');
+const downloadSrt = () => saveFile(toSrt(state.segments), 'srt', 'application/x-subrip');
+const downloadVtt = () => saveFile(toVtt(state.segments), 'vtt', 'text/vtt');
 
 /* ---------- main flow ---------- */
 
@@ -873,18 +839,30 @@ function saveProgress(doneSec, total) {
 }
 
 function clearJob() {
+  const key = state.job?.key || loadJob()?.key;
   state.job = null;
   try { localStorage.removeItem(JOB_KEY); } catch {}
-  forgetAudio();
+  if (key) forgetAudio(key);
 }
 
+function announce(text) {
+  els.announce.textContent = '';
+  setTimeout(() => { els.announce.textContent = text; }, 50);
+}
+
+// One run at a time. Every await is followed by a check that this run is still the current
+// one, so a cancelled or replaced run can never touch the page, the worker or saved progress.
 async function run(getSource, resume = null) {
+  if (state.busy) return;
   clearError();
   els.resumeCard.classList.add('hidden');
-  state.abort = new AbortController();
+  const ctl = new AbortController();
+  state.abort = ctl;
+  const current = () => state.abort === ctl && !ctl.signal.aborted;
   setBusy(true);
   try {
     const source = resume ? resume.source : await getSource();
+    if (!current()) return;
     if (source.kind === 'list') {
       setBusy(false);
       showEpisodes(source);
@@ -899,22 +877,27 @@ async function run(getSource, resume = null) {
     if (source.url) {
       blob = await downloadAudio(source.url, key);
     } else if (source.file) {
-      blob = await storeAudio(key, new Response(source.file));
+      // Kept on disk so a reload can resume; if storage is full, the file itself works too.
+      blob = await storeAudio(key, new Response(source.file), () => source.file);
     } else {
       blob = await cachedAudio(key);
       if (!blob) throw new UserError('That file is no longer stored in the browser. Pick it again under "More options".');
     }
+    if (!current()) return;
 
+    const fromSec = resume?.doneSec || 0;
     saveJob({
       source: { kind: 'audio', title: source.title, url: source.url, fileId: source.fileId },
+      key,
       title: source.title,
       lang: language(),
       segments: state.segments,
-      doneSec: resume?.doneSec || 0,
+      doneSec: fromSec,
       total: resume?.total || 0,
     });
-    await transcribeAudio(blob, resume?.doneSec || 0);
+    await transcribeAudio(blob, fromSec);
     blob = null;
+    if (!current()) return;
     clearJob();
     if (!state.segments.length) {
       els.transcript.replaceChildren();
@@ -925,31 +908,47 @@ async function run(getSource, resume = null) {
     }
     progress('Done', 1, '');
     setBusy(false);
+    announce('Transcript finished.');
   } catch (err) {
+    if (!current()) return; // cancelled or replaced: whoever took over owns the page now
+    killWorker(); // never reuse a worker after an error
     setBusy(false);
-    if (err.name === 'AbortError' || state.abort?.signal.aborted) return;
-    console.error(err);
+    if (err instanceof GpuFailed && state.gpu.available) {
+      // The GPU path failed to start. Remember that and carry on with the CPU instead.
+      console.warn('GPU transcription failed, switching to the CPU', err);
+      state.gpu.available = false;
+      store.set('gpu-broken', '1');
+      refreshModels();
+      const job = loadJob();
+      if (job) return run(null, job);
+    }
+    if (err instanceof UserError) console.warn(err.message); else console.error(err);
     showError(err instanceof UserError ? err.message : `Something went wrong: ${err.message || err}`);
+    els.errorCard.focus?.();
+    const job = loadJob();
+    if (job?.doneSec > 0) offerResume(job, false);
   }
 }
 
 function cancel() {
   state.abort?.abort();
-  state.rejectRun?.(new DOMException('Cancelled', 'AbortError'));
+  state.rejectRun?.(cancelled());
   killWorker();
   clearJob();
   setBusy(false);
+  progress('Cancelled', null, '');
 }
 
-function offerResume(job) {
+function offerResume(job, afterReload = true) {
   restoreTranscript(job);
+  els.resumeWhy.classList.toggle('hidden', !afterReload);
   const done = fmtTime(job.doneSec);
   els.resumeText.textContent = job.total
     ? `"${job.title}" stopped at ${done} of ${fmtTime(job.total)}.`
     : `"${job.title}" stopped at ${done}.`;
   els.resumeCard.classList.remove('hidden');
   if (job.lang) {
-    const radio = document.querySelector(`input[name=lang][value="${job.lang}"]`);
+    const radio = document.querySelector(`input[name=lang][value="${CSS.escape(job.lang)}"]`);
     if (radio) radio.checked = true;
   }
 }
@@ -959,7 +958,7 @@ function offerResume(job) {
 async function detectGpu() {
   // Every iOS browser runs on WebKit, where the GPU path needs a WebAssembly build that
   // takes gigabytes to compile. The CPU path stays well within an iPhone's memory.
-  if (IS_IOS) return;
+  if (IS_IOS || store.get('gpu-broken', '') === '1') return;
   try {
     const adapter = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });
     if (adapter) {
@@ -978,8 +977,14 @@ function modelSizeMB(m) {
   return state.gpu.f16 ? m.mb.gpu16 : m.mb.gpu32;
 }
 
-function fillModels() {
-  const saved = store.get('model', null);
+function refreshModels() {
+  const chosen = selectedModel();
+  els.models.querySelectorAll('.model-opt').forEach((l) => l.remove());
+  fillModels(chosen);
+}
+
+function fillModels(keep = null) {
+  const saved = keep || store.get('model', null);
   const fallback = IS_MOBILE ? 'base' : state.gpu.available ? 'turbo' : 'small';
   const chosen = MODELS[saved] ? saved : fallback;
   for (const [key, m] of Object.entries(MODELS)) {
@@ -1021,7 +1026,7 @@ function updateModelHint() {
 async function init() {
   const savedLang = store.get('lang', null);
   if (savedLang) {
-    const radio = document.querySelector(`input[name=lang][value="${savedLang}"]`);
+    const radio = document.querySelector(`input[name=lang][value="${CSS.escape(savedLang)}"]`);
     if (radio) radio.checked = true;
   }
   els.proxy.value = store.get('proxy', '');
@@ -1050,6 +1055,8 @@ async function init() {
   els.filter.addEventListener('input', renderEpisodes);
   els.copy.addEventListener('click', copyTranscript);
   els.download.addEventListener('click', downloadTranscript);
+  els.downloadSrt.addEventListener('click', downloadSrt);
+  els.downloadVtt.addEventListener('click', downloadVtt);
   els.timestamps.addEventListener('change', () => els.transcript.classList.toggle('show-ts', els.timestamps.checked));
   $('#episodes-close').addEventListener('click', () => els.episodesCard.classList.add('hidden'));
 
@@ -1061,6 +1068,7 @@ async function init() {
     if (job && !state.busy) run(null, job);
   });
   $('#discard').addEventListener('click', () => {
+    if (state.busy) return;
     clearJob();
     els.resumeCard.classList.add('hidden');
     els.resultCard.classList.add('hidden');
@@ -1076,4 +1084,4 @@ async function init() {
 init();
 
 // For tests.
-export { indexMp3, decodePieces, decodeMono16k };
+export { decodePieces, decodeMono16k, toSrt };

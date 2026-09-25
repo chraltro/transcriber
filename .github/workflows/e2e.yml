@@ -3,10 +3,22 @@ name: End-to-end test
 on:
   push:
     branches: ['claude/**']
-    paths: ['app.js', 'worker.js', 'index.html', 'tests/e2e.mjs', '.github/workflows/e2e.yml']
+    paths: ['app.js', 'worker.js', 'index.html', 'style.css', 'lib/**', 'tests/**', '.github/workflows/e2e.yml']
   workflow_dispatch:
 
 jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Unit tests (with network checks of the model files)
+        run: NETWORK_TESTS=1 npm test
+
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 40

@@ -54,7 +54,7 @@ header h1 { margin: 0 0 6px; font-size: 1.9rem; letter-spacing: -0.02em; }
   margin-bottom: 16px;
 }
 .hidden { display: none !important; }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 input[type=url], input[type=text], input[type=search], select {
   width: 100%;
@@ -151,6 +151,9 @@ fieldset.models legend { font-size: 0.85rem; color: var(--muted); margin-bottom:
 #bar-fill.indeterminate { width: 30%; animation: slide 1.2s infinite ease-in-out; }
 @keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
 .detail { margin: 10px 0 0; font-size: 0.9rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.episodes-note { margin: 0 0 10px; }
+#error-card:focus { outline: none; }
 
 .resume-text { margin: 0 0 12px; color: var(--muted); }
 

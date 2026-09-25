@@ -61,7 +61,7 @@
       <div class="card-head">
         <h2>Unfinished transcript</h2>
       </div>
-      <p class="resume-text"><span id="resume-text"></span> The page reloaded before it finished, which usually means the browser ran out of memory. A smaller model uses less.</p>
+      <p class="resume-text"><span id="resume-text"></span> <span id="resume-why">The page reloaded before it finished, which usually means the browser ran out of memory. A smaller model uses less.</span></p>
       <div class="actions">
         <button type="button" class="primary" id="resume">Resume</button>
         <button type="button" class="ghost" id="discard">Discard</button>
@@ -73,7 +73,8 @@
         <h2 id="feed-title">Pick an episode</h2>
         <button type="button" class="ghost" id="episodes-close">Close</button>
       </div>
-      <input type="search" id="episode-filter" placeholder="Filter episodes">
+      <p class="hint episodes-note hidden" id="episodes-note"></p>
+      <input type="search" id="episode-filter" placeholder="Filter episodes" aria-label="Filter episodes">
       <ul id="episodes"></ul>
     </section>
 
@@ -82,11 +83,11 @@
         <h2 id="stage">Working</h2>
         <button type="button" class="ghost" id="cancel">Cancel</button>
       </div>
-      <div class="bar"><div id="bar-fill"></div></div>
+      <div class="bar" role="progressbar" aria-labelledby="stage"><div id="bar-fill"></div></div>
       <p class="detail" id="detail"></p>
     </section>
 
-    <section class="card hidden" id="error-card" role="alert">
+    <section class="card hidden" id="error-card" role="alert" tabindex="-1">
       <p id="error"></p>
     </section>
 
@@ -95,12 +96,16 @@
         <h2 id="episode-title">Transcript</h2>
         <div class="actions">
           <label class="toggle"><input type="checkbox" id="timestamps"> Timestamps</label>
-          <button type="button" id="download" class="ghost">Download .txt</button>
+          <button type="button" id="download" class="ghost">.txt</button>
+          <button type="button" id="download-srt" class="ghost" title="Subtitles with timestamps">.srt</button>
+          <button type="button" id="download-vtt" class="ghost" title="Web subtitles with timestamps">.vtt</button>
           <button type="button" id="copy" class="primary">Copy</button>
         </div>
       </div>
-      <div id="transcript" tabindex="0"></div>
+      <div id="transcript" tabindex="0" aria-label="Transcript"></div>
     </section>
+
+    <div id="announce" class="sr-only" aria-live="polite"></div>
 
     <footer>
       Speech recognition by OpenAI Whisper via <a href="https://github.com/huggingface/transformers.js">Transformers.js</a>.
