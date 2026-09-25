@@ -43,6 +43,7 @@ if (typeof window === 'undefined') {
       location.reload();
     };
     navigator.serviceWorker.register(document.currentScript.src).then((reg) => {
+      if (!reg) return;
       if (reg.active) return reload();
       const sw = reg.installing || reg.waiting;
       sw?.addEventListener('statechange', () => sw.state === 'activated' && reload());
