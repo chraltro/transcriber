@@ -4,6 +4,16 @@
 import { chromium } from 'playwright';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
+import { execSync } from 'node:child_process';
+
+// Peak resident memory of Chromium's renderer processes (the tab), sampled once a second.
+// A tab that runs out of memory gets killed, and mobile browsers then silently reload it.
+function rendererRssMB() {
+  try {
+    const out = execSync("ps -eo rss,args | grep -- '--type=renderer' | grep -v grep", { encoding: 'utf8' });
+    return out.trim().split('\n').reduce((sum, line) => sum + (parseInt(line) || 0), 0) / 1024;
+  } catch { return 0; }
+}
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const ORIGIN = 'https://transcriber.test';
@@ -63,6 +73,10 @@ for (const c of CASES) {
   await page.click('#go');
 
   const start = Date.now();
+  let peakMB = 0;
+  const sampler = setInterval(() => { peakMB = Math.max(peakMB, rendererRssMB()); }, 1000);
+  let navigations = 0;
+  page.on('framenavigated', (f) => { if (f === page.mainFrame()) navigations++; });
   let last = '';
   let result = 'timeout';
   while (Date.now() - start < TIMEOUT_MS) {
@@ -93,8 +107,10 @@ for (const c of CASES) {
     }
     await page.waitForTimeout(2000);
   }
+  clearInterval(sampler);
+  if (navigations > 0 && result === 'ok') result = `page reloaded ${navigations}x during the run`;
   const ok = c.expectList ? result.startsWith('episode list') : result === 'ok';
-  console.log(`  RESULT: ${ok ? 'PASS' : 'FAIL'} (${result})`);
+  console.log(`  RESULT: ${ok ? 'PASS' : 'FAIL'} (${result}) peak tab memory ${Math.round(peakMB)} MB`);
   if (!ok) failures++;
   await ctx.close();
 }

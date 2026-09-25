@@ -1,0 +1,24 @@
+name: Probe
+on:
+  push:
+    branches: ['claude/**']
+    paths: ['.github/workflows/probe.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          for m in whisper-tiny whisper-base whisper-small whisper-medium whisper-large-v3-turbo; do
+            echo "== onnx-community/$m"
+            curl -sS "https://huggingface.co/api/models/onnx-community/$m/tree/main/onnx" | python3 -c "
+          import json,sys
+          try: files=json.load(sys.stdin)
+          except Exception as e: print('  not found'); sys.exit()
+          if isinstance(files,dict): print('  ',files); sys.exit()
+          for f in files:
+            p=f['path'].split('/')[-1]
+            if p.startswith(('encoder_model','decoder_model_merged')) and p.endswith('.onnx') or p.endswith('.onnx_data'):
+              size=f.get('lfs',{}).get('size') or f.get('size')
+              print(f'   {p:45s} {size/1e6:8.1f} MB')
+          "
+          done
