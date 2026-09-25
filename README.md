@@ -7,8 +7,8 @@ Everything runs in your browser using OpenAI's Whisper through [Transformers.js]
 ## Supported links
 
 - **Apple Podcasts**: episode links (`...?i=1000...`) go straight to that episode, show links list the episodes
-- **Pocket Casts**: `pca.st/episode/...`, `pca.st/podcast/...` and `pocketcasts.com` links
-- **Spotify**: finds the same episode in the podcast's public feed (Spotify exclusives can't be transcribed)
+- **Pocket Casts**: episode links (`pca.st/episode/...`, `pca.st/<code>`) and `pocketcasts.com` show links
+- **Spotify**: finds the same episode through Apple's podcast directory (Spotify exclusives can't be transcribed)
 - **RSS feeds**: pick an episode from the list
 - **Episode web pages**: finds the audio on the page, or its RSS feed
 - **Direct audio links** (`.mp3`, `.m4a`, ...)
@@ -34,7 +34,16 @@ You can prefill a link with `?url=<podcast link>`.
 
 ## How downloads work
 
-Browsers only let a page download audio from servers that allow it (CORS). The app tries the link directly first, then a few public CORS proxies. If a host blocks all of them, you can deploy the included `cors-proxy-worker.js` as a free Cloudflare Worker and paste its URL under "More options", or download the episode yourself and pick the file.
+Browsers only let a page read servers that allow it (CORS), and the free public CORS proxies have all shut down or started requiring keys. So the app avoids needing one:
+
+- Pocket Casts and Spotify details come from their oEmbed endpoints, which allow browser access. The episode is then looked up in Apple's podcast directory, which serves JSONP.
+- Podcast audio is often wrapped in tracking redirects (podtrac, pscrb.fm and similar), and some of those block browsers even when the real host allows them. The app then tries the real audio URL embedded in the tracking chain.
+
+Some hosts block browsers entirely (for example Anchor, now Spotify for Creators). For those, download the episode and pick the file under "More options", or deploy the included `cors-proxy-worker.js` as a free Cloudflare Worker and paste its URL there.
+
+## Testing
+
+`tests/e2e.mjs` loads the app in headless Chromium, pastes real links (Pocket Casts, NRK via Apple, a Danish Omny show, Spotify, RSS) and waits for real Whisper output. It runs in GitHub Actions on every push to a `claude/**` branch that touches the app.
 
 ## Files
 
