@@ -215,6 +215,9 @@ for (const c of CASES) {
   console.log(`  RESULT: ${ok ? 'PASS' : 'FAIL'} (${result}) peak tab memory ${Math.round(peakMB)} MB`);
   if (!ok) failures++;
   await ctx.close();
+  // WebKit's web processes can outlive their context and would be counted in the next case's
+  // memory, so every WebKit case gets a fresh browser.
+  if (engine === 'webkit') { await browsers.webkit.close(); delete browsers.webkit; }
 }
 
 for (const b of Object.values(browsers)) await b.close();
