@@ -11,7 +11,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const ORIGIN = 'https://transcriber.test';
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
 const URL_ = process.env.LAB_URL || 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b';
-const SEGMENTS = Number(process.env.LAB_SEGMENTS || 4);
+const SEGMENTS = Number(process.env.LAB_SEGMENTS || 6);
 const RUN_MS = 4 * 60 * 1000;
 
 function memMB(pattern) {
@@ -44,10 +44,12 @@ const VARIANTS = {
   noarena: (w) => w.replaceAll('progress_callback,\n', 'progress_callback,\n      session_options: { enableCpuMemArena: false, enableMemPattern: false },\n'),
   noopt: (w) => w.replaceAll('progress_callback,\n', "progress_callback,\n      session_options: { graphOptimizationLevel: 'basic', enableCpuMemArena: false, enableMemPattern: false },\n"),
   fp32: (w) => w.replace("if (device !== 'webgpu') return 'q8';", "if (device !== 'webgpu') return 'fp32';"),
+  // The plain ONNX Runtime WASM build (14 MB) instead of the asyncify one (27 MB).
+  plainwasm: (w) => w.replace('env.allowLocalModels = false;', "env.allowLocalModels = false;\n{ const d = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${env.backends.onnx.versions.web}/dist/`; env.backends.onnx.wasm.wasmPaths = { mjs: d + 'ort-wasm-simd-threaded.mjs', wasm: d + 'ort-wasm-simd-threaded.wasm' }; }"),
 };
 
-const RUNS = (process.env.LAB_RUNS || 'webkit:default,webkit:threads1,webkit:noarena,webkit:noopt,webkit:fp32')
-  .split(',').map((r) => { const [engine, variant] = r.split(':'); return { engine, model: 'tiny', variant }; });
+const RUNS = (process.env.LAB_RUNS || 'webkit:plainwasm:tiny,webkit:plainwasm:base,webkit:default:tiny,chromium:plainwasm:tiny')
+  .split(',').map((r) => { const [engine, variant, model = 'tiny'] = r.split(':'); return { engine, model, variant }; });
 
 for (const run of RUNS) {
   console.log(`\n=== ${run.engine} / ${run.model} / ${run.variant}`);
