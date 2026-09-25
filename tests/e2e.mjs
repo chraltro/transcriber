@@ -118,6 +118,11 @@ for (const c of CASES) {
       const card = await page.evaluate(() => !document.querySelector('#resume-card').classList.contains('hidden'));
       if (!card) { result = 'no resume offer after reload'; break; }
       await page.click('#resume');
+      // Right after a reload the old page's memory is still being released while the new one
+      // loads, so both get counted. Measure the resumed page on its own once that has settled.
+      await page.waitForTimeout(8000);
+      console.log(`  peak before reload ${Math.round(peakMB)} MB; measuring the resumed page from here`);
+      peakMB = rendererRssMB();
       continue;
     }
     if (s.segments.length >= (c.segments || 1)) {
