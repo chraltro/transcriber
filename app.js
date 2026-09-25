@@ -715,7 +715,12 @@ async function transcribeAudio(blob, fromSec = 0) {
         break;
     }
   };
-  worker.onerror = (e) => { fail(new Error(e.message || 'The transcription worker crashed. Try a smaller model.')); nudge(); };
+  worker.onerror = (e) => {
+    console.error('Worker error', e.message, e.filename, e.lineno);
+    fail(new Error(e.message || 'The transcription worker crashed. Try a smaller model.'));
+    nudge();
+  };
+  worker.onmessageerror = (e) => console.error('Worker message could not be read', e);
 
   try {
     worker.postMessage({

@@ -18,43 +18,29 @@ const page = await ctx.newPage();
 page.on('console', (m) => console.log(`  [console.${m.type()}] ${m.text().slice(0, 400)}`));
 await page.goto(`${ORIGIN}/index.html`);
 
-const result = await page.evaluate(async () => {
-  // Wrap the real worker: report uncaught errors, rejections and failed postMessage calls.
-  const src = `
-    const report = (m) => { try { origPost.call(self, { type: 'probe', text: m }); } catch {} };
-    const origPost = self.postMessage;
-    let progress = 0;
-    self.postMessage = function (msg, ...rest) {
-      try {
-        if (msg?.type === 'model-progress' && progress++ < 3) report('progress sample: ' + JSON.stringify(msg).slice(0, 300) + ' keys=' + Object.keys(msg).join(','));
-        return origPost.call(self, msg, ...rest);
-      } catch (e) {
-        report('postMessage FAILED: ' + e.name + ': ' + e.message + ' for ' + Object.entries(msg || {}).map(([k, v]) => k + ':' + Object.prototype.toString.call(v)).join(' '));
-        throw e;
-      }
-    };
-    self.addEventListener('error', (e) => report('uncaught: ' + e.message + ' @ ' + e.filename + ':' + e.lineno + ' ' + (e.error?.stack || '').slice(0, 500)));
-    self.addEventListener('unhandledrejection', (e) => report('unhandled rejection: ' + (e.reason?.name || '') + ': ' + (e.reason?.message || e.reason) + ' ' + (e.reason?.stack || '').slice(0, 500)));
-    import('${location.origin}/worker.js').then(() => report('worker.js imported'), (e) => report('import worker.js FAILED: ' + e.name + ': ' + e.message + ' ' + (e.stack || '').slice(0, 500)));`;
-  const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })), { type: 'module' });
-  const lines = [];
-  return await new Promise((res) => {
-    w.onerror = (e) => { lines.push('worker onerror: ' + JSON.stringify(e.message) + ' ' + e.filename + ':' + e.lineno); };
-    w.onmessage = (e) => {
-      const d = e.data;
-      if (d.type === 'probe') {
-        lines.push(d.text);
-        if (d.text === 'worker.js imported') w.postMessage({ type: 'start', id: 1, language: 'english', model: 'onnx-community/whisper-tiny', device: 'wasm', hasF16: false, offsetSec: 0 });
-      } else if (d.type === 'ready') {
-        lines.push('READY ' + JSON.stringify(d));
-        w.postMessage({ type: 'audio', id: 1, samples: new Float32Array(16000 * 5), final: true });
-      } else if (d.type === 'segment' || d.type === 'done' || d.type === 'error') {
-        lines.push(d.type + ' ' + JSON.stringify(d).slice(0, 300));
-        if (d.type !== 'segment') res(lines);
-      }
-    };
-    setTimeout(() => res([...lines, 'timeout']), 200000);
-  });
-});
-for (const l of result) console.log(l);
+// The full app flow on a generated 70 s WAV (tone bursts with pauses), as a user would.
+function wav(seconds) {
+  const sr = 16000, n = sr * seconds, buf = Buffer.alloc(44 + n * 2);
+  buf.write('RIFF', 0); buf.writeUInt32LE(36 + n * 2, 4); buf.write('WAVEfmt ', 8);
+  buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20); buf.writeUInt16LE(1, 22); buf.writeUInt32LE(sr, 24);
+  buf.writeUInt32LE(sr * 2, 28); buf.writeUInt16LE(2, 32); buf.writeUInt16LE(16, 34); buf.write('data', 36); buf.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) { const t = i / sr; const on = t % 10 < 8; buf.writeInt16LE(on ? Math.round(8000 * Math.sin(2 * Math.PI * 440 * t)) : 0, 44 + i * 2); }
+  return buf;
+}
+page.on('worker', (w) => { console.log('  [worker started] ' + w.url()); w.on('close', () => console.log('  [worker closed] ' + w.url())); });
+page.on('pageerror', (e) => console.log('  [pageerror] ' + e.message));
+await page.click('input[name=model][value=tiny]');
+await page.setInputFiles('#file', { name: 'tone.wav', mimeType: 'audio/wav', buffer: wav(70) });
+let last = '';
+for (let i = 0; i < 150; i++) {
+  const s = await page.evaluate(() => ({
+    stage: document.querySelector('#stage').textContent + ' | ' + document.querySelector('#detail').textContent,
+    err: document.querySelector('#error-card').classList.contains('hidden') ? '' : document.querySelector('#error').textContent,
+    segs: document.querySelectorAll('#transcript p:not(.working)').length,
+  }));
+  if (s.stage !== last) { console.log(`  ${i * 2}s ${s.stage}`); last = s.stage; }
+  if (s.err) { console.log('ERROR: ' + s.err); break; }
+  if (s.stage.startsWith('Done')) { console.log(`DONE with ${s.segs} segments`); break; }
+  await page.waitForTimeout(2000);
+}
 await browser.close();

@@ -56,8 +56,16 @@ async function load(model, device, hasF16) {
   loadedKey = key;
 }
 
+// Anything that escapes (a library callback, a rejected promise nobody awaited) is reported
+// with its reason; otherwise the page only learns that the worker "crashed".
+let currentId = null;
+const reportFatal = (err) => post({ type: 'error', id: currentId, message: err?.message || String(err || 'Unknown error in the worker') });
+self.addEventListener('error', (e) => { e.preventDefault(); reportFatal(e.error || e.message); });
+self.addEventListener('unhandledrejection', (e) => { e.preventDefault(); reportFatal(e.reason); });
+
 self.onmessage = async ({ data }) => {
   const { id } = data;
+  if (data.type === 'start') currentId = id;
   try {
     if (data.type === 'start') {
       stream.start(id, data);
