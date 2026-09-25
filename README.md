@@ -18,16 +18,18 @@ Everything runs in your browser using OpenAI's Whisper through [Transformers.js]
 
 Pick the size under "Model size". Sizes are what your browser downloads (once, then cached):
 
-| Model | CPU | GPU | Notes |
-| --- | --- | --- | --- |
-| Tiny | 41 MB | 104 to 120 MB | Fastest, rough text |
-| Base | 77 MB | 165 to 206 MB | Weak on Norwegian and Danish |
-| Small | 249 MB | 410 to 586 MB | Good balance |
-| Large v3 Turbo | 1.1 GB | 564 to 759 MB | Best by far for Norwegian and Danish |
+| Model | CPU | GPU | English and Danish | Norwegian |
+| --- | --- | --- | --- | --- |
+| Tiny | 41 MB | 104 to 120 MB | Stock Whisper, rough text | NB-Whisper tiny, readable |
+| Base | 77 MB | 165 to 206 MB | Stock Whisper, weak on Danish | NB-Whisper base, very good |
+| Small | 249 MB | 410 to 586 MB | Stock Whisper, good balance | NB-Whisper small, best for Norwegian |
+| Large v3 Turbo | 1.1 GB | 564 to 759 MB | Best, especially for Danish | Stock Whisper, about as good as NB small |
+
+For Norwegian, Tiny, Base and Small use [NB-Whisper](https://huggingface.co/NbAiLab/nb-whisper-base) from the National Library of Norway: the same architecture and download size, trained on Norwegian speech, writing Bokmål. On an NRK episode stock tiny got stuck repeating one word, while NB tiny did better than stock small and NB base came close to Large v3 Turbo at six times its speed (`tests/model-lab.mjs`).
 
 Defaults: Large v3 Turbo with a GPU on desktop, Small on CPU, Base on phones. With WebGPU (recent Chrome or Edge on desktop) an hour-long episode takes a few minutes; on the CPU it can take about as long as the episode.
 
-Audio is decoded two minutes at a time while earlier parts are transcribed, so memory use stays flat however long the episode is. Phones kill tabs that use too much memory and reload the page, so on a phone stick to Base or Tiny.
+Audio is decoded a minute at a time while earlier parts are transcribed, so memory use stays flat however long the episode is. Phones kill tabs that use too much memory and reload the page, so on a phone stick to Base or Tiny.
 
 ## Deploying to GitHub Pages
 
@@ -46,14 +48,20 @@ Browsers only let a page read servers that allow it (CORS), and the free public 
 
 Some hosts block browsers entirely (for example Anchor, now Spotify for Creators). For those, download the episode and pick the file under "More options", or deploy the included `cors-proxy-worker.js` as a free Cloudflare Worker and paste its URL there.
 
+If the page reloads before a transcript finishes (usually the browser running out of memory), it offers to resume from where it stopped without downloading the episode again. Finished transcripts download as `.txt`, or as `.srt`/`.vtt` subtitles with timestamps.
+
 ## Testing
 
-`tests/e2e.mjs` loads the app in headless Chromium, pastes real links (Pocket Casts, NRK via Apple, a Danish Omny show, Spotify, RSS) and waits for real Whisper output. It runs in GitHub Actions on every push to a `claude/**` branch that touches the app.
+- `npm test`: unit tests for MP3/WAV indexing, link and feed parsing, title matching, segmentation, the streaming transcriber, subtitles and model choices. `NETWORK_TESTS=1 npm test` also checks every model file the app can request exists on Hugging Face.
+- `npm run test:e2e`: loads the app in real browsers, pastes real links (Pocket Casts, NRK and a Danish show via Apple, Spotify, RSS) and waits for real Whisper output. It covers Chromium, Firefox, an iPhone profile in WebKit, WebGPU in software, a reload mid-transcript followed by resume, and memory over a long run, and checks that each transcript is in the chosen language.
+
+Both run in GitHub Actions on every push to a `claude/**` branch that touches the app.
 
 ## Files
 
 - `index.html`, `style.css`: the page
 - `app.js`: link resolution, downloading, decoding, UI
-- `worker.js`: runs Whisper off the main thread on audio streamed in from the page, split at pauses into 30 second windows
+- `worker.js`: runs Whisper off the main thread on audio streamed in from the page
+- `lib/`: the logic both use, kept free of the DOM so it can be unit tested (MP3/WAV indexing, link parsing, text cleanup, splitting audio at pauses into 30 second windows, model choices, subtitles)
 - `coi-sw.js`: service worker that enables multi-threaded WASM on GitHub Pages
 - `cors-proxy-worker.js`: optional self-hosted proxy
