@@ -1,5 +1,5 @@
 import { indexMp3 } from './lib/mp3.js';
-import { MODELS } from './lib/models.js';
+import { MODELS, modelFor } from './lib/models.js';
 import { AUDIO_EXT, audioCandidates, parseFeed, looksLikeFeed, findAudioInHtml } from './lib/links.js';
 import { fmtTime, normTitle, bestTitleMatch, sameShow } from './lib/text.js';
 import { indexWav, wavPiece } from './lib/wav.js';
@@ -642,7 +642,7 @@ const WATCHDOG_MS = 10 * 60 * 1000;
 async function transcribeAudio(blob, fromSec = 0) {
   const worker = getWorker();
   const id = ++state.jobSeq;
-  const model = MODELS[selectedModel()];
+  const model = modelFor(selectedModel(), language());
   const files = new Map();
   let total = 0;
   let buffered = 0;
@@ -950,6 +950,7 @@ function offerResume(job, afterReload = true) {
   if (job.lang) {
     const radio = document.querySelector(`input[name=lang][value="${CSS.escape(job.lang)}"]`);
     if (radio) radio.checked = true;
+    if (els.models.querySelector('input')) refreshModels();
   }
 }
 
@@ -987,7 +988,8 @@ function fillModels(keep = null) {
   const saved = keep || store.get('model', null);
   const fallback = IS_MOBILE ? 'base' : state.gpu.available ? 'turbo' : 'small';
   const chosen = MODELS[saved] ? saved : fallback;
-  for (const [key, m] of Object.entries(MODELS)) {
+  for (const key of Object.keys(MODELS)) {
+    const m = modelFor(key, language());
     const label = document.createElement('label');
     label.className = 'model-opt';
     const input = document.createElement('input');
@@ -1014,12 +1016,14 @@ function fillModels(keep = null) {
 function updateModelHint() {
   const key = selectedModel();
   const mb = modelSizeMB(MODELS[key]);
+  const m = modelFor(key, language());
   const parts = [state.gpu.available
     ? 'Your browser can use the GPU, so an hour-long episode takes minutes.'
     : 'No GPU access in this browser, so transcription runs on the CPU and can take about as long as the episode.'];
   if (IS_IOS) parts.push('On iPhone and iPad, keep this page open with the screen on until it finishes: iOS pauses pages in the background.');
   if (IS_MOBILE && mb > 300) parts.push('This model may be too big for a phone, and the browser can reload the page if it runs out of memory. Pick Base or Tiny if that happens.');
   else if (!state.gpu.available && key === 'turbo') parts.push('Large v3 Turbo is very slow on a CPU.');
+  if (m.tuned) parts.push('For Norwegian this uses NB-Whisper, trained by the National Library of Norway, which writes Bokmål.');
   els.deviceHint.textContent = parts.join(' ');
 }
 
@@ -1031,7 +1035,7 @@ async function init() {
   }
   els.proxy.value = store.get('proxy', '');
 
-  document.querySelectorAll('input[name=lang]').forEach((r) => r.addEventListener('change', () => store.set('lang', language())));
+  document.querySelectorAll('input[name=lang]').forEach((r) => r.addEventListener('change', () => { store.set('lang', language()); refreshModels(); }));
   els.models.addEventListener('change', () => { store.set('model', selectedModel()); updateModelHint(); });
   els.proxy.addEventListener('change', () => store.set('proxy', els.proxy.value.trim()));
 

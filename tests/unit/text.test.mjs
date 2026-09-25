@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fmtTime, normTitle, bestTitleMatch, sameShow, HALLUCINATIONS, dedupeRepeats } from '../../lib/text.js';
+import { fmtTime, normTitle, bestTitleMatch, sameShow, HALLUCINATIONS, dedupeRepeats, collapseLoops } from '../../lib/text.js';
 
 test('fmtTime', () => {
   assert.equal(fmtTime(0), '0:00');
@@ -56,4 +56,15 @@ test('runs of identical sentences are cut to two', () => {
   assert.equal(dedupeRepeats('Hei. Hei. Hei. Hei. Hvordan går det? Bra.'), 'Hei. Hei. Hvordan går det? Bra.');
   assert.equal(dedupeRepeats('No repeats here. None at all.'), 'No repeats here. None at all.');
   assert.equal(dedupeRepeats(''), '');
+});
+
+// Real output from whisper-tiny on an NRK episode.
+test('phrase loops inside a sentence collapse to two copies', () => {
+  const loop = 'Det er sånn ' + 'jeg har vært sånn '.repeat(25) + 'jeg liten ' + 'liten '.repeat(80) + 'Vi har vært der.';
+  assert.equal(dedupeRepeats(loop), 'Det er sånn jeg har vært sånn jeg har vært sånn jeg liten liten Vi har vært der.');
+  assert.equal(collapseLoops('nei, nei, nei, nei, nei'), 'nei, nei,');
+  // Two repeats are normal speech and stay.
+  assert.equal(collapseLoops('very very good, thank you thank you'), 'very very good, thank you thank you');
+  assert.equal(collapseLoops('Ha ha ha.'), 'Ha ha');
+  assert.equal(collapseLoops('1 2 3 4 5'), '1 2 3 4 5');
 });

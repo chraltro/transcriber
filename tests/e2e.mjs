@@ -1,7 +1,7 @@
 // End-to-end test: loads the app in headless Chromium with real network access,
 // pastes real podcast links and waits for actual Whisper output.
 // Run: node tests/e2e.mjs  (needs `npm i playwright` and `npx playwright install chromium`)
-import { chromium, webkit, devices } from 'playwright';
+import { chromium, webkit, firefox, devices } from 'playwright';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -31,6 +31,19 @@ async function appleEpisodeLink(term, country) {
   return { url: `https://podcasts.apple.com/${country}/podcast/x/id${id}?i=${ep.trackId}`, title: ep.trackName };
 }
 
+// Output in the right language has plenty of that language's most common words. Catches a
+// wrong model, a wrong language token, or Whisper translating to English.
+const STOPWORDS = {
+  english: ['the', 'and', 'to', 'of', 'a', 'is', 'that', 'in', 'it', 'you', 'i', 'we', 'this', 'so', 'but', 'for', 'was', 'on', 'with', 'what'],
+  norwegian: ['og', 'det', 'er', 'som', 'jeg', 'på', 'å', 'en', 'til', 'vi', 'har', 'ikke', 'med', 'de', 'at', 'så', 'for', 'var', 'i', 'du'],
+  danish: ['og', 'det', 'er', 'som', 'jeg', 'på', 'at', 'en', 'til', 'vi', 'har', 'ikke', 'med', 'de', 'så', 'for', 'var', 'i', 'du', 'der'],
+};
+function languageScore(text, lang) {
+  const words = text.toLowerCase().replace(/\[\d:]+\]/g, ' ').match(/\p{L}+/gu) || [];
+  const set = new Set(STOPWORDS[lang]);
+  return words.length ? words.filter((w) => set.has(w)).length / words.length : 0;
+}
+
 const nrk = await appleEpisodeLink('Abels tårn', 'no');
 const omny = await appleEpisodeLink('Millionærklubben', 'dk');
 
@@ -42,10 +55,15 @@ const CASES = [
   { name: 'Memory over a long run', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 30, leakCheck: true, title: 'Xi’s Just Not That Into You' },
   // WebKit needed 6 to 7 GB here before the app switched to the plain ONNX Runtime build.
   // The WebKit test browser itself idles at about 450 MB, hence the higher limit.
+  // WebGPU in software. SwiftShader has no fp16, so this covers the fp32 encoder + 4-bit decoder path.
+  { name: 'WebGPU (SwiftShader)', gpu: true, model: 'tiny', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 2, title: 'Xi’s Just Not That Into You' },
+  { name: 'Firefox', engine: 'firefox', model: 'tiny', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 3, title: 'Xi’s Just Not That Into You' },
   { name: 'iPhone (WebKit)', engine: 'webkit', model: 'tiny', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 8, memoryLimitMB: 2000, title: 'Xi’s Just Not That Into You' },
   { name: 'Pocket Casts short link', url: 'https://pca.st/okm7xj7g', lang: 'english', resolveOnly: true, title: 'Xi’s Just Not That Into You' },
-  { name: 'Apple, Norwegian (NRK)', url: nrk.url, lang: 'norwegian', segments: 1, title: nrk.title },
-  { name: 'Apple, Danish (Omny)', url: omny.url, lang: 'danish', segments: 1, title: omny.title },
+  // Norwegian runs NB-Whisper (base and tiny).
+  { name: 'Apple, Norwegian (NRK)', url: nrk.url, lang: 'norwegian', segments: 3, title: nrk.title },
+  { name: 'Norwegian, tiny on iPhone (WebKit)', engine: 'webkit', model: 'tiny', url: nrk.url, lang: 'norwegian', segments: 3, memoryLimitMB: 2000, title: nrk.title },
+  { name: 'Apple, Danish (Omny)', url: omny.url, lang: 'danish', segments: 3, title: omny.title },
   { name: 'Spotify episode', url: 'https://open.spotify.com/episode/2ebY3WNejLNbK47emgjd1E', lang: 'english', resolveOnly: true, titleIncludes: 'Alcohol' },
   { name: 'RSS feed', url: 'https://feeds.megaphone.fm/hubermanlab', lang: 'english', expectList: true },
   ...(process.env.EXTRA_CASES ? JSON.parse(process.env.EXTRA_CASES) : []),
@@ -55,15 +73,19 @@ const MEMORY_LIMIT_MB = Number(process.env.MEMORY_LIMIT_MB || 1200);
 const TIMEOUT_MS = Number(process.env.CASE_TIMEOUT_MS || 12 * 60 * 1000);
 
 const browsers = {};
-const launch = async (engine) => (browsers[engine] ??= await (engine === 'webkit' ? webkit : chromium).launch());
+const ENGINES = { chromium, webkit, firefox };
+const GPU_ARGS = ['--enable-unsafe-webgpu', '--use-webgpu-adapter=swiftshader'];
+const launch = async (engine, gpu) => (browsers[`${engine}${gpu ? '+gpu' : ''}`] ??= await ENGINES[engine].launch(gpu ? { args: GPU_ARGS } : {}));
+const ONLY = process.env.ONLY ? new RegExp(process.env.ONLY, 'i') : null;
 let failures = 0;
 
 for (const c of CASES) {
+  if (ONLY && !ONLY.test(c.name)) continue;
   console.log(`\n=== ${c.name}: ${c.url} (${c.lang})`);
   // The public CORS proxies treat localhost specially, so serve the app from a fake https origin instead.
   const engine = c.engine || 'chromium';
-  memPattern = engine === 'webkit' ? 'WPEWebProcess|WebKitWebProcess' : '--type=renderer';
-  const browser = await launch(engine);
+  memPattern = { webkit: 'WPEWebProcess|WebKitWebProcess', firefox: 'firefox.*-contentproc', chromium: '--type=renderer' }[engine];
+  const browser = await launch(engine, c.gpu);
   const ctx = await browser.newContext(engine === 'webkit' ? { ...devices['iPhone 15'], serviceWorkers: 'block' } : { serviceWorkers: 'block' });
   await ctx.route(`${ORIGIN}/**`, async (route) => {
     let path = new URL(route.request().url()).pathname.replace(/^\/+/, '') || 'index.html';
@@ -83,6 +105,11 @@ for (const c of CASES) {
   });
 
   await page.goto(`${ORIGIN}/index.html`);
+  // The page settles on GPU or CPU before the model list is final.
+  await page.waitForSelector('input[name=model]');
+  await page.waitForTimeout(500);
+  const gpuUsed = await page.evaluate(() => document.querySelector('#device-hint').textContent.includes('can use the GPU'));
+  if (c.gpu && !gpuUsed) console.log('  WARNING: the page did not detect the GPU');
   await page.click(`input[value=${c.lang}] + span`);
   await page.click(`input[name=model][value=${c.model || 'base'}]`);
   await page.fill('#url', c.url);
@@ -149,6 +176,16 @@ for (const c of CASES) {
         if (grew > 200) { result = `memory grew ${Math.round(grew)} MB during the run`; break; }
       }
       if (c.title && s.title !== c.title) { result = `wrong episode: "${s.title}"`; break; }
+      const text = s.segments.join(' ');
+      const score = languageScore(text, c.lang);
+      console.log(`  ${c.lang} common-word share: ${(score * 100).toFixed(0)}% of ${text.split(/\s+/).length} words`);
+      if (score < 0.12) { result = `transcript does not look ${c.lang} (${(score * 100).toFixed(0)}% common words)`; break; }
+      if (c.gpu) {
+        const device = await page.evaluate(() => document.querySelector('#detail').textContent + ' ' + document.querySelector('#device-hint').textContent);
+        console.log(`  device: ${device.slice(0, 160)}`);
+        // A WebGPU failure falls back to the CPU and the hint stops offering the GPU.
+        if (!gpuUsed || !device.includes('can use the GPU')) { result = 'GPU case ran without WebGPU (or fell back to the CPU)'; break; }
+      }
       result = 'ok';
       console.log(`  title: ${s.title}`);
       s.segments.slice(0, 2).forEach((t) => console.log(`  > ${t.slice(0, 80)}`));
