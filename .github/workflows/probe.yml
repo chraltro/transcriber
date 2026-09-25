@@ -1,0 +1,18 @@
+name: Probe
+on:
+  push:
+    branches: ['claude/**']
+    paths: ['.github/workflows/probe.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -sS "https://open.spotify.com/oembed?url=https%3A%2F%2Fopen.spotify.com%2Fshow%2F3IM0lmZxpFAY7CwMuv9H4g" | python3 -c "import json,sys;d=json.load(sys.stdin);d.pop('html',None);print(d)"
+          echo; echo "--- page title"
+          curl -sSL -A "Mozilla/5.0" "https://open.spotify.com/show/3IM0lmZxpFAY7CwMuv9H4g" | grep -oE '<title>[^<]*</title>|og:title" content="[^"]*"'
+          echo; echo "--- itunes episode search"
+          curl -sS "https://itunes.apple.com/search?term=What%20Safeguarding%20Nukes%20Can%20Teach%20Us%20About%20Safeguarding%20A.I.&entity=podcastEpisode&limit=10&country=us" | python3 -c "import json,sys;[print(' ',x.get('trackName'),'|',x.get('collectionName')) for x in json.load(sys.stdin)['results']]"
+          echo "--- spotify episode oembed (pick any episode link from the show page)"
+          EP=$(curl -sSL -A "Mozilla/5.0" "https://open.spotify.com/show/3IM0lmZxpFAY7CwMuv9H4g" | grep -oE 'open.spotify.com/episode/[A-Za-z0-9]{22}' | head -1); echo "$EP"
+          [ -n "$EP" ] && curl -sS "https://open.spotify.com/oembed?url=https%3A%2F%2F${EP//\//%2F}" | python3 -c "import json,sys;d=json.load(sys.stdin);d.pop('html',None);print(d)"
