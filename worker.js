@@ -14,22 +14,30 @@ const HALLUCINATIONS = /^\s*[("[]?\s*(teksting av|tekstet av|undertekst(er)? av|
 let asr = null;
 let loadedKey = null;
 
+// Audio arrives in pieces while the episode is still being decoded, so the whole episode
+// never has to sit in memory at once. `pending` holds audio not yet transcribed.
+let job = null;
+
 const post = (msg) => self.postMessage(msg);
 
+// Smallest weights that keep quality. fp16/q4f16 need the GPU's shader-f16 feature.
 function dtypeFor(model, device, hasF16) {
   if (device !== 'webgpu') return 'q8';
   if (model.includes('large')) {
-    return { encoder_model: hasF16 ? 'fp16' : 'q4', decoder_model_merged: 'q4' };
+    return hasF16
+      ? { encoder_model: 'q4f16', decoder_model_merged: 'q4f16' }
+      : { encoder_model: 'q4', decoder_model_merged: 'q4' };
   }
-  return { encoder_model: 'fp32', decoder_model_merged: 'q4' };
+  return { encoder_model: hasF16 ? 'fp16' : 'fp32', decoder_model_merged: 'q4' };
 }
 
 async function load(model, device, hasF16) {
-  const key = `${model}|${device}`;
+  const key = `${model}|${device}|${hasF16}`;
   if (asr && loadedKey === key) return device;
   if (asr) {
     await asr.dispose?.();
     asr = null;
+    loadedKey = null;
   }
   const progress_callback = (p) => post({ type: 'model-progress', ...p });
   try {
@@ -49,7 +57,7 @@ async function load(model, device, hasF16) {
       progress_callback,
     });
   }
-  loadedKey = `${model}|${device}`;
+  loadedKey = `${model}|${device}|${hasF16}`;
   return device;
 }
 
@@ -59,28 +67,22 @@ function rms(audio, start, end) {
   return Math.sqrt(sum / Math.max(1, end - start));
 }
 
-// Split into <= 29.5 s pieces, cutting at the quietest 100 ms frame so words don't get chopped.
-function segment(audio) {
-  const out = [];
-  let start = 0;
-  while (start < audio.length) {
-    if (audio.length - start <= MAX_SEG) {
-      out.push([start, audio.length]);
-      break;
+// Where to end the next segment: at the quietest 100 ms frame between 18 s and 29.5 s,
+// so words don't get chopped. Returns null if we need more audio first.
+function nextCut(audio, start, final) {
+  const left = audio.length - start;
+  if (left <= 0) return null;
+  if (left <= MAX_SEG) return final ? audio.length : null;
+  let cut = start + MAX_SEG;
+  let best = Infinity;
+  for (let p = start + MIN_SEG; p + FRAME <= start + MAX_SEG; p += FRAME / 2) {
+    const e = rms(audio, p, p + FRAME);
+    if (e < best) {
+      best = e;
+      cut = p + FRAME / 2;
     }
-    let cut = start + MAX_SEG;
-    let best = Infinity;
-    for (let p = start + MIN_SEG; p + FRAME <= start + MAX_SEG; p += FRAME / 2) {
-      const e = rms(audio, p, p + FRAME);
-      if (e < best) {
-        best = e;
-        cut = p + FRAME / 2;
-      }
-    }
-    out.push([start, cut]);
-    start = cut;
   }
-  return out;
+  return cut;
 }
 
 // Whisper occasionally gets stuck repeating a phrase. Drop runs of identical sentences.
@@ -97,41 +99,69 @@ function dedupeRepeats(text) {
   return out.join('').trim();
 }
 
-async function transcribe({ audio, language, model, device, hasF16 }) {
+function append(a, b) {
+  const out = new Float32Array(a.length + b.length);
+  out.set(a);
+  out.set(b, a.length);
+  return out;
+}
+
+async function start({ language, model, device, hasF16 }) {
+  job = { language, pending: new Float32Array(0), offset: 0, final: false, running: false, t0: 0, loaded: false };
   post({ type: 'status', text: 'Loading speech model' });
-  const usedDevice = await load(model, device, hasF16);
-  post({ type: 'ready', device: usedDevice });
+  const used = await load(model, device, hasF16);
+  post({ type: 'ready', device: used });
+  job.t0 = performance.now();
+  job.loaded = true;
+  await drain();
+}
 
-  const segments = segment(audio);
-  const total = audio.length / SAMPLE_RATE;
-  const t0 = performance.now();
-
-  for (let i = 0; i < segments.length; i++) {
-    const [s, e] = segments[i];
-    const chunk = audio.subarray(s, e);
-    let text = '';
-    if (rms(audio, s, e) > SILENCE_RMS) {
-      const result = await asr(chunk, { language, task: 'transcribe', return_timestamps: false });
-      text = dedupeRepeats(result.text || '');
-      if (HALLUCINATIONS.test(text)) text = '';
+async function drain() {
+  if (!job || job.running || !job.loaded) return;
+  job.running = true;
+  try {
+    for (;;) {
+      const cut = nextCut(job.pending, 0, job.final);
+      if (cut == null) break;
+      const chunk = job.pending.subarray(0, cut);
+      let text = '';
+      if (rms(chunk, 0, chunk.length) > SILENCE_RMS) {
+        const result = await asr(chunk, { language: job.language, task: 'transcribe', return_timestamps: false });
+        text = dedupeRepeats(result.text || '');
+        if (HALLUCINATIONS.test(text)) text = '';
+      }
+      const startSec = job.offset / SAMPLE_RATE;
+      job.offset += cut;
+      job.pending = job.pending.slice(cut);
+      post({
+        type: 'segment',
+        start: startSec,
+        end: job.offset / SAMPLE_RATE,
+        text,
+        buffered: job.pending.length / SAMPLE_RATE,
+        elapsed: (performance.now() - job.t0) / 1000,
+      });
     }
-    post({
-      type: 'segment',
-      start: s / SAMPLE_RATE,
-      end: e / SAMPLE_RATE,
-      text,
-      done: e / SAMPLE_RATE,
-      total,
-      elapsed: (performance.now() - t0) / 1000,
-    });
+    if (job.final && job.pending.length === 0) {
+      post({ type: 'done' });
+      job = null;
+    }
+  } finally {
+    if (job) job.running = false;
   }
-  post({ type: 'done' });
 }
 
 self.onmessage = async ({ data }) => {
-  if (data.type !== 'transcribe') return;
   try {
-    await transcribe(data);
+    if (data.type === 'start') {
+      await start(data);
+    } else if (data.type === 'audio') {
+      if (!job) return;
+      job.pending = append(job.pending, data.samples);
+      if (data.final) job.final = true;
+      post({ type: 'buffered', seconds: job.pending.length / SAMPLE_RATE });
+      await drain();
+    }
   } catch (err) {
     console.error(err);
     post({ type: 'error', message: err?.message || String(err) });

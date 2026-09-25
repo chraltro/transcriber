@@ -1,16 +1,21 @@
 const $ = (sel) => document.querySelector(sel);
 
+// Download sizes (MB) of the weights each device actually loads: CPU uses 8-bit weights,
+// GPUs use fp16/4-bit when they support 16-bit floats, fp32/4-bit otherwise.
 const MODELS = {
-  base: { id: 'onnx-community/whisper-base', label: 'Fast: Whisper Base (small download, rougher for Norwegian/Danish)' },
-  small: { id: 'onnx-community/whisper-small', label: 'Balanced: Whisper Small' },
-  turbo: { id: 'onnx-community/whisper-large-v3-turbo', label: 'Best: Whisper Large v3 Turbo (large download, needs WebGPU)', webgpuOnly: true },
+  tiny: { id: 'onnx-community/whisper-tiny', name: 'Tiny', note: 'Fastest, rough text', mb: { cpu: 41, gpu16: 104, gpu32: 120 } },
+  base: { id: 'onnx-community/whisper-base', name: 'Base', note: 'Fast, weak on Norwegian and Danish', mb: { cpu: 77, gpu16: 165, gpu32: 206 } },
+  small: { id: 'onnx-community/whisper-small', name: 'Small', note: 'Good balance', mb: { cpu: 249, gpu16: 410, gpu32: 586 } },
+  turbo: { id: 'onnx-community/whisper-large-v3-turbo', name: 'Large v3 Turbo', note: 'Best, especially for Norwegian and Danish', mb: { cpu: 1085, gpu16: 564, gpu32: 759 } },
 };
+
+const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 const AUDIO_EXT = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac|mp4|m4b|webm)$/i;
 const AUDIO_URL_IN_TEXT = /https?:\\?\/\\?\/[^"'\s<>()]+?\.(?:mp3|m4a|aac|ogg|opus|wav|m4b)(?:\?[^"'\s<>()]*)?(?=["'\s<>()]|$)/gi;
 
 const els = {
-  form: $('#url-form'), url: $('#url'), go: $('#go'), model: $('#model'), file: $('#file'), proxy: $('#proxy'),
+  form: $('#url-form'), url: $('#url'), go: $('#go'), models: $('#models'), file: $('#file'), proxy: $('#proxy'),
   deviceHint: $('#device-hint'),
   episodesCard: $('#episodes-card'), feedTitle: $('#feed-title'), episodes: $('#episodes'), filter: $('#episode-filter'),
   progressCard: $('#progress-card'), stage: $('#stage'), bar: $('#bar-fill'), detail: $('#detail'), cancel: $('#cancel'),
@@ -71,6 +76,7 @@ function clearError() {
 
 function setBusy(busy) {
   state.busy = busy;
+  window.__transcriberBusy = busy; // coi-sw.js never reloads the page while this is set
   els.go.disabled = busy;
   els.file.disabled = busy;
   els.progressCard.classList.toggle('hidden', !busy);
@@ -190,20 +196,23 @@ async function downloadAudio(url) {
   const total = Number(res.headers.get('content-length')) || 0;
   if (!res.body) return new Uint8Array(await res.arrayBuffer());
 
+  // Write straight into one buffer instead of collecting chunks and copying them at the end.
   const reader = res.body.getReader();
-  const chunks = [];
+  let bytes = new Uint8Array(total || 32e6);
   let got = 0;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    chunks.push(value);
+    if (got + value.length > bytes.length) {
+      const bigger = new Uint8Array(Math.max(bytes.length * 2, got + value.length));
+      bigger.set(bytes.subarray(0, got));
+      bytes = bigger;
+    }
+    bytes.set(value, got);
     got += value.length;
     progress('Downloading episode', total ? got / total : null, total ? `${fmtBytes(got)} of ${fmtBytes(total)}` : fmtBytes(got));
   }
-  const bytes = new Uint8Array(got);
-  let off = 0;
-  for (const c of chunks) { bytes.set(c, off); off += c.length; }
-  return bytes;
+  return bytes.subarray(0, got);
 }
 
 /* ---------- link resolution ---------- */
@@ -518,25 +527,118 @@ function formatDuration(d) {
 
 /* ---------- audio + transcription ---------- */
 
-async function decodeAudio(bytes) {
-  progress('Decoding audio', null, 'This can take a moment for long episodes');
+/* ---------- decoding ----------
+ * Decoding a whole episode at once needs gigabytes (the browser decodes at the file's own
+ * sample rate first), and phones kill tabs that do that. MP3 files are cut into two-minute
+ * pieces at frame boundaries and decoded one at a time, while the worker transcribes the
+ * previous piece. */
+
+const SAMPLE_RATE = 16000;
+const PIECE_SECONDS = 120;
+const MAX_AHEAD_SECONDS = 150; // decoded audio allowed to wait for the worker
+
+const MP3_KBPS = {
+  V1L1: [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
+  V1L2: [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+  V1L3: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+  V2L1: [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+  V2L23: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+};
+const MP3_RATES = { 3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000] };
+
+function mp3FrameAt(b, i) {
+  if (i + 4 > b.length || b[i] !== 0xff || (b[i + 1] & 0xe0) !== 0xe0) return null;
+  const version = (b[i + 1] >> 3) & 3; // 3 = MPEG1, 2 = MPEG2, 0 = MPEG2.5
+  const layer = (b[i + 1] >> 1) & 3;   // 3 = I, 2 = II, 1 = III
+  const brIndex = b[i + 2] >> 4;
+  const srIndex = (b[i + 2] >> 2) & 3;
+  const pad = (b[i + 2] >> 1) & 1;
+  if (version === 1 || layer === 0 || brIndex === 0 || brIndex === 15 || srIndex === 3) return null;
+  const v1 = version === 3;
+  const table = v1 ? ['', 'V1L3', 'V1L2', 'V1L1'][layer] : layer === 3 ? 'V2L1' : 'V2L23';
+  const bitrate = MP3_KBPS[table][brIndex] * 1000;
+  const sr = MP3_RATES[version][srIndex];
+  if (layer === 3) return { len: (Math.floor((12 * bitrate) / sr) + pad) * 4, spf: 384, sr };
+  if (layer === 2) return { len: Math.floor((144 * bitrate) / sr) + pad, spf: 1152, sr };
+  return { len: Math.floor(((v1 ? 144 : 72) * bitrate) / sr) + pad, spf: v1 ? 1152 : 576, sr };
+}
+
+// Byte offset of every audio frame, or null if this isn't a (clean) MP3.
+function indexMp3(b) {
+  let i = 0;
+  if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) {
+    i = 10 + (((b[6] & 127) << 21) | ((b[7] & 127) << 14) | ((b[8] & 127) << 7) | (b[9] & 127)) + (b[5] & 0x10 ? 10 : 0);
+  }
+  const offsets = [];
+  let spf = 0;
+  let sr = 0;
+  let covered = 0;
+  while (i < b.length - 4) {
+    const f = mp3FrameAt(b, i);
+    // The next frame has to line up as well, so stray 0xFF bytes aren't taken for frames.
+    if (f && f.len > 4 && (i + f.len >= b.length - 4 || mp3FrameAt(b, i + f.len))) {
+      if (!sr) ({ sr, spf } = f);
+      if (f.sr === sr && f.spf === spf) {
+        offsets.push(i);
+        covered += f.len;
+      }
+      i += f.len;
+    } else {
+      i++;
+      if (!offsets.length && i > 1 << 20) return null;
+    }
+  }
+  if (offsets.length < 50 || covered < b.length * 0.8) return null;
+  // Skip the Xing/Info/VBRI header frame: it holds metadata, and some decoders size their output from it.
+  const first = String.fromCharCode(...b.subarray(offsets[0], offsets[0] + 64));
+  if (/Xing|Info|VBRI/.test(first)) offsets.shift();
+  return { offsets, spf, sr };
+}
+
+async function decodeMono16k(arrayBuffer) {
   const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-  const ctx = new Ctx(1, 1, 16000);
-  let buffer;
+  let audio;
   try {
-    buffer = await ctx.decodeAudioData(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    audio = await new Ctx(1, 1, SAMPLE_RATE).decodeAudioData(arrayBuffer);
   } catch {
     throw new UserError("Your browser couldn't decode this audio file. Try another episode or a different browser.");
   }
-  if (buffer.numberOfChannels === 1) return buffer.getChannelData(0).slice();
-  const out = new Float32Array(buffer.length);
-  const n = buffer.numberOfChannels;
+  if (audio.numberOfChannels === 1) return audio.getChannelData(0).slice();
+  const out = new Float32Array(audio.length);
+  const n = audio.numberOfChannels;
   for (let c = 0; c < n; c++) {
-    const data = buffer.getChannelData(c);
+    const data = audio.getChannelData(c);
     for (let i = 0; i < out.length; i++) out[i] += data[i] / n;
   }
   return out;
 }
+
+// Yields 16 kHz mono audio, about two minutes at a time. Calls onTotal(seconds) first.
+async function* decodePieces(bytes, onTotal) {
+  const mp3 = indexMp3(bytes);
+  if (!mp3) {
+    // Not an MP3 (for example AAC in an .m4a). Those containers can't be cut up, so decode it whole.
+    const whole = await decodeMono16k(bytes.slice().buffer);
+    onTotal(whole.length / SAMPLE_RATE);
+    const step = PIECE_SECONDS * SAMPLE_RATE;
+    for (let s = 0; s < whole.length; s += step) yield whole.slice(s, s + step);
+    return;
+  }
+  const { offsets, spf, sr } = mp3;
+  onTotal((offsets.length * spf) / sr);
+  const per = Math.ceil((PIECE_SECONDS * sr) / spf);
+  // MP3 frames can borrow bits from the frames before them, so decode two extra and drop their audio.
+  const WARMUP = 2;
+  for (let k = 0; k < offsets.length; k += per) {
+    const from = Math.max(0, k - WARMUP);
+    const end = k + per < offsets.length ? offsets[k + per] : bytes.length;
+    const pcm = await decodeMono16k(bytes.slice(offsets[from], end).buffer);
+    const drop = Math.round(((k - from) * spf * SAMPLE_RATE) / sr);
+    yield drop ? pcm.slice(drop) : pcm;
+  }
+}
+
+/* ---------- transcription ---------- */
 
 function getWorker() {
   if (!state.worker) state.worker = new Worker(new URL('worker.js', import.meta.url), { type: 'module' });
@@ -548,66 +650,95 @@ function killWorker() {
   state.worker = null;
 }
 
-function transcribeAudio(audio) {
-  return new Promise((resolve, reject) => {
-    state.rejectRun = reject;
-    const worker = getWorker();
-    const files = new Map();
-    const modelKey = els.model.value;
-    const lang = language();
+async function transcribeBytes(bytes) {
+  const worker = getWorker();
+  const model = MODELS[selectedModel()];
+  const files = new Map();
+  let total = 0;
+  let buffered = 0;
+  let ready = false;
+  let wake = null;
+  let finish;
+  let fail;
+  const finished = new Promise((res, rej) => { finish = res; fail = rej; });
+  finished.catch(() => {});
+  state.rejectRun = fail;
+  const nudge = () => { const w = wake; wake = null; w?.(); };
 
-    progress('Loading speech model', null, 'First run downloads the model, then it is cached');
+  progress('Loading speech model', null, 'First run downloads the model, then it is cached');
 
-    worker.onmessage = ({ data: m }) => {
-      switch (m.type) {
-        case 'status':
-          progress(m.text, null, '');
-          break;
-        case 'model-progress': {
-          let loaded, total;
-          if (m.status === 'progress_total') {
-            ({ loaded, total } = m);
-          } else if (m.status === 'progress' && m.file) {
-            files.set(m.file, { loaded: m.loaded || 0, total: m.total || 0 });
-            loaded = total = 0;
-            for (const f of files.values()) { loaded += f.loaded; total += f.total; }
-          } else {
-            break;
-          }
-          progress('Downloading speech model', total ? loaded / total : null, `${fmtBytes(loaded)} of ${fmtBytes(total)} (only needed once)`);
+  worker.onmessage = ({ data: m }) => {
+    switch (m.type) {
+      case 'status':
+        if (!ready) progress(m.text, null, '');
+        break;
+      case 'model-progress': {
+        let loaded, size;
+        if (m.status === 'progress_total') {
+          ({ loaded, total: size } = m);
+        } else if (m.status === 'progress' && m.file) {
+          files.set(m.file, { loaded: m.loaded || 0, total: m.total || 0 });
+          loaded = size = 0;
+          for (const f of files.values()) { loaded += f.loaded; size += f.total; }
+        } else {
           break;
         }
-        case 'ready':
-          progress('Transcribing', 0, m.device === 'webgpu' ? 'Using your GPU' : 'Using your CPU. This is slower, a GPU-capable browser like Chrome speeds it up a lot.');
-          break;
-        case 'segment': {
-          addSegment(m);
-          const rate = m.done / Math.max(m.elapsed, 0.001);
-          const eta = (m.total - m.done) / rate;
-          progress(
-            'Transcribing',
-            m.done / m.total,
-            `${fmtTime(m.done)} of ${fmtTime(m.total)} · ${rate.toFixed(1)}x realtime · about ${fmtTime(eta)} left`
-          );
-          break;
-        }
-        case 'done':
-          resolve();
-          break;
-        case 'error':
-          reject(new Error(m.message));
-          break;
+        progress('Downloading speech model', size ? loaded / size : null, `${fmtBytes(loaded)} of ${fmtBytes(size)} (only needed once)`);
+        break;
       }
-    };
-    worker.onerror = (e) => reject(new Error(e.message || 'The transcription worker crashed. Try a smaller model.'));
+      case 'ready':
+        ready = true;
+        state.device = m.device;
+        progress('Transcribing', 0, m.device === 'webgpu' ? 'Using your GPU' : 'Using your CPU. This is slower than a GPU.');
+        break;
+      case 'buffered':
+        buffered = m.seconds;
+        nudge();
+        break;
+      case 'segment': {
+        buffered = m.buffered;
+        addSegment(m);
+        const rate = m.end / Math.max(m.elapsed, 0.001);
+        const eta = (total - m.end) / rate;
+        progress(
+          'Transcribing',
+          total ? m.end / total : null,
+          `${fmtTime(m.end)} of ${fmtTime(total)} · ${rate.toFixed(1)}x realtime · about ${fmtTime(eta)} left`
+        );
+        nudge();
+        break;
+      }
+      case 'done':
+        finish();
+        break;
+      case 'error':
+        fail(new Error(m.message));
+        nudge();
+        break;
+    }
+  };
+  worker.onerror = (e) => { fail(new Error(e.message || 'The transcription worker crashed. Try a smaller model.')); nudge(); };
 
-    const model = MODELS[modelKey];
-    const device = state.gpu.available ? 'webgpu' : 'wasm';
-    worker.postMessage(
-      { type: 'transcribe', audio, language: lang, model: model.id, device, hasF16: state.gpu.f16 },
-      [audio.buffer]
-    );
+  worker.postMessage({
+    type: 'start',
+    language: language(),
+    model: model.id,
+    device: state.gpu.available ? 'webgpu' : 'wasm',
+    hasF16: state.gpu.f16,
   });
+
+  // Decode while the model loads and while earlier pieces are transcribed, but never run
+  // more than MAX_AHEAD_SECONDS ahead of the worker, so memory stays flat.
+  let pieces = 0;
+  for await (const piece of decodePieces(bytes, (t) => { total = t; })) {
+    if (!pieces++ && piece.length < SAMPLE_RATE) throw new UserError('That audio is empty or too short to transcribe.');
+    buffered += piece.length / SAMPLE_RATE;
+    worker.postMessage({ type: 'audio', samples: piece }, [piece.buffer]);
+    while (buffered > MAX_AHEAD_SECONDS) await Promise.race([new Promise((r) => { wake = r; }), finished]);
+  }
+  bytes = null;
+  worker.postMessage({ type: 'audio', samples: new Float32Array(0), final: true });
+  await finished;
 }
 
 /* ---------- transcript output ---------- */
@@ -688,10 +819,7 @@ async function run(getSource) {
     }
     els.episodesCard.classList.add('hidden');
     resetTranscript(source.title);
-    const bytes = source.bytes || await downloadAudio(source.url);
-    const audio = await decodeAudio(bytes);
-    if (audio.length < 16000) throw new UserError('That audio is empty or too short to transcribe.');
-    await transcribeAudio(audio);
+    await transcribeBytes(source.bytes || await downloadAudio(source.url));
     if (!state.segments.length) {
       els.transcript.replaceChildren();
       const p = document.createElement('p');
@@ -728,21 +856,52 @@ async function detectGpu() {
   } catch {}
 }
 
+function selectedModel() {
+  return els.models.querySelector('input[name=model]:checked')?.value || 'small';
+}
+
+function modelSizeMB(m) {
+  if (!state.gpu.available) return m.mb.cpu;
+  return state.gpu.f16 ? m.mb.gpu16 : m.mb.gpu32;
+}
+
 function fillModels() {
-  els.model.replaceChildren();
-  for (const [key, m] of Object.entries(MODELS)) {
-    const opt = document.createElement('option');
-    opt.value = key;
-    opt.textContent = m.label;
-    if (m.webgpuOnly && !state.gpu.available) opt.disabled = true;
-    els.model.append(opt);
-  }
   const saved = store.get('model', null);
-  const fallback = state.gpu.available ? 'turbo' : 'small';
-  els.model.value = saved && !els.model.querySelector(`option[value="${saved}"]`)?.disabled ? saved : fallback;
-  els.deviceHint.textContent = state.gpu.available
-    ? 'GPU acceleration available. An hour-long episode usually takes a few minutes.'
-    : 'No WebGPU in this browser, so transcription runs on the CPU and takes a while (often close to the episode length). Chrome or Edge on desktop is much faster.';
+  const fallback = IS_MOBILE ? 'base' : state.gpu.available ? 'turbo' : 'small';
+  const chosen = MODELS[saved] ? saved : fallback;
+  for (const [key, m] of Object.entries(MODELS)) {
+    const label = document.createElement('label');
+    label.className = 'model-opt';
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'model';
+    input.value = key;
+    input.checked = key === chosen;
+    const name = document.createElement('span');
+    name.className = 'm-name';
+    name.textContent = m.name;
+    const size = document.createElement('span');
+    size.className = 'm-size';
+    const mb = modelSizeMB(m);
+    size.textContent = mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${mb} MB`;
+    const note = document.createElement('span');
+    note.className = 'm-note';
+    note.textContent = m.note;
+    label.append(input, name, size, note);
+    els.models.append(label);
+  }
+  updateModelHint();
+}
+
+function updateModelHint() {
+  const key = selectedModel();
+  const mb = modelSizeMB(MODELS[key]);
+  const parts = [state.gpu.available
+    ? 'Your browser can use the GPU, so an hour-long episode takes minutes.'
+    : 'No GPU access in this browser, so transcription runs on the CPU and can take about as long as the episode.'];
+  if (IS_MOBILE && mb > 300) parts.push('This model may be too big for a phone, and the browser can reload the page if it runs out of memory. Pick Base or Tiny if that happens.');
+  else if (!state.gpu.available && key === 'turbo') parts.push('Large v3 Turbo is very slow on a CPU.');
+  els.deviceHint.textContent = parts.join(' ');
 }
 
 async function init() {
@@ -754,7 +913,7 @@ async function init() {
   els.proxy.value = store.get('proxy', '');
 
   document.querySelectorAll('input[name=lang]').forEach((r) => r.addEventListener('change', () => store.set('lang', language())));
-  els.model.addEventListener('change', () => store.set('model', els.model.value));
+  els.models.addEventListener('change', () => { store.set('model', selectedModel()); updateModelHint(); });
   els.proxy.addEventListener('change', () => store.set('proxy', els.proxy.value.trim()));
 
   els.form.addEventListener('submit', (e) => {
@@ -787,3 +946,6 @@ async function init() {
 }
 
 init();
+
+// For tests.
+export { indexMp3, decodePieces, decodeMono16k };

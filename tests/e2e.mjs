@@ -32,7 +32,7 @@ const nrk = await appleEpisodeLink('Abels tårn', 'no');
 const omny = await appleEpisodeLink('Millionærklubben', 'dk');
 
 const CASES = [
-  { name: 'Pocket Casts episode', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 2, title: 'Xi’s Just Not That Into You' },
+  { name: 'Pocket Casts episode', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 8, title: 'Xi’s Just Not That Into You' },
   { name: 'Pocket Casts short link', url: 'https://pca.st/okm7xj7g', lang: 'english', resolveOnly: true, title: 'Xi’s Just Not That Into You' },
   { name: 'Apple, Norwegian (NRK)', url: nrk.url, lang: 'norwegian', segments: 1, title: nrk.title },
   { name: 'Apple, Danish (Omny)', url: omny.url, lang: 'danish', segments: 1, title: omny.title },
@@ -40,6 +40,8 @@ const CASES = [
   { name: 'RSS feed', url: 'https://feeds.megaphone.fm/hubermanlab', lang: 'english', expectList: true },
   ...(process.env.EXTRA_CASES ? JSON.parse(process.env.EXTRA_CASES) : []),
 ];
+// Decoding is chunked so memory stays flat; a 90 minute episode used about 4 GB before.
+const MEMORY_LIMIT_MB = Number(process.env.MEMORY_LIMIT_MB || 1200);
 const TIMEOUT_MS = Number(process.env.CASE_TIMEOUT_MS || 12 * 60 * 1000);
 
 const browser = await chromium.launch();
@@ -68,7 +70,7 @@ for (const c of CASES) {
 
   await page.goto(`${ORIGIN}/index.html`);
   await page.click(`input[value=${c.lang}] + span`);
-  await page.selectOption('#model', 'base');
+  await page.click('input[name=model][value=base]');
   await page.fill('#url', c.url);
   await page.click('#go');
 
@@ -109,6 +111,7 @@ for (const c of CASES) {
   }
   clearInterval(sampler);
   if (navigations > 0 && result === 'ok') result = `page reloaded ${navigations}x during the run`;
+  if (peakMB > MEMORY_LIMIT_MB && result === 'ok') result = `peak tab memory ${Math.round(peakMB)} MB is over ${MEMORY_LIMIT_MB} MB`;
   const ok = c.expectList ? result.startsWith('episode list') : result === 'ok';
   console.log(`  RESULT: ${ok ? 'PASS' : 'FAIL'} (${result}) peak tab memory ${Math.round(peakMB)} MB`);
   if (!ok) failures++;

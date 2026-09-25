@@ -87,7 +87,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .options { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; margin-top: 16px; }
 
 fieldset.lang { border: 0; padding: 0; margin: 0; display: flex; gap: 0; }
-fieldset.lang legend, .model > span { font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; padding: 0; }
+fieldset.lang legend { font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; padding: 0; }
 fieldset.lang label { cursor: pointer; }
 fieldset.lang input { position: absolute; opacity: 0; pointer-events: none; }
 fieldset.lang span {
@@ -101,7 +101,24 @@ fieldset.lang label:last-of-type span { border-radius: 0 10px 10px 0; }
 fieldset.lang input:checked + span { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 fieldset.lang input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.model { display: flex; flex-direction: column; flex: 1; min-width: 220px; }
+fieldset.models { border: 0; padding: 0; margin: 0; flex: 1 1 100%; display: grid; gap: 6px; }
+fieldset.models legend { font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; padding: 0; }
+.model-opt {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas: "radio name size" "radio note note";
+  column-gap: 10px;
+  align-items: center;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.model-opt:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.model-opt input { grid-area: radio; margin: 0; accent-color: var(--accent); }
+.model-opt .m-name { grid-area: name; font-weight: 600; }
+.model-opt .m-size { grid-area: size; color: var(--muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.model-opt .m-note { grid-area: note; color: var(--muted); font-size: 0.85rem; }
 
 .hint { margin: 12px 0 0; font-size: 0.85rem; color: var(--muted); }
 

@@ -16,13 +16,18 @@ Everything runs in your browser using OpenAI's Whisper through [Transformers.js]
 
 ## Models
 
-| Option | Model | Notes |
-| --- | --- | --- |
-| Fast | Whisper Base | Small download, weak on Norwegian and Danish |
-| Balanced | Whisper Small | Default without WebGPU |
-| Best | Whisper Large v3 Turbo | Default with WebGPU. By far the best for Norwegian and Danish |
+Pick the size under "Model size". Sizes are what your browser downloads (once, then cached):
 
-The model downloads once and is cached by the browser. With WebGPU (recent Chrome or Edge on desktop), an hour-long episode takes a few minutes. Without WebGPU it runs on the CPU, which can take about as long as the episode itself.
+| Model | CPU | GPU | Notes |
+| --- | --- | --- | --- |
+| Tiny | 41 MB | 104 to 120 MB | Fastest, rough text |
+| Base | 77 MB | 165 to 206 MB | Weak on Norwegian and Danish |
+| Small | 249 MB | 410 to 586 MB | Good balance |
+| Large v3 Turbo | 1.1 GB | 564 to 759 MB | Best by far for Norwegian and Danish |
+
+Defaults: Large v3 Turbo with a GPU on desktop, Small on CPU, Base on phones. With WebGPU (recent Chrome or Edge on desktop) an hour-long episode takes a few minutes; on the CPU it can take about as long as the episode.
+
+Audio is decoded two minutes at a time while earlier parts are transcribed, so memory use stays flat however long the episode is. Phones kill tabs that use too much memory and reload the page, so on a phone stick to Base or Tiny.
 
 ## Deploying to GitHub Pages
 
@@ -49,6 +54,6 @@ Some hosts block browsers entirely (for example Anchor, now Spotify for Creators
 
 - `index.html`, `style.css`: the page
 - `app.js`: link resolution, downloading, decoding, UI
-- `worker.js`: runs Whisper off the main thread, splits audio at pauses into 30 second windows
+- `worker.js`: runs Whisper off the main thread on audio streamed in from the page, split at pauses into 30 second windows
 - `coi-sw.js`: service worker that enables multi-threaded WASM on GitHub Pages
 - `cors-proxy-worker.js`: optional self-hosted proxy

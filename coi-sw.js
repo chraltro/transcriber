@@ -34,6 +34,8 @@ if (typeof window === 'undefined') {
     if (sessionStorage.getItem('coi-reloaded')) return;
 
     const reload = () => {
+      // Never throw away work in progress; isolation then kicks in on the next visit.
+      if (window.__transcriberBusy) return;
       sessionStorage.setItem('coi-reloaded', '1');
       location.reload();
     };
