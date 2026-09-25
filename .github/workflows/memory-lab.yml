@@ -1,0 +1,21 @@
+name: Memory lab
+
+on:
+  push:
+    branches: ['claude/**']
+    paths: ['tests/memory-lab.mjs', '.github/workflows/memory-lab.yml', 'worker.js']
+  workflow_dispatch:
+
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: |
+          npm i --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium webkit
+      - run: node tests/memory-lab.mjs
