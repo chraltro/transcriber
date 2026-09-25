@@ -1,0 +1,14 @@
+name: Probe podcast hosts
+
+on:
+  push:
+    branches: ['claude/**']
+    paths: ['tests/probe.sh', '.github/workflows/probe.yml']
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash tests/probe.sh
