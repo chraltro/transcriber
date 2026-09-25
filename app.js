@@ -393,8 +393,21 @@ async function resolveSpotify(u) {
   const title = info?.title?.trim();
   if (!title) throw new UserError("Spotify didn't recognise that link. Try the Apple Podcasts or Pocket Casts link for the same podcast.");
 
-  const found = isEpisode ? await findByName('', title) : await findByName(title, null);
-  if (found) return found;
+  if (isEpisode) {
+    const found = await findByName('', title);
+    if (found) return found;
+  } else {
+    // For a show link, Spotify's oEmbed title is the latest episode, not the show's name.
+    // Find that episode, then list the episodes of the show it belongs to.
+    const eps = await itunesSearch(title, 'podcastEpisode', (e) => e.episodeUrl);
+    const hit = bestTitleMatch(eps.map((e) => ({ title: e.trackName, showId: e.collectionId })), title);
+    if (hit) {
+      const { show, episodes } = await itunesLookupEpisodes(hit.showId);
+      if (episodes.length) return { kind: 'list', title: show?.collectionName || 'Episodes', episodes };
+    }
+    const byName = await findByName(title, null);
+    if (byName) return byName;
+  }
   throw new UserError(
     `Couldn't find "${title}" outside Spotify. It may be a Spotify exclusive, which can't be transcribed. ` +
     `If it's also on Apple Podcasts or Pocket Casts, paste that link instead.`
