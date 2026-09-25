@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Podcast Transcriber</title>
+  <meta name="description" content="Transcribe any podcast episode in English, Norwegian or Danish, right in your browser. No API key, no uploads.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
+  <!-- Enables multi-threaded WASM on GitHub Pages (which can't set COOP/COEP headers itself). -->
+  <script src="coi-sw.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Podcast Transcriber</h1>
+      <p class="tagline">Paste a podcast link, get the full transcript. Runs entirely in your browser with Whisper. No API key, no account, nothing uploaded.</p>
+    </header>
+
+    <section class="card" id="input-card">
+      <form id="url-form" autocomplete="off">
+        <label for="url" class="sr-only">Podcast link</label>
+        <div class="url-row">
+          <input id="url" type="url" inputmode="url" required
+                 placeholder="Apple Podcasts, Spotify, RSS feed, episode page or .mp3 link">
+          <button type="submit" id="go" class="primary">Transcribe</button>
+        </div>
+      </form>
+
+      <div class="options">
+        <fieldset class="lang">
+          <legend>Language</legend>
+          <label><input type="radio" name="lang" value="english" checked><span>English</span></label>
+          <label><input type="radio" name="lang" value="norwegian"><span>Norsk</span></label>
+          <label><input type="radio" name="lang" value="danish"><span>Dansk</span></label>
+        </fieldset>
+
+        <label class="model">
+          <span>Model</span>
+          <select id="model"></select>
+        </label>
+      </div>
+
+      <p class="hint" id="device-hint"></p>
+
+      <details class="advanced">
+        <summary>More options</summary>
+        <div class="adv-body">
+          <label class="file-pick">
+            <span>Or transcribe an audio file from your device</span>
+            <input type="file" id="file" accept="audio/*,video/*,.mp3,.m4a,.aac,.ogg,.opus,.wav,.flac,.mp4">
+          </label>
+          <label>
+            <span>Custom CORS proxy (optional). Use <code>{url}</code> as placeholder, or a prefix the link gets appended to.</span>
+            <input type="text" id="proxy" placeholder="https://my-proxy.example.workers.dev/?url={url}">
+          </label>
+        </div>
+      </details>
+    </section>
+
+    <section class="card hidden" id="episodes-card">
+      <div class="card-head">
+        <h2 id="feed-title">Pick an episode</h2>
+        <button type="button" class="ghost" id="episodes-close">Close</button>
+      </div>
+      <input type="search" id="episode-filter" placeholder="Filter episodes">
+      <ul id="episodes"></ul>
+    </section>
+
+    <section class="card hidden" id="progress-card">
+      <div class="card-head">
+        <h2 id="stage">Working</h2>
+        <button type="button" class="ghost" id="cancel">Cancel</button>
+      </div>
+      <div class="bar"><div id="bar-fill"></div></div>
+      <p class="detail" id="detail"></p>
+    </section>
+
+    <section class="card hidden" id="error-card" role="alert">
+      <p id="error"></p>
+    </section>
+
+    <section class="card hidden" id="result-card">
+      <div class="card-head result-head">
+        <h2 id="episode-title">Transcript</h2>
+        <div class="actions">
+          <label class="toggle"><input type="checkbox" id="timestamps"> Timestamps</label>
+          <button type="button" id="download" class="ghost">Download .txt</button>
+          <button type="button" id="copy" class="primary">Copy</button>
+        </div>
+      </div>
+      <div id="transcript" tabindex="0"></div>
+    </section>
+
+    <footer>
+      Speech recognition by OpenAI Whisper via <a href="https://github.com/huggingface/transformers.js">Transformers.js</a>.
+      The model is downloaded once and cached by your browser. Keep this tab open while it works.
+    </footer>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
