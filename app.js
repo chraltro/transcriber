@@ -20,6 +20,7 @@ const els = {
   episodesCard: $('#episodes-card'), feedTitle: $('#feed-title'), episodes: $('#episodes'), filter: $('#episode-filter'),
   progressCard: $('#progress-card'), stage: $('#stage'), bar: $('#bar-fill'), detail: $('#detail'), cancel: $('#cancel'),
   errorCard: $('#error-card'), error: $('#error'),
+  resumeCard: $('#resume-card'), resumeText: $('#resume-text'),
   resultCard: $('#result-card'), title: $('#episode-title'), transcript: $('#transcript'),
   copy: $('#copy'), download: $('#download'), timestamps: $('#timestamps'),
 };
@@ -34,6 +35,7 @@ const state = {
   episodeList: [],
   wakeLock: null,
   rejectRun: null,
+  job: null,
 };
 
 /* ---------- small helpers ---------- */
@@ -176,7 +178,38 @@ function audioCandidates(url) {
   return [...new Set(out)];
 }
 
-async function downloadAudio(url) {
+// Episodes are kept in the browser's disk cache (Cache Storage) and read back a piece at a
+// time, so a 100 MB file never sits in memory, and a reloaded page can resume without
+// downloading it again. Only the current episode is kept.
+const AUDIO_CACHE = 'transcriber-audio';
+const audioKey = (id) => `https://transcriber.invalid/audio?id=${encodeURIComponent(id)}`;
+
+async function openAudioCache() {
+  try { return await caches.open(AUDIO_CACHE); } catch { return null; }
+}
+
+async function cachedAudio(key) {
+  const cache = await openAudioCache();
+  const hit = await cache?.match(key);
+  return hit ? hit.blob() : null;
+}
+
+async function storeAudio(key, response) {
+  const cache = await openAudioCache();
+  if (!cache) return response.blob(); // no Cache Storage (some private modes): keep it in memory
+  for (const old of await cache.keys()) await cache.delete(old);
+  await cache.put(key, response);
+  return (await cache.match(key)).blob();
+}
+
+async function forgetAudio() {
+  try { await caches.delete(AUDIO_CACHE); } catch {}
+}
+
+async function downloadAudio(url, key) {
+  const cached = await cachedAudio(key);
+  if (cached) return cached;
+
   progress('Downloading episode', null, 'Connecting');
   let res = null;
   for (const candidate of audioCandidates(url)) {
@@ -194,25 +227,15 @@ async function downloadAudio(url) {
     );
   }
   const total = Number(res.headers.get('content-length')) || 0;
-  if (!res.body) return new Uint8Array(await res.arrayBuffer());
-
-  // Write straight into one buffer instead of collecting chunks and copying them at the end.
-  const reader = res.body.getReader();
-  let bytes = new Uint8Array(total || 32e6);
   let got = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (got + value.length > bytes.length) {
-      const bigger = new Uint8Array(Math.max(bytes.length * 2, got + value.length));
-      bigger.set(bytes.subarray(0, got));
-      bytes = bigger;
-    }
-    bytes.set(value, got);
-    got += value.length;
-    progress('Downloading episode', total ? got / total : null, total ? `${fmtBytes(got)} of ${fmtBytes(total)}` : fmtBytes(got));
-  }
-  return bytes.subarray(0, got);
+  const counted = res.body.pipeThrough(new TransformStream({
+    transform(chunk, ctl) {
+      got += chunk.length;
+      progress('Downloading episode', total ? got / total : null, total ? `${fmtBytes(got)} of ${fmtBytes(total)}` : fmtBytes(got));
+      ctl.enqueue(chunk);
+    },
+  }));
+  return storeAudio(key, new Response(counted, { headers: { 'content-type': res.headers.get('content-type') || 'audio/mpeg' } }));
 }
 
 /* ---------- link resolution ---------- */
@@ -529,13 +552,13 @@ function formatDuration(d) {
 
 /* ---------- decoding ----------
  * Decoding a whole episode at once needs gigabytes (the browser decodes at the file's own
- * sample rate first), and phones kill tabs that do that. MP3 files are cut into two-minute
+ * sample rate first), and phones kill tabs that do that. MP3 files are cut into one-minute
  * pieces at frame boundaries and decoded one at a time, while the worker transcribes the
  * previous piece. */
 
 const SAMPLE_RATE = 16000;
-const PIECE_SECONDS = 120;
-const MAX_AHEAD_SECONDS = 150; // decoded audio allowed to wait for the worker
+const PIECE_SECONDS = 60;
+const MAX_AHEAD_SECONDS = 90; // decoded audio allowed to wait for the worker
 
 const MP3_KBPS = {
   V1L1: [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
@@ -563,21 +586,36 @@ function mp3FrameAt(b, i) {
   return { len: Math.floor(((v1 ? 144 : 72) * bitrate) / sr) + pad, spf: v1 ? 1152 : 576, sr };
 }
 
-// Byte offset of every audio frame, or null if this isn't a (clean) MP3.
-function indexMp3(b) {
+// Byte offset of every audio frame, or null if this isn't a (clean) MP3. Reads the file
+// 4 MB at a time so it never has to be in memory whole.
+async function indexMp3(blob) {
+  const size = blob.size;
+  const WINDOW = 4 << 20;
+  const OVERLAP = 8192; // larger than any MP3 frame, so a frame and the next header always fit
+  let win = new Uint8Array(await blob.slice(0, WINDOW + OVERLAP).arrayBuffer());
+  let winStart = 0;
   let i = 0;
-  if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) {
-    i = 10 + (((b[6] & 127) << 21) | ((b[7] & 127) << 14) | ((b[8] & 127) << 7) | (b[9] & 127)) + (b[5] & 0x10 ? 10 : 0);
+  if (win[0] === 0x49 && win[1] === 0x44 && win[2] === 0x33) {
+    i = 10 + (((win[6] & 127) << 21) | ((win[7] & 127) << 14) | ((win[8] & 127) << 7) | (win[9] & 127)) + (win[5] & 0x10 ? 10 : 0);
   }
   const offsets = [];
   let spf = 0;
   let sr = 0;
   let covered = 0;
-  while (i < b.length - 4) {
-    const f = mp3FrameAt(b, i);
+  let first = '';
+  while (i < size - 4) {
+    if (i - winStart + OVERLAP > win.length && winStart + win.length < size) {
+      winStart = i;
+      win = new Uint8Array(await blob.slice(i, i + WINDOW + OVERLAP).arrayBuffer());
+    }
+    const j = i - winStart;
+    const f = mp3FrameAt(win, j);
     // The next frame has to line up as well, so stray 0xFF bytes aren't taken for frames.
-    if (f && f.len > 4 && (i + f.len >= b.length - 4 || mp3FrameAt(b, i + f.len))) {
-      if (!sr) ({ sr, spf } = f);
+    if (f && f.len > 4 && (i + f.len >= size - 4 || mp3FrameAt(win, j + f.len))) {
+      if (!sr) {
+        ({ sr, spf } = f);
+        first = String.fromCharCode(...win.subarray(j, j + Math.min(f.len, 64)));
+      }
       if (f.sr === sr && f.spf === spf) {
         offsets.push(i);
         covered += f.len;
@@ -588,9 +626,8 @@ function indexMp3(b) {
       if (!offsets.length && i > 1 << 20) return null;
     }
   }
-  if (offsets.length < 50 || covered < b.length * 0.8) return null;
+  if (offsets.length < 50 || covered < size * 0.8) return null;
   // Skip the Xing/Info/VBRI header frame: it holds metadata, and some decoders size their output from it.
-  const first = String.fromCharCode(...b.subarray(offsets[0], offsets[0] + 64));
   if (/Xing|Info|VBRI/.test(first)) offsets.shift();
   return { offsets, spf, sr };
 }
@@ -613,15 +650,16 @@ async function decodeMono16k(arrayBuffer) {
   return out;
 }
 
-// Yields 16 kHz mono audio, about two minutes at a time. Calls onTotal(seconds) first.
-async function* decodePieces(bytes, onTotal) {
-  const mp3 = indexMp3(bytes);
+// Yields 16 kHz mono audio a piece at a time, starting at fromSec. Calls onTotal(seconds) first.
+async function* decodePieces(blob, onTotal, fromSec = 0) {
+  const skip = Math.round(fromSec * SAMPLE_RATE);
+  const mp3 = await indexMp3(blob);
   if (!mp3) {
     // Not an MP3 (for example AAC in an .m4a). Those containers can't be cut up, so decode it whole.
-    const whole = await decodeMono16k(bytes.slice().buffer);
+    const whole = await decodeMono16k(await blob.arrayBuffer());
     onTotal(whole.length / SAMPLE_RATE);
     const step = PIECE_SECONDS * SAMPLE_RATE;
-    for (let s = 0; s < whole.length; s += step) yield whole.slice(s, s + step);
+    for (let s = skip; s < whole.length; s += step) yield whole.slice(s, s + step);
     return;
   }
   const { offsets, spf, sr } = mp3;
@@ -630,10 +668,13 @@ async function* decodePieces(bytes, onTotal) {
   // MP3 frames can borrow bits from the frames before them, so decode two extra and drop their audio.
   const WARMUP = 2;
   for (let k = 0; k < offsets.length; k += per) {
+    const pieceStart = Math.round((k * spf * SAMPLE_RATE) / sr);
+    const pieceEnd = Math.round((Math.min(k + per, offsets.length) * spf * SAMPLE_RATE) / sr);
+    if (pieceEnd <= skip) continue;
     const from = Math.max(0, k - WARMUP);
-    const end = k + per < offsets.length ? offsets[k + per] : bytes.length;
-    const pcm = await decodeMono16k(bytes.slice(offsets[from], end).buffer);
-    const drop = Math.round(((k - from) * spf * SAMPLE_RATE) / sr);
+    const end = k + per < offsets.length ? offsets[k + per] : blob.size;
+    const pcm = await decodeMono16k(await blob.slice(offsets[from], end).arrayBuffer());
+    const drop = Math.round(((k - from) * spf * SAMPLE_RATE) / sr) + Math.max(0, skip - pieceStart);
     yield drop ? pcm.slice(drop) : pcm;
   }
 }
@@ -650,7 +691,7 @@ function killWorker() {
   state.worker = null;
 }
 
-async function transcribeBytes(bytes) {
+async function transcribeAudio(blob, fromSec = 0) {
   const worker = getWorker();
   const model = MODELS[selectedModel()];
   const files = new Map();
@@ -698,6 +739,7 @@ async function transcribeBytes(bytes) {
       case 'segment': {
         buffered = m.buffered;
         addSegment(m);
+        saveProgress(m.end, total);
         const rate = m.end / Math.max(m.elapsed, 0.001);
         const eta = (total - m.end) / rate;
         progress(
@@ -725,18 +767,18 @@ async function transcribeBytes(bytes) {
     model: model.id,
     device: state.gpu.available ? 'webgpu' : 'wasm',
     hasF16: state.gpu.f16,
+    offsetSec: fromSec,
   });
 
   // Decode while the model loads and while earlier pieces are transcribed, but never run
   // more than MAX_AHEAD_SECONDS ahead of the worker, so memory stays flat.
   let pieces = 0;
-  for await (const piece of decodePieces(bytes, (t) => { total = t; })) {
-    if (!pieces++ && piece.length < SAMPLE_RATE) throw new UserError('That audio is empty or too short to transcribe.');
+  for await (const piece of decodePieces(blob, (t) => { total = t; }, fromSec)) {
+    if (!pieces++ && !fromSec && piece.length < SAMPLE_RATE) throw new UserError('That audio is empty or too short to transcribe.');
     buffered += piece.length / SAMPLE_RATE;
     worker.postMessage({ type: 'audio', samples: piece }, [piece.buffer]);
     while (buffered > MAX_AHEAD_SECONDS) await Promise.race([new Promise((r) => { wake = r; }), finished]);
   }
-  bytes = null;
   worker.postMessage({ type: 'audio', samples: new Float32Array(0), final: true });
   await finished;
 }
@@ -753,6 +795,11 @@ function resetTranscript(title) {
   p.textContent = 'The transcript will appear here as it is written.';
   els.transcript.append(p);
   els.resultCard.classList.remove('hidden');
+}
+
+function restoreTranscript(job) {
+  resetTranscript(job.title);
+  for (const seg of job.segments) addSegment(seg);
 }
 
 function addSegment({ start, text }) {
@@ -806,20 +853,68 @@ function downloadTranscript() {
 
 /* ---------- main flow ---------- */
 
-async function run(getSource) {
+// Progress survives a reload: if the browser kills the tab (usually for using too much
+// memory), the next visit offers to resume from the last finished segment.
+const JOB_KEY = 'job';
+
+function loadJob() {
+  try { return JSON.parse(localStorage.getItem(JOB_KEY)) || null; } catch { return null; }
+}
+
+function saveJob(job) {
+  state.job = job;
+  try { localStorage.setItem(JOB_KEY, JSON.stringify(job)); } catch {}
+}
+
+function saveProgress(doneSec, total) {
+  if (!state.job) return;
+  saveJob({ ...state.job, segments: state.segments, doneSec, total: total || state.job.total });
+}
+
+function clearJob() {
+  state.job = null;
+  try { localStorage.removeItem(JOB_KEY); } catch {}
+  forgetAudio();
+}
+
+async function run(getSource, resume = null) {
   clearError();
+  els.resumeCard.classList.add('hidden');
   state.abort = new AbortController();
   setBusy(true);
   try {
-    const source = await getSource();
+    const source = resume ? resume.source : await getSource();
     if (source.kind === 'list') {
       setBusy(false);
       showEpisodes(source);
       return;
     }
     els.episodesCard.classList.add('hidden');
-    resetTranscript(source.title);
-    await transcribeBytes(source.bytes || await downloadAudio(source.url));
+    const key = audioKey(source.url || source.fileId);
+    if (resume) restoreTranscript(resume);
+    else resetTranscript(source.title);
+
+    let blob;
+    if (source.url) {
+      blob = await downloadAudio(source.url, key);
+    } else if (source.file) {
+      blob = await storeAudio(key, new Response(source.file));
+    } else {
+      blob = await cachedAudio(key);
+      if (!blob) throw new UserError('That file is no longer stored in the browser. Pick it again under "More options".');
+    }
+
+    saveJob({
+      source: { kind: 'audio', title: source.title, url: source.url, fileId: source.fileId },
+      title: source.title,
+      lang: language(),
+      segments: state.segments,
+      doneSec: resume?.doneSec || 0,
+      total: resume?.total || 0,
+    });
+    await transcribeAudio(blob, resume?.doneSec || 0);
+    blob = null;
+    clearJob();
     if (!state.segments.length) {
       els.transcript.replaceChildren();
       const p = document.createElement('p');
@@ -841,7 +936,21 @@ function cancel() {
   state.abort?.abort();
   state.rejectRun?.(new DOMException('Cancelled', 'AbortError'));
   killWorker();
+  clearJob();
   setBusy(false);
+}
+
+function offerResume(job) {
+  restoreTranscript(job);
+  const done = fmtTime(job.doneSec);
+  els.resumeText.textContent = job.total
+    ? `"${job.title}" stopped at ${done} of ${fmtTime(job.total)}.`
+    : `"${job.title}" stopped at ${done}.`;
+  els.resumeCard.classList.remove('hidden');
+  if (job.lang) {
+    const radio = document.querySelector(`input[name=lang][value="${job.lang}"]`);
+    if (radio) radio.checked = true;
+  }
 }
 
 /* ---------- setup ---------- */
@@ -927,7 +1036,8 @@ async function init() {
   els.file.addEventListener('change', () => {
     const file = els.file.files[0];
     if (!file || state.busy) return;
-    run(async () => ({ kind: 'audio', title: file.name, bytes: new Uint8Array(await file.arrayBuffer()) }));
+    const fileId = `file:${file.name}:${file.size}:${file.lastModified}`;
+    run(async () => ({ kind: 'audio', title: file.name, file, fileId }));
     els.file.value = '';
   });
 
@@ -940,6 +1050,19 @@ async function init() {
 
   await detectGpu();
   fillModels();
+
+  $('#resume').addEventListener('click', () => {
+    const job = loadJob();
+    if (job && !state.busy) run(null, job);
+  });
+  $('#discard').addEventListener('click', () => {
+    clearJob();
+    els.resumeCard.classList.add('hidden');
+    els.resultCard.classList.add('hidden');
+  });
+
+  const job = loadJob();
+  if (job?.source && job.doneSec >= 0) offerResume(job);
 
   const shared = new URLSearchParams(location.search).get('url');
   if (shared) els.url.value = shared;

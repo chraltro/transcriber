@@ -106,8 +106,8 @@ function append(a, b) {
   return out;
 }
 
-async function start({ language, model, device, hasF16 }) {
-  job = { language, pending: new Float32Array(0), offset: 0, final: false, running: false, t0: 0, loaded: false };
+async function start({ language, model, device, hasF16, offsetSec = 0 }) {
+  job = { language, pending: new Float32Array(0), offset: Math.round(offsetSec * SAMPLE_RATE), final: false, running: false, t0: 0, loaded: false };
   post({ type: 'status', text: 'Loading speech model' });
   const used = await load(model, device, hasF16);
   post({ type: 'ready', device: used });

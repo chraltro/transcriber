@@ -152,6 +152,8 @@ fieldset.models legend { font-size: 0.85rem; color: var(--muted); margin-bottom:
 @keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
 .detail { margin: 10px 0 0; font-size: 0.9rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 
+.resume-text { margin: 0 0 12px; color: var(--muted); }
+
 #error-card { background: var(--error-soft); border-color: transparent; }
 #error { margin: 0; color: var(--error); white-space: pre-line; }
 

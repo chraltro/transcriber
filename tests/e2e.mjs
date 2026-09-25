@@ -33,6 +33,10 @@ const omny = await appleEpisodeLink('Millionærklubben', 'dk');
 
 const CASES = [
   { name: 'Pocket Casts episode', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 8, title: 'Xi’s Just Not That Into You' },
+  // Simulates the browser killing the tab: reload after 3 segments, then resume from the saved point.
+  { name: 'Resume after reload', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 6, reloadAfter: 3, title: 'Xi’s Just Not That Into You' },
+  // Memory must stay flat over a longer run, or a long episode eventually gets the tab killed.
+  { name: 'Memory over a long run', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 30, leakCheck: true, title: 'Xi’s Just Not That Into You' },
   { name: 'Pocket Casts short link', url: 'https://pca.st/okm7xj7g', lang: 'english', resolveOnly: true, title: 'Xi’s Just Not That Into You' },
   { name: 'Apple, Norwegian (NRK)', url: nrk.url, lang: 'norwegian', segments: 1, title: nrk.title },
   { name: 'Apple, Danish (Omny)', url: omny.url, lang: 'danish', segments: 1, title: omny.title },
@@ -79,6 +83,10 @@ for (const c of CASES) {
   const sampler = setInterval(() => { peakMB = Math.max(peakMB, rendererRssMB()); }, 1000);
   let navigations = 0;
   page.on('framenavigated', (f) => { if (f === page.mainFrame()) navigations++; });
+  let reloaded = false;
+  let audioFetchesAfterReload = 0;
+  page.on('request', (r) => { if (reloaded && /\.mp3/.test(r.url())) audioFetchesAfterReload++; });
+  let memAtStart = 0;
   let last = '';
   let result = 'timeout';
   while (Date.now() - start < TIMEOUT_MS) {
@@ -100,11 +108,35 @@ for (const c of CASES) {
       console.log(`  title: ${s.title}`);
       break;
     }
+    if (c.leakCheck && !memAtStart && s.segments.length >= 5) memAtStart = rendererRssMB();
+    if (c.reloadAfter && !reloaded && s.segments.length >= c.reloadAfter) {
+      const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('job'))?.doneSec);
+      console.log(`  reloading the page after ${s.segments.length} segments (saved progress: ${saved}s)`);
+      reloaded = true;
+      await page.reload();
+      navigations--;
+      const card = await page.evaluate(() => !document.querySelector('#resume-card').classList.contains('hidden'));
+      if (!card) { result = 'no resume offer after reload'; break; }
+      await page.click('#resume');
+      continue;
+    }
     if (s.segments.length >= (c.segments || 1)) {
+      if (reloaded) {
+        const starts = s.segments.map((t) => { const m = t.match(/\[(\d+):(\d+)\]/); return +m[1] * 60 + +m[2]; });
+        const sorted = starts.every((v, i) => !i || v > starts[i - 1]);
+        if (!sorted) { result = `segments out of order or repeated after resume: ${starts.join(',')}`; break; }
+        if (audioFetchesAfterReload) { result = `episode downloaded again after reload (${audioFetchesAfterReload}x)`; break; }
+        console.log(`  resumed without re-downloading; segment starts ${starts.join(',')}`);
+      }
+      if (c.leakCheck) {
+        const grew = rendererRssMB() - memAtStart;
+        console.log(`  memory after 5 segments ${Math.round(memAtStart)} MB, after ${s.segments.length}: ${Math.round(memAtStart + grew)} MB`);
+        if (grew > 200) { result = `memory grew ${Math.round(grew)} MB during the run`; break; }
+      }
       if (c.title && s.title !== c.title) { result = `wrong episode: "${s.title}"`; break; }
       result = 'ok';
       console.log(`  title: ${s.title}`);
-      s.segments.forEach((t) => console.log(`  > ${t}`));
+      s.segments.slice(0, 2).forEach((t) => console.log(`  > ${t.slice(0, 80)}`));
       break;
     }
     await page.waitForTimeout(2000);
