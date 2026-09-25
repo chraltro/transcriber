@@ -8,11 +8,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          curl -sS "https://open.spotify.com/oembed?url=https%3A%2F%2Fopen.spotify.com%2Fshow%2F3IM0lmZxpFAY7CwMuv9H4g" | python3 -c "import json,sys;d=json.load(sys.stdin);d.pop('html',None);print(d)"
-          echo; echo "--- page title"
-          curl -sSL -A "Mozilla/5.0" "https://open.spotify.com/show/3IM0lmZxpFAY7CwMuv9H4g" | grep -oE '<title>[^<]*</title>|og:title" content="[^"]*"'
-          echo; echo "--- itunes episode search"
-          curl -sS "https://itunes.apple.com/search?term=What%20Safeguarding%20Nukes%20Can%20Teach%20Us%20About%20Safeguarding%20A.I.&entity=podcastEpisode&limit=10&country=us" | python3 -c "import json,sys;[print(' ',x.get('trackName'),'|',x.get('collectionName')) for x in json.load(sys.stdin)['results']]"
-          echo "--- spotify episode oembed (pick any episode link from the show page)"
-          EP=$(curl -sSL -A "Mozilla/5.0" "https://open.spotify.com/show/3IM0lmZxpFAY7CwMuv9H4g" | grep -oE 'open.spotify.com/episode/[A-Za-z0-9]{22}' | head -1); echo "$EP"
-          [ -n "$EP" ] && curl -sS "https://open.spotify.com/oembed?url=https%3A%2F%2F${EP//\//%2F}" | python3 -c "import json,sys;d=json.load(sys.stdin);d.pop('html',None);print(d)"
+          q() { curl -sS "https://itunes.apple.com/search?$1" | python3 -c "import json,sys;r=json.load(sys.stdin)['results'];print(len(r),'results');[print('   ',x.get('trackName'),'|',x.get('collectionName'),'|',x.get('releaseDate')) for x in r[:4]]"; }
+          T="What%20Safeguarding%20Nukes%20Can%20Teach%20Us%20About%20Safeguarding%20A.I."
+          echo "latest Daily episodes per lookup:"; curl -sS "https://itunes.apple.com/lookup?id=1200361736&entity=podcastEpisode&limit=4" | python3 -c "import json,sys;[print('   ',x.get('trackName'),'|',x.get('releaseDate')) for x in json.load(sys.stdin)['results'][1:]]"
+          echo "titleTerm:"; q "term=$T&entity=podcastEpisode&attribute=titleTerm&limit=10"
+          echo "with show name:"; q "term=The%20Daily%20$T&entity=podcastEpisode&limit=10"
+          OLD=$(curl -sS "https://itunes.apple.com/lookup?id=1200361736&entity=podcastEpisode&limit=30" | python3 -c "import json,sys,urllib.parse;print(urllib.parse.quote(json.load(sys.stdin)['results'][-1]['trackName']))")
+          echo "older episode ($OLD) plain:"; q "term=$OLD&entity=podcastEpisode&limit=10"
+          echo "older episode titleTerm:"; q "term=$OLD&entity=podcastEpisode&attribute=titleTerm&limit=10"
