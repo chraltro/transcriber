@@ -313,6 +313,28 @@ async function itunesSearch(term, entity) {
   return [];
 }
 
+// Find a show's episode through Apple's public directory and the show's RSS feed.
+async function findElsewhere(showName, episodeTitle) {
+  if (showName) {
+    const shows = await itunesSearch(showName, 'podcast');
+    const show = shows.find((s) => normTitle(s.collectionName) === normTitle(showName)) || shows[0];
+    if (show?.feedUrl) {
+      try {
+        const res = await resolveFeed(show.feedUrl, episodeTitle);
+        if (!episodeTitle || res.kind === 'audio') return res;
+      } catch (err) {
+        if (err.name === 'AbortError') throw err;
+      }
+    }
+  }
+  if (episodeTitle) {
+    const eps = (await itunesSearch(`${showName || ''} ${episodeTitle}`.trim(), 'podcastEpisode')).filter((e) => e.episodeUrl);
+    const hit = bestTitleMatch(eps.map((e) => ({ title: e.trackName, url: e.episodeUrl })), episodeTitle);
+    if (hit) return { kind: 'audio', ...hit };
+  }
+  return null;
+}
+
 async function resolveSpotify(u) {
   const isEpisode = u.pathname.includes('/episode/');
   if (!isEpisode && !u.pathname.includes('/show/')) throw new UserError('That Spotify link is not a podcast show or episode.');
@@ -328,23 +350,93 @@ async function resolveSpotify(u) {
 
   if (!ogTitle) throw new UserError("Couldn't read that Spotify page. Try the Apple Podcasts or RSS link for the same podcast.");
 
-  if (showName) {
-    const shows = await itunesSearch(showName, 'podcast');
-    const show = shows.find((s) => normTitle(s.collectionName) === normTitle(showName)) || shows[0];
-    if (show?.feedUrl) {
-      const res = await resolveFeed(show.feedUrl, isEpisode ? ogTitle : null);
-      if (!isEpisode || res.kind === 'audio') return res;
-    }
-  }
-  if (isEpisode) {
-    const eps = (await itunesSearch(`${showName} ${ogTitle}`.trim(), 'podcastEpisode')).filter((e) => e.episodeUrl);
-    const hit = bestTitleMatch(eps.map((e) => ({ title: e.trackName, url: e.episodeUrl })), ogTitle);
-    if (hit) return { kind: 'audio', ...hit };
-  }
+  const found = await findElsewhere(showName, isEpisode ? ogTitle : null);
+  if (found) return found;
   throw new UserError(
     `Couldn't find "${ogTitle}" outside Spotify. It may be a Spotify exclusive, which can't be transcribed. ` +
     `If it's also on Apple Podcasts or has an RSS feed, paste that link instead.`
   );
+}
+
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+async function pocketCastsPodcast(podcastId) {
+  for (const base of ['https://podcast-api.pocketcasts.com/podcast/full/', 'https://cache.pocketcasts.com/mobile/podcast/full/']) {
+    try {
+      const data = await (await smartFetch(base + podcastId)).json();
+      const podcast = data?.podcast || data;
+      if (podcast?.episodes?.length) return podcast;
+    } catch (err) {
+      if (err.name === 'AbortError') throw err;
+    }
+  }
+  return null;
+}
+
+// Handles pca.st/episode/<id>, pca.st/podcast/<id>, pca.st/<short>, pocketcasts.com and play.pocketcasts.com links.
+async function resolvePocketCasts(u) {
+  const ids = (u.pathname.match(UUID_RE) || []).map((id) => id.toLowerCase());
+  let podcastId = null;
+  let episodeId = null;
+  if (u.pathname.includes('/episode/')) episodeId = ids.at(-1);
+  else if (ids.length >= 2) [podcastId, episodeId] = [ids[0], ids.at(-1)];
+  else if (ids.length === 1) podcastId = ids[0];
+
+  progress('Looking up the episode', null, 'Pocket Casts');
+  let html = '';
+  try {
+    html = (await fetchText(u.href)).text;
+  } catch (err) {
+    if (err.name === 'AbortError') throw err;
+  }
+
+  // 1. The share page often embeds the audio URL directly.
+  const found = html ? findAudioInHtml(html, u.href) : null;
+  if (found?.kind === 'audio') return { ...found, title: cleanPocketCastsTitle(found.title) };
+
+  // 2. Pocket Casts' public podcast API lists every episode with its audio URL.
+  const candidates = podcastId
+    ? [podcastId]
+    : [...new Set((html.match(UUID_RE) || []).map((id) => id.toLowerCase()))].filter((id) => id !== episodeId).slice(0, 4);
+  for (const id of candidates) {
+    const podcast = await pocketCastsPodcast(id);
+    if (!podcast) continue;
+    const eps = podcast.episodes.filter((e) => e.url);
+    if (episodeId) {
+      const ep = eps.find((e) => e.uuid?.toLowerCase() === episodeId);
+      if (ep) return { kind: 'audio', url: ep.url, title: ep.title };
+      continue;
+    }
+    return {
+      kind: 'list',
+      title: podcast.title || 'Episodes',
+      episodes: eps.map((e) => ({ title: e.title, url: e.url, date: e.published, duration: e.duration ? String(e.duration) : '' })),
+    };
+  }
+
+  // 3. Match by title through Apple's directory and the show's RSS feed.
+  if (found?.kind === 'feed') return resolveFeed(found.url, episodeId ? cleanPocketCastsTitle(found.title) : null);
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const title = cleanPocketCastsTitle(
+    doc.querySelector('meta[property="og:title"]')?.content || doc.querySelector('meta[name="twitter:title"]')?.content || doc.title || ''
+  );
+  if (title) {
+    const parts = title.split(/\s+[-–|•]\s+/).filter(Boolean);
+    const guesses = parts.length >= 2
+      ? [[parts.at(-1), parts.slice(0, -1).join(' - ')], [parts[0], parts.slice(1).join(' - ')]]
+      : [[episodeId ? '' : title, episodeId ? title : null]];
+    for (const [show, episode] of guesses) {
+      const hit = await findElsewhere(show, episodeId ? episode : null);
+      if (hit) return hit;
+    }
+  }
+  throw new UserError(
+    "Couldn't get the audio for that Pocket Casts link. Try the episode's Apple Podcasts link or the podcast's RSS feed instead."
+  );
+}
+
+function cleanPocketCastsTitle(t) {
+  return (t || '').replace(/\s*[-–|•]\s*Pocket Casts\s*$/i, '').replace(/^Pocket Casts\s*[-–|•:]\s*/i, '').trim();
 }
 
 async function resolveLink(raw) {
@@ -354,6 +446,7 @@ async function resolveLink(raw) {
 
   if (host === 'podcasts.apple.com' || host === 'itunes.apple.com') return resolveApple(u);
   if (host === 'open.spotify.com') return resolveSpotify(u);
+  if (host === 'pca.st' || host.endsWith('pocketcasts.com')) return resolvePocketCasts(u);
   if (AUDIO_EXT.test(u.pathname)) return { kind: 'audio', url: u.href, title: decodeURIComponent(u.pathname.split('/').pop()) };
 
   progress('Reading link', null, u.host);

@@ -7,6 +7,7 @@ Everything runs in your browser using OpenAI's Whisper through [Transformers.js]
 ## Supported links
 
 - **Apple Podcasts**: episode links (`...?i=1000...`) go straight to that episode, show links list the episodes
+- **Pocket Casts**: `pca.st/episode/...`, `pca.st/podcast/...` and `pocketcasts.com` links
 - **Spotify**: finds the same episode in the podcast's public feed (Spotify exclusives can't be transcribed)
 - **RSS feeds**: pick an episode from the list
 - **Episode web pages**: finds the audio on the page, or its RSS feed
@@ -27,9 +28,7 @@ The model downloads once and is cached by the browser. With WebGPU (recent Chrom
 
 It's plain static files, no build step.
 
-1. Merge to `main`
-2. Repo **Settings > Pages > Build and deployment**: Source "Deploy from a branch", branch `main`, folder `/ (root)`
-3. Open `https://<user>.github.io/transcriber/`
+The workflow in `.github/workflows/pages.yml` deploys on every push to `main`. In **Settings > Pages**, set Source to "GitHub Actions". Then open `https://<user>.github.io/transcriber/`
 
 You can prefill a link with `?url=<podcast link>`.
 
