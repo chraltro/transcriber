@@ -5,6 +5,7 @@ import { chromium, webkit, firefox, devices } from 'playwright';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { execSync } from 'node:child_process';
+import { createServer } from 'node:http';
 
 // Peak resident memory of Chromium's renderer processes (the tab), sampled once a second.
 // A tab that runs out of memory gets killed, and mobile browsers then silently reload it.
@@ -21,6 +22,18 @@ function rendererRssMB() {
 const ROOT = new URL('..', import.meta.url).pathname;
 const ORIGIN = 'https://transcriber.test';
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
+
+// Firefox can't start a module worker from a Playwright-routed origin (it fails before the
+// script runs, while the same files work from a real server), so Firefox gets a real one.
+const server = createServer(async (req, res) => {
+  const path = decodeURIComponent(new URL(req.url, 'http://x').pathname).replace(/^\/+/, '') || 'index.html';
+  try {
+    const body = await readFile(join(ROOT, path));
+    res.writeHead(200, { 'content-type': TYPES[extname(path)] || 'application/octet-stream' });
+    res.end(body);
+  } catch { res.writeHead(404); res.end(); }
+}).listen(8765);
+const LOCAL = 'http://localhost:8765';
 
 // Latest episode of a show as an Apple Podcasts link, looked up at test time so it never goes stale.
 async function appleEpisodeLink(term, country) {
@@ -87,7 +100,8 @@ for (const c of CASES) {
   memPattern = { webkit: 'WPEWebProcess|WebKitWebProcess', firefox: 'firefox.*-contentproc', chromium: '--type=renderer' }[engine];
   const browser = await launch(engine, c.gpu);
   const ctx = await browser.newContext(engine === 'webkit' ? { ...devices['iPhone 15'], serviceWorkers: 'block' } : { serviceWorkers: 'block' });
-  await ctx.route(`${ORIGIN}/**`, async (route) => {
+  const base = engine === 'firefox' ? LOCAL : ORIGIN;
+  if (base === ORIGIN) await ctx.route(`${ORIGIN}/**`, async (route) => {
     let path = new URL(route.request().url()).pathname.replace(/^\/+/, '') || 'index.html';
     try {
       route.fulfill({ body: await readFile(join(ROOT, path)), contentType: TYPES[extname(path)] || 'application/octet-stream' });
@@ -101,10 +115,10 @@ for (const c of CASES) {
   page.on('requestfailed', (r) => console.log(`  [requestfailed] ${r.url().slice(0, 150)} ${r.failure()?.errorText}`));
   page.on('response', (r) => {
     const u = r.url();
-    if (!u.startsWith(ORIGIN) && !/huggingface|jsdelivr|hf\.co|xethub/.test(u)) console.log(`  [${r.status()}] ${u.slice(0, 150)}`);
+    if (!u.startsWith(base) && !/huggingface|jsdelivr|hf\.co|xethub/.test(u)) console.log(`  [${r.status()}] ${u.slice(0, 150)}`);
   });
 
-  await page.goto(`${ORIGIN}/index.html`);
+  await page.goto(`${base}/index.html`);
   // The page settles on GPU or CPU before the model list is final.
   await page.waitForSelector('input[name=model]');
   await page.waitForTimeout(500);
@@ -204,4 +218,5 @@ for (const c of CASES) {
 }
 
 for (const b of Object.values(browsers)) await b.close();
+server.close();
 process.exit(failures ? 1 : 0);
