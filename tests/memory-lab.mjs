@@ -11,8 +11,8 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const ORIGIN = 'https://transcriber.test';
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
 const URL_ = process.env.LAB_URL || 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b';
-const SEGMENTS = Number(process.env.LAB_SEGMENTS || 12);
-const RUN_MS = 6 * 60 * 1000;
+const SEGMENTS = Number(process.env.LAB_SEGMENTS || 4);
+const RUN_MS = 4 * 60 * 1000;
 
 function memMB(pattern) {
   try {
@@ -36,14 +36,21 @@ function traceApp(src) {
 
 const FAKE_PIPELINE = "const env = {}; const pipeline = async () => async (audio) => { await new Promise((r) => setTimeout(r, 200)); return { text: 'seg ' + audio.length }; };";
 
-const RUNS = [
-  { engine: 'webkit', model: 'fake' },
-  { engine: 'webkit', model: 'tiny' },
-  { engine: 'chromium', model: 'tiny' },
-];
+// Worker variants: ONNX Runtime settings to try in WebKit.
+const DIAG = "console.log('[diag] isolated=' + self.crossOriginIsolated + ' SAB=' + (typeof SharedArrayBuffer) + ' wasmPaths=' + JSON.stringify(env.backends?.onnx?.wasm?.wasmPaths) + ' threads=' + env.backends?.onnx?.wasm?.numThreads);";
+const VARIANTS = {
+  default: (w) => w,
+  threads1: (w) => w.replace('env.allowLocalModels = false;', 'env.allowLocalModels = false;\nenv.backends.onnx.wasm.numThreads = 1;'),
+  noarena: (w) => w.replaceAll('progress_callback,\n', 'progress_callback,\n      session_options: { enableCpuMemArena: false, enableMemPattern: false },\n'),
+  noopt: (w) => w.replaceAll('progress_callback,\n', "progress_callback,\n      session_options: { graphOptimizationLevel: 'basic', enableCpuMemArena: false, enableMemPattern: false },\n"),
+  fp32: (w) => w.replace("if (device !== 'webgpu') return 'q8';", "if (device !== 'webgpu') return 'fp32';"),
+};
+
+const RUNS = (process.env.LAB_RUNS || 'webkit:default,webkit:threads1,webkit:noarena,webkit:noopt,webkit:fp32')
+  .split(',').map((r) => { const [engine, variant] = r.split(':'); return { engine, model: 'tiny', variant }; });
 
 for (const run of RUNS) {
-  console.log(`\n=== ${run.engine} / ${run.model}`);
+  console.log(`\n=== ${run.engine} / ${run.model} / ${run.variant}`);
   const isWebkit = run.engine === 'webkit';
   const browser = await (isWebkit ? webkit : chromium).launch();
   const ctx = await browser.newContext(isWebkit ? { ...devices['iPhone 15'], serviceWorkers: 'block' } : { serviceWorkers: 'block' });
@@ -52,7 +59,10 @@ for (const run of RUNS) {
     try {
       let body = (await readFile(join(ROOT, path))).toString();
       if (path === 'app.js') body = traceApp(body);
-      if (path === 'worker.js' && run.model === 'fake') body = body.replace(/^import \{ pipeline, env \} from .*$/m, FAKE_PIPELINE);
+      if (path === 'worker.js') {
+        if (run.model === 'fake') body = body.replace(/^import \{ pipeline, env \} from .*$/m, FAKE_PIPELINE);
+        else body = VARIANTS[run.variant](body).replace('env.allowLocalModels = false;', 'env.allowLocalModels = false;\n' + DIAG);
+      }
       route.fulfill({ body, contentType: TYPES[extname(path)] || 'application/octet-stream' });
     } catch { route.fulfill({ status: 404, body: '' }); }
   });
@@ -99,11 +109,12 @@ for (const run of RUNS) {
     if (s.probeError) { console.log(`  ${stamp()} probe error ${s.probeError.slice(0, 120)}`); break; }
     const line = `${s.stage} | ${s.detail.slice(0, 50)} | segs ${s.segs}`;
     if (line !== lastLine) { console.log(`  ${stamp()} ${line} | ${mem} MB`); lastLine = line; }
-    if ([1, 5, 10, 15, 20].includes(s.segs) && !marks.some((m) => m.startsWith(`${s.segs}:`))) marks.push(`${s.segs}:${mem}`);
+    if (/Transcribing/.test(s.stage) && !marks.some((m) => m.startsWith('ready:'))) marks.push(`ready:${mem}`);
+    if ([1, 2, 3, 4, 5, 10, 15, 20].includes(s.segs) && !marks.some((m) => m.startsWith(`${s.segs}:`))) marks.push(`${s.segs}:${mem}`);
     if (s.err) { console.log(`  ERROR: ${s.err.slice(0, 200)}`); break; }
     if (s.segs >= SEGMENTS) break;
     await new Promise((r) => setTimeout(r, 1000));
   }
-  console.log(`  RESULT ${run.engine}/${run.model}: peak ${peak} MB, memory at segment n -> ${marks.join('  ') || 'none'}${crashed ? ' (crashed)' : ''}${hung ? ' (main thread hung)' : ''}`);
+  console.log(`  RESULT ${run.engine}/${run.model}/${run.variant}: peak ${peak} MB, memory at segment n -> ${marks.join('  ') || 'none'}${crashed ? ' (crashed)' : ''}${hung ? ' (main thread hung)' : ''}`);
   await browser.close().catch(() => {});
 }
