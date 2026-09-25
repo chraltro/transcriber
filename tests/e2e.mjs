@@ -26,7 +26,7 @@ const CASES = [
   { name: 'Pocket Casts short link', url: 'https://pca.st/okm7xj7g', lang: 'english', resolveOnly: true, title: 'Xi’s Just Not That Into You' },
   { name: 'Apple, Norwegian (NRK)', url: nrk.url, lang: 'norwegian', segments: 1, title: nrk.title },
   { name: 'Apple, Danish (Omny)', url: omny.url, lang: 'danish', segments: 1, title: omny.title },
-  { name: 'Spotify show', url: 'https://open.spotify.com/show/3IM0lmZxpFAY7CwMuv9H4g', lang: 'english', expectList: true },
+  { name: 'Spotify episode', url: 'https://open.spotify.com/episode/2ebY3WNejLNbK47emgjd1E', lang: 'english', resolveOnly: true, titleIncludes: 'Alcohol' },
   { name: 'RSS feed', url: 'https://feeds.megaphone.fm/hubermanlab', lang: 'english', expectList: true },
   ...(process.env.EXTRA_CASES ? JSON.parse(process.env.EXTRA_CASES) : []),
 ];
@@ -79,7 +79,8 @@ for (const c of CASES) {
     if (s.error) { result = `error: ${s.error}`; break; }
     if (s.episodes) { result = `episode list (${s.episodes})`; break; }
     if (c.resolveOnly && s.stage === 'Downloading episode') {
-      result = s.title === c.title ? 'ok' : `wrong episode: "${s.title}"`;
+      const right = c.titleIncludes ? s.title.includes(c.titleIncludes) : s.title === c.title;
+      result = right ? 'ok' : `wrong episode: "${s.title}"`;
       console.log(`  title: ${s.title}`);
       break;
     }
