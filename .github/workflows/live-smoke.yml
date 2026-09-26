@@ -1,0 +1,22 @@
+name: Live site smoke test
+on:
+  workflow_run:
+    workflows: ['Deploy to GitHub Pages']
+    types: [completed]
+  push:
+    branches: ['claude/**']
+    paths: ['tests/live-smoke.mjs', '.github/workflows/live-smoke.yml']
+  workflow_dispatch:
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: |
+          npm i --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - run: node tests/live-smoke.mjs
