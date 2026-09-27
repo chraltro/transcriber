@@ -5,7 +5,7 @@ const SITE = process.env.SITE || 'https://chraltro.github.io/transcriber/';
 let failures = 0;
 const check = (ok, msg) => { console.log(`${ok ? 'PASS' : 'FAIL'} ${msg}`); if (!ok) failures++; };
 
-for (const f of ['', 'app.js', 'worker.js', 'coi-sw.js', 'style.css', 'lib/models.js', 'lib/stream.js', 'lib/mp3.js', 'lib/wav.js', 'lib/links.js', 'lib/text.js', 'lib/segment.js', 'lib/subtitles.js']) {
+for (const f of ['', 'app.js', 'worker.js', 'coi-sw.js', 'style.css', 'ui/waveform.js', 'ui/library.js', 'fonts/geist.woff2', 'fonts/newsreader.woff2', 'lib/paragraphs.js', 'lib/id3.js', 'lib/levels.js', 'lib/models.js', 'lib/stream.js', 'lib/mp3.js', 'lib/wav.js', 'lib/links.js', 'lib/text.js', 'lib/segment.js', 'lib/subtitles.js']) {
   const r = await fetch(SITE + f);
   check(r.ok, `${f || 'index.html'} ${r.status} ${r.headers.get('content-type')}`);
 }
@@ -31,7 +31,7 @@ for (const c of CASES) {
   for (let i = 0; i < 150; i++) {
     const s = await page.evaluate(() => ({
       err: document.querySelector('#error-card').classList.contains('hidden') ? '' : document.querySelector('#error').textContent,
-      segs: [...document.querySelectorAll('#transcript p:not(.working)')].map((p) => p.textContent),
+      segs: [...document.querySelectorAll('#transcript .seg')].map((x) => x.textContent),
       title: document.querySelector('#episode-title').textContent,
       detail: document.querySelector('#detail').textContent,
     }));

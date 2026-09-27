@@ -97,7 +97,7 @@ for (const run of RUNS) {
         stage: document.querySelector('#stage').textContent,
         detail: document.querySelector('#detail').textContent,
         err: document.querySelector('#error-card').classList.contains('hidden') ? '' : document.querySelector('#error').textContent,
-        segs: document.querySelectorAll('#transcript p:not(.working)').length,
+        segs: document.querySelectorAll('#transcript .seg').length,
       })).catch((e) => ({ probeError: e.message })),
       new Promise((r) => setTimeout(() => r(null), 5000)),
     ]);

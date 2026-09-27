@@ -21,7 +21,7 @@ function rendererRssMB() {
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const ORIGIN = 'https://transcriber.test';
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.png': 'image/png' };
 
 // Firefox can't start a module worker from a Playwright-routed origin (it fails before the
 // script runs, while the same files work from a real server), so Firefox gets a real one.
@@ -149,7 +149,8 @@ for (const c of CASES) {
       detail: document.querySelector('#detail').textContent,
       error: document.querySelector('#error-card').classList.contains('hidden') ? '' : document.querySelector('#error').textContent,
       episodes: document.querySelector('#episodes-card').classList.contains('hidden') ? 0 : document.querySelectorAll('#episodes li').length,
-      segments: [...document.querySelectorAll('#transcript p:not(.working)')].map((p) => p.textContent),
+      // One span per Whisper window; paragraphs can join several.
+      segments: [...document.querySelectorAll('#transcript .seg')].map((s) => ({ start: Number(s.dataset.start), text: s.textContent })),
       title: document.querySelector('#episode-title').textContent,
     }));
     const line = `${s.stage} | ${s.detail}`;
@@ -181,7 +182,7 @@ for (const c of CASES) {
     }
     if (s.segments.length >= (c.segments || 1)) {
       if (reloaded) {
-        const starts = s.segments.map((t) => { const m = t.match(/\[(\d+):(\d+)\]/); return +m[1] * 60 + +m[2]; });
+        const starts = s.segments.map((x) => Math.round(x.start));
         const sorted = starts.every((v, i) => !i || v > starts[i - 1]);
         if (!sorted) { result = `segments out of order or repeated after resume: ${starts.join(',')}`; break; }
         if (audioFetchesAfterReload) { result = `episode downloaded again after reload (${audioFetchesAfterReload}x)`; break; }
@@ -193,7 +194,7 @@ for (const c of CASES) {
         if (grew > 200) { result = `memory grew ${Math.round(grew)} MB during the run`; break; }
       }
       if (c.title && s.title !== c.title) { result = `wrong episode: "${s.title}"`; break; }
-      const text = s.segments.join(' ');
+      const text = s.segments.map((x) => x.text).join(' ');
       const score = languageScore(text, c.lang);
       console.log(`  ${c.lang} common-word share: ${(score * 100).toFixed(0)}% of ${text.split(/\s+/).length} words`);
       if (score < 0.12 && !c.skipLanguageCheck) { result = `transcript does not look ${c.lang} (${(score * 100).toFixed(0)}% common words)`; break; }
@@ -205,7 +206,7 @@ for (const c of CASES) {
       }
       result = 'ok';
       console.log(`  title: ${s.title}`);
-      s.segments.slice(0, 2).forEach((t) => console.log(`  > ${t.slice(0, 80)}`));
+      s.segments.slice(0, 2).forEach((x) => console.log(`  > [${Math.round(x.start)}s] ${x.text.slice(0, 80)}`));
       break;
     }
     await page.waitForTimeout(2000);

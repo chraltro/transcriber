@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MODELS, ALL_MODEL_IDS, modelFor, dtypeFor, modelFiles } from '../../lib/models.js';
+import { MODELS, ALL_MODEL_IDS, modelFor, dtypeFor, modelFiles, recommendedModel } from '../../lib/models.js';
 
 test('CPU uses 8-bit weights; GPU picks by fp16 support', () => {
   assert.equal(dtypeFor('onnx-community/whisper-base', 'wasm', false), 'q8');
@@ -32,4 +32,17 @@ test('every model file the app can request exists on Hugging Face', { skip: !pro
       for (const f of modelFiles(m.id, device, f16)) assert.ok(files.has(f), `${m.id} ${device} f16=${f16}: ${f}`);
     for (const f of ['config.json', 'generation_config.json', 'preprocessor_config.json', 'tokenizer.json']) assert.ok(files.has(f), `${m.id}: ${f}`);
   }
+});
+
+test('ratings per language and the recommended size per device', () => {
+  assert.equal(modelFor('tiny', 'norwegian').accuracy, 3);
+  assert.equal(modelFor('tiny', 'danish').accuracy, 1);
+  assert.equal(modelFor('turbo', 'danish').accuracy, 5);
+  for (const key of Object.keys(MODELS)) {
+    const m = modelFor(key, 'english');
+    assert.ok(m.accuracy >= 1 && m.accuracy <= 5 && m.speed.cpu >= 1 && m.speed.gpu <= 5, key);
+  }
+  assert.equal(recommendedModel({ mobile: true, gpu: true }), 'base');
+  assert.equal(recommendedModel({ mobile: false, gpu: true }), 'turbo');
+  assert.equal(recommendedModel({ mobile: false, gpu: false }), 'small');
 });

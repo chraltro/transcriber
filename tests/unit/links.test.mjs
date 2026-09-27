@@ -32,8 +32,8 @@ test('plain URLs and garbage are passed through', () => {
 
 const RSS = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
-<channel><title>Test Show</title>
-<item><title><![CDATA[Episode 2: Ærlig talt & <mer>]]></title><pubDate>Tue, 02 Sep 2025 10:00:00 GMT</pubDate><itunes:duration>01:02:03</itunes:duration><enclosure url="https://a.example/2.mp3" type="audio/mpeg" length="1"/></item>
+<channel><title>Test Show</title><itunes:image href="https://img.example/show.jpg"/>
+<item><title><![CDATA[Episode 2: Ærlig talt & <mer>]]></title><itunes:image href="https://img.example/ep2.jpg"/><pubDate>Tue, 02 Sep 2025 10:00:00 GMT</pubDate><itunes:duration>01:02:03</itunes:duration><enclosure url="https://a.example/2.mp3" type="audio/mpeg" length="1"/></item>
 <item><title>No audio</title></item>
 <item><title>Episode 1</title><itunes:duration>3600</itunes:duration><enclosure url="https://a.example/1.mp3" type="audio/mpeg"/></item>
 </channel></rss>`;
@@ -64,4 +64,24 @@ test('pages: one embedded audio URL is used, several are not guessed between', (
   const many = findAudioInHtml('<script>["https://cdn.x/1.mp3","https://cdn.x/2.mp3"]</script><link type="application/rss+xml" href="/feed">', 'https://p.example/show');
   assert.deepEqual({ kind: many.kind, url: many.url }, { kind: 'feed', url: 'https://p.example/feed' });
   assert.equal(findAudioInHtml('<p>nothing here</p>', 'https://p'), null);
+});
+
+test('feeds carry show art, and episode art falls back to it', () => {
+  const feed = parseFeed(RSS);
+  assert.equal(feed.image, 'https://img.example/show.jpg');
+  assert.equal(feed.episodes[0].art, 'https://img.example/ep2.jpg');
+  assert.equal(feed.episodes[1].art, 'https://img.example/show.jpg');
+  const plain = parseFeed('<rss><channel><title>T</title><image><url>https://img.example/a.png</url></image><item><title>E</title><enclosure url="https://a.example/e.mp3"/></item></channel></rss>');
+  assert.equal(plain.image, 'https://img.example/a.png');
+});
+
+test('pasted links are normalized: scheme added, surrounding text and punctuation dropped', async () => {
+  const { normalizeLink } = await import('../../lib/links.js');
+  assert.equal(normalizeLink('  https://pca.st/episode/abc  '), 'https://pca.st/episode/abc');
+  assert.equal(normalizeLink('podcasts.apple.com/no/podcast/x/id123?i=4'), 'https://podcasts.apple.com/no/podcast/x/id123?i=4');
+  assert.equal(normalizeLink('Listen to this: https://open.spotify.com/episode/2eb?si=x.'), 'https://open.spotify.com/episode/2eb?si=x');
+  assert.equal(normalizeLink('(https://feeds.example.com/rss)'), 'https://feeds.example.com/rss');
+  assert.equal(normalizeLink('not a link at all'), '');
+  assert.equal(normalizeLink('hello.'), '');
+  assert.equal(normalizeLink(''), '');
 });

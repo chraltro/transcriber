@@ -3,7 +3,7 @@ name: End-to-end test
 on:
   push:
     branches: ['claude/**']
-    paths: ['app.js', 'worker.js', 'index.html', 'style.css', 'lib/**', 'tests/**', '.github/workflows/e2e.yml']
+    paths: ['app.js', 'worker.js', 'index.html', 'style.css', 'lib/**', 'ui/**', 'fonts/**', 'tests/**', '.github/workflows/e2e.yml']
   workflow_dispatch:
     inputs:
       only:

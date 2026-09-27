@@ -63,7 +63,7 @@ for (let i = 0; i < 150; i++) {
   const s = await page.evaluate(() => ({
     stage: document.querySelector('#stage').textContent + ' | ' + document.querySelector('#detail').textContent,
     err: document.querySelector('#error-card').classList.contains('hidden') ? '' : document.querySelector('#error').textContent,
-    segs: document.querySelectorAll('#transcript p:not(.working)').length,
+    segs: document.querySelectorAll('#transcript .seg').length,
   }));
   if (s.stage !== last) { console.log(`  ${i * 2}s ${s.stage}`); last = s.stage; }
   if (s.err) { console.log('ERROR: ' + s.err); break; }

@@ -2,116 +2,280 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Podcast Transcriber</title>
-  <meta name="description" content="Transcribe any podcast episode in English, Norwegian or Danish, right in your browser. No API key, no uploads.">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Transcriber · Podcast transcripts, on your device</title>
+  <meta name="description" content="Paste a podcast link and get the full transcript in English, Norwegian or Danish. Whisper runs right in your browser: no account, no API key, nothing uploaded.">
+  <meta name="theme-color" content="#f4efe6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0c0b0a" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23ff7a45'/%3E%3Cstop offset='1' stop-color='%23e8341c'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cg stroke='%23fff' stroke-width='2.4' stroke-linecap='round' fill='none'%3E%3Cpath d='M8 13v6M12 9v14M16 12v8'/%3E%3Cpath d='M20.5 12h4.5M20.5 16h4.5M20.5 20h3'/%3E%3C/g%3E%3C/svg%3E">
   <!-- Enables multi-threaded WASM on GitHub Pages (which can't set COOP/COEP headers itself). -->
   <script src="coi-sw.js"></script>
+  <link rel="preload" href="fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/newsreader.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main>
-    <header>
-      <h1>Podcast Transcriber</h1>
-      <p class="tagline">Paste a podcast link, get the full transcript. Runs entirely in your browser with Whisper. No API key, no account, nothing uploaded.</p>
-    </header>
+  <svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true">
+    <defs>
+      <linearGradient id="logo-grad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff7a45"/><stop offset="1" stop-color="#e8341c"/></linearGradient>
+    </defs>
+    <symbol id="i-logo" viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="url(#logo-grad)"/><g stroke="#fff" stroke-width="2.4" stroke-linecap="round" fill="none"><path class="logo-bar b1" d="M8 13v6"/><path class="logo-bar b2" d="M12 9v14"/><path class="logo-bar b3" d="M16 12v8"/><path d="M20.5 12h4.5M20.5 16h4.5M20.5 20h3"/></g></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13.5a4.5 4.5 0 0 0 6.4.4l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2"/><path d="M14 10.5a4.5 4.5 0 0 0-6.4-.4l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2"/></symbol>
+    <symbol id="i-paste" viewBox="0 0 24 24"><rect x="8.5" y="3" width="7" height="4" rx="1.2"/><path d="M15.5 5H17a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h1.5"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M8 5.6v12.8a1 1 0 0 0 1.52.85l10.2-6.4a1 1 0 0 0 0-1.7L9.52 4.75A1 1 0 0 0 8 5.6z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect fill="currentColor" stroke="none" x="6" y="5" width="4.2" height="14" rx="1.2"/><rect fill="currentColor" stroke="none" x="13.8" y="5" width="4.2" height="14" rx="1.2"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2.2"/><path d="M5.5 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v.5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 20h14"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 3v12M8 7l4-4 4 4M7 10H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-1"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9.5" rx="2.2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10 3.5V7M14 3.5V7M10 17v3.5M14 17v3.5M3.5 10H7M3.5 14H7M17 10h3.5M17 14h3.5"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3 5.5 13.5H11L10 21l7.5-10.5H12z"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.1"/></symbol>
+    <symbol id="i-resume" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3"/><path d="M4.5 4v4h4"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M10 11v6M14 11v6M6.5 7l.8 12a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9l.8-12M9.5 7V4.5h5V7"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+    <symbol id="i-lines" viewBox="0 0 24 24"><path d="M4 6.5h16M4 12h11M4 17.5h14"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.1 3.6 8.5s-1.2 6.2-3.6 8.5c-2.4-2.3-3.6-5.1-3.6-8.5s1.2-6.2 3.6-8.5z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3.5H7.5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8z"/><path d="M14 3.5V8h4.5M10 16.5v-4.5l4-1v4.5"/><circle cx="9" cy="16.5" r="1.2"/><circle cx="13" cy="15.5" r="1.2"/></symbol>
+  </svg>
 
-    <section class="card" id="input-card">
-      <form id="url-form" autocomplete="off">
+  <div class="backdrop" aria-hidden="true">
+    <div class="glow glow-a"></div>
+    <div class="glow glow-b"></div>
+    <div class="grain"></div>
+  </div>
+
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="Transcriber, start over">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="url(#logo-grad)"/><g stroke="#fff" stroke-width="2.4" stroke-linecap="round" fill="none"><path class="bar b1" d="M8 13v6"/><path class="bar b2" d="M12 9v14"/><path class="bar b3" d="M16 12v8"/><path d="M20.5 12h4.5M20.5 16h4.5M20.5 20h3"/></g></svg>
+      <span class="wordmark">Transcriber</span>
+    </a>
+    <div class="topbar-right">
+      <span class="chip" title="Audio and transcripts never leave this device"><svg class="icon"><use href="#i-lock"/></svg><span>On-device</span></span>
+      <span class="chip" id="device-chip" title="Where Whisper runs in this browser"><svg class="icon"><use href="#i-cpu"/></svg><span>CPU</span></span>
+    </div>
+  </header>
+
+  <div class="mini" id="mini" aria-hidden="true">
+    <div class="mini-art art" id="mini-art"></div>
+    <div class="mini-text">
+      <span class="mini-title" id="mini-title"></span>
+      <span class="mini-status" id="mini-status"></span>
+    </div>
+    <button type="button" class="icon-btn mini-play hidden" id="mini-play" aria-label="Play"><svg class="icon"><use href="#i-play"/></svg></button>
+    <div class="mini-bar"><span id="mini-bar"></span></div>
+  </div>
+
+  <main id="main">
+    <section class="hero" id="hero">
+      <div class="hero-wave" id="hero-wave" aria-hidden="true"></div>
+      <p class="eyebrow"><span class="dot live"></span> English · Norsk · Dansk</p>
+      <h1>Every word of every episode, <em>right in your browser.</em></h1>
+      <p class="lede">Paste a podcast link and get the full transcript. Whisper runs on this device: no account, no API key, nothing uploaded.</p>
+
+      <form id="url-form" class="command" autocomplete="off" novalidate>
         <label for="url" class="sr-only">Podcast link</label>
-        <div class="url-row">
-          <input id="url" type="url" inputmode="url" required
-                 placeholder="Apple Podcasts, Pocket Casts, Spotify, RSS feed or .mp3 link">
-          <button type="submit" id="go" class="primary">Transcribe</button>
+        <div class="command-field">
+          <svg class="icon lead"><use href="#i-link"/></svg>
+          <input id="url" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go"
+                 placeholder="Paste a podcast or episode link">
+          <button type="button" class="paste" id="paste" aria-label="Paste link from clipboard"><svg class="icon"><use href="#i-paste"/></svg><span>Paste</span></button>
         </div>
+        <button type="submit" id="go" class="btn primary go"><span>Transcribe</span><svg class="icon"><use href="#i-arrow"/></svg></button>
       </form>
 
-      <div class="options">
-        <fieldset class="lang">
-          <legend>Language</legend>
-          <label><input type="radio" name="lang" value="english" checked><span>English</span></label>
-          <label><input type="radio" name="lang" value="norwegian"><span>Norsk</span></label>
-          <label><input type="radio" name="lang" value="danish"><span>Dansk</span></label>
-        </fieldset>
-
-        <fieldset class="models" id="models">
-          <legend>Model size</legend>
-        </fieldset>
+      <div class="sources">
+        <span class="sources-label">Works with</span>
+        <span class="source">Apple Podcasts</span>
+        <span class="source">Pocket Casts</span>
+        <span class="source">Spotify</span>
+        <span class="source">RSS feeds</span>
+        <span class="source">MP3 links</span>
+        <label class="source file-pick" title="Or drop an audio file anywhere on the page">
+          <svg class="icon"><use href="#i-upload"/></svg><span>Choose a file</span>
+          <input type="file" id="file" accept="audio/*,video/*,.mp3,.m4a,.aac,.ogg,.opus,.wav,.flac,.mp4">
+        </label>
       </div>
 
-      <p class="hint" id="device-hint"></p>
-
-      <details class="advanced">
-        <summary>More options</summary>
-        <div class="adv-body">
-          <label class="file-pick">
-            <span>Or transcribe an audio file from your device</span>
-            <input type="file" id="file" accept="audio/*,video/*,.mp3,.m4a,.aac,.ogg,.opus,.wav,.flac,.mp4">
-          </label>
-          <label>
-            <span>Custom CORS proxy (optional). Use <code>{url}</code> as placeholder, or a prefix the link gets appended to.</span>
-            <input type="text" id="proxy" placeholder="https://my-proxy.example.workers.dev/?url={url}">
-          </label>
+      <div class="settings" id="settings">
+        <button type="button" class="settings-toggle" id="settings-toggle" aria-expanded="false" aria-controls="settings-body">
+          <svg class="icon"><use href="#i-sliders"/></svg><span id="settings-summary">Settings</span><svg class="icon chev"><use href="#i-down"/></svg>
+        </button>
+        <div class="settings-body" id="settings-body">
+          <div class="setting">
+            <div class="setting-head"><h2 class="setting-title">Language</h2></div>
+            <fieldset class="segmented" id="langs">
+              <legend class="sr-only">Language</legend>
+              <label><input type="radio" name="lang" value="english" checked><span>English</span></label>
+              <label><input type="radio" name="lang" value="norwegian"><span>Norsk</span></label>
+              <label><input type="radio" name="lang" value="danish"><span>Dansk</span></label>
+              <i class="thumb" aria-hidden="true"></i>
+            </fieldset>
+          </div>
+          <div class="setting">
+            <div class="setting-head"><h2 class="setting-title">Model</h2><span class="setting-note" id="model-note"></span></div>
+            <fieldset class="models" id="models">
+              <legend class="sr-only">Model size</legend>
+            </fieldset>
+            <p class="hint" id="device-hint"></p>
+          </div>
+          <details class="advanced">
+            <summary>Advanced</summary>
+            <label class="field">
+              <span>Your own CORS proxy, for hosts that block browsers. Use <code>{url}</code> as the placeholder, or a prefix the link is appended to.</span>
+              <input type="text" id="proxy" spellcheck="false" placeholder="https://my-proxy.example.workers.dev/?url={url}">
+            </label>
+          </details>
         </div>
-      </details>
-    </section>
-
-    <section class="card hidden" id="resume-card">
-      <div class="card-head">
-        <h2>Unfinished transcript</h2>
-      </div>
-      <p class="resume-text"><span id="resume-text"></span> <span id="resume-why">The page reloaded before it finished, which usually means the browser ran out of memory. A smaller model uses less.</span></p>
-      <div class="actions">
-        <button type="button" class="primary" id="resume">Resume</button>
-        <button type="button" class="ghost" id="discard">Discard</button>
       </div>
     </section>
 
-    <section class="card hidden" id="episodes-card">
-      <div class="card-head">
-        <h2 id="feed-title">Pick an episode</h2>
-        <button type="button" class="ghost" id="episodes-close">Close</button>
+    <section class="card resume hidden" id="resume-card" aria-labelledby="resume-heading">
+      <div class="art resume-art" id="resume-art"></div>
+      <div class="resume-body">
+        <p class="eyebrow"><svg class="icon"><use href="#i-resume"/></svg> Unfinished transcript</p>
+        <h2 id="resume-heading">Pick up where you left off</h2>
+        <p class="resume-text"><span id="resume-text"></span> <span id="resume-why">The page reloaded before it finished, which usually means the browser ran out of memory. A smaller model uses less.</span></p>
+        <div class="meter"><span id="resume-meter"></span></div>
+        <div class="actions">
+          <button type="button" class="btn primary" id="resume"><svg class="icon"><use href="#i-play"/></svg><span>Resume</span></button>
+          <button type="button" class="btn ghost" id="discard">Discard</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card error hidden" id="error-card" role="alert" tabindex="-1">
+      <div class="error-icon"><svg class="icon"><use href="#i-alert"/></svg></div>
+      <div class="error-body">
+        <h2 id="error-title">That didn't work</h2>
+        <p id="error"></p>
+        <div class="actions">
+          <button type="button" class="btn ghost small" id="error-retry"><svg class="icon"><use href="#i-resume"/></svg><span>Try again</span></button>
+          <label class="btn ghost small file-pick"><svg class="icon"><use href="#i-upload"/></svg><span>Use a file instead</span><input type="file" id="error-file" accept="audio/*,video/*,.mp3,.m4a,.aac,.ogg,.opus,.wav,.flac,.mp4"></label>
+        </div>
+      </div>
+      <button type="button" class="icon-btn close" id="error-close" aria-label="Dismiss"><svg class="icon"><use href="#i-x"/></svg></button>
+    </section>
+
+    <section class="card sheet hidden" id="episodes-card" aria-labelledby="feed-title">
+      <div class="sheet-head">
+        <div class="art sheet-art" id="feed-art"></div>
+        <div class="sheet-title">
+          <p class="eyebrow" id="feed-count">Episodes</p>
+          <h2 id="feed-title">Pick an episode</h2>
+        </div>
+        <button type="button" class="icon-btn" id="episodes-close" aria-label="Close"><svg class="icon"><use href="#i-x"/></svg></button>
       </div>
       <p class="hint episodes-note hidden" id="episodes-note"></p>
-      <input type="search" id="episode-filter" placeholder="Filter episodes" aria-label="Filter episodes">
-      <ul id="episodes"></ul>
-    </section>
-
-    <section class="card hidden" id="progress-card">
-      <div class="card-head">
-        <h2 id="stage">Working</h2>
-        <button type="button" class="ghost" id="cancel">Cancel</button>
+      <div class="search-field">
+        <svg class="icon"><use href="#i-search"/></svg>
+        <input type="search" id="episode-filter" placeholder="Search episodes" aria-label="Search episodes">
       </div>
-      <div class="bar" role="progressbar" aria-labelledby="stage"><div id="bar-fill"></div></div>
-      <p class="detail" id="detail"></p>
+      <ul class="episode-list" id="episodes"></ul>
     </section>
 
-    <section class="card hidden" id="error-card" role="alert" tabindex="-1">
-      <p id="error"></p>
-    </section>
-
-    <section class="card hidden" id="result-card">
-      <div class="card-head result-head">
-        <h2 id="episode-title">Transcript</h2>
-        <div class="actions">
-          <label class="toggle"><input type="checkbox" id="timestamps"> Timestamps</label>
-          <button type="button" id="download" class="ghost">.txt</button>
-          <button type="button" id="download-srt" class="ghost" title="Subtitles with timestamps">.srt</button>
-          <button type="button" id="download-vtt" class="ghost" title="Web subtitles with timestamps">.vtt</button>
-          <button type="button" id="copy" class="primary">Copy</button>
+    <section class="card session hidden" id="progress-card" aria-labelledby="episode-title">
+      <div class="session-top">
+        <div class="art session-art" id="art"></div>
+        <div class="session-info">
+          <p class="eyebrow" id="session-show"></p>
+          <h2 id="episode-title">Transcript</h2>
+          <ol class="steps" id="steps" aria-label="Progress">
+            <li data-step="find"><i></i><span>Find</span></li>
+            <li data-step="download"><i></i><span>Download</span></li>
+            <li data-step="model"><i></i><span>Model</span></li>
+            <li data-step="transcribe"><i></i><span>Transcribe</span></li>
+          </ol>
+        </div>
+        <button type="button" class="icon-btn session-close hidden" id="session-close" aria-label="Close transcript"><svg class="icon"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="timeline">
+        <button type="button" class="play" id="play" aria-label="Play" disabled><svg class="icon"><use href="#i-play"/></svg></button>
+        <div class="wave" id="wave-wrap" role="progressbar" aria-labelledby="stage" aria-valuemin="0" aria-valuemax="100">
+          <canvas id="wave"></canvas>
+          <span class="wave-tip" id="wave-tip"></span>
         </div>
       </div>
-      <div id="transcript" tabindex="0" aria-label="Transcript"></div>
+      <div class="session-status">
+        <div class="status-text">
+          <h3 id="stage">Working</h3>
+          <p id="detail"></p>
+        </div>
+        <div class="stats" id="stats"></div>
+        <button type="button" class="btn ghost small" id="cancel">Cancel</button>
+      </div>
     </section>
 
-    <div id="announce" class="sr-only" aria-live="polite"></div>
+    <article class="reader hidden" id="result-card" aria-label="Transcript">
+      <div class="toolbar" id="toolbar">
+        <div class="search-field find">
+          <svg class="icon"><use href="#i-search"/></svg>
+          <input type="search" id="search" placeholder="Search transcript" aria-label="Search transcript">
+          <span class="find-count" id="find-count"></span>
+          <button type="button" class="icon-btn tiny" id="find-prev" aria-label="Previous match"><svg class="icon"><use href="#i-up"/></svg></button>
+          <button type="button" class="icon-btn tiny" id="find-next" aria-label="Next match"><svg class="icon"><use href="#i-down"/></svg></button>
+        </div>
+        <label class="switch" title="Show timestamps, and include them when copying or saving">
+          <input type="checkbox" id="timestamps"><svg class="icon ts-icon" aria-hidden="true"><use href="#i-clock"/></svg><span class="track"><span class="knob"></span></span><span class="switch-label">Timestamps</span>
+        </label>
+        <div class="tool-actions">
+          <button type="button" class="btn ghost small" id="copy"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button>
+          <div class="menu" id="export-menu">
+            <button type="button" class="btn ghost small" id="export" aria-haspopup="true" aria-expanded="false"><svg class="icon"><use href="#i-download"/></svg><span>Export</span><svg class="icon chev"><use href="#i-down"/></svg></button>
+            <div class="menu-pop" id="export-pop" role="menu">
+              <button type="button" role="menuitem" id="download"><b>Text</b><span>.txt</span></button>
+              <button type="button" role="menuitem" id="download-srt"><b>Subtitles</b><span>.srt</span></button>
+              <button type="button" role="menuitem" id="download-vtt"><b>Web subtitles</b><span>.vtt</span></button>
+              <button type="button" role="menuitem" id="share" class="hidden"><b>Share…</b><span>Files, Notes</span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="transcript" id="transcript" tabindex="0" aria-label="Transcript" aria-live="off"></div>
+      <div class="tail hidden" id="tail" aria-hidden="true"><span class="tail-bars"><i></i><i></i><i></i><i></i></span><span id="tail-text">Listening</span></div>
+      <div class="reader-foot hidden" id="reader-foot">
+        <button type="button" class="btn ghost" id="new-transcript"><svg class="icon"><use href="#i-plus"/></svg><span>Transcribe another episode</span></button>
+      </div>
+    </article>
 
-    <footer>
-      Speech recognition by OpenAI Whisper via <a href="https://github.com/huggingface/transformers.js">Transformers.js</a>.
-      The model is downloaded once and cached by your browser. Keep this tab open while it works.
-    </footer>
+    <section class="library hidden" id="library" aria-labelledby="library-heading">
+      <div class="library-head">
+        <h2 id="library-heading">Recent transcripts</h2>
+        <span class="hint">Kept in this browser only</span>
+      </div>
+      <ul class="library-list" id="library-list"></ul>
+    </section>
   </main>
+
+  <button type="button" class="pill jump hidden" id="jump-live"><svg class="icon"><use href="#i-down"/></svg><span>Jump to live</span></button>
+
+  <nav class="dock hidden" id="dock" aria-label="Transcript actions">
+    <button type="button" id="dock-play" class="dock-btn hidden"><svg class="icon"><use href="#i-play"/></svg><span>Play</span></button>
+    <button type="button" id="dock-copy" class="dock-btn"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button>
+    <button type="button" id="dock-save" class="dock-btn primary"><svg class="icon"><use href="#i-share"/></svg><span>Save</span></button>
+  </nav>
+
+  <div class="dropzone" id="dropzone" hidden>
+    <div class="dropzone-inner"><svg class="icon"><use href="#i-file"/></svg><p>Drop the audio file to transcribe it</p></div>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div id="announce" class="sr-only" aria-live="polite"></div>
+  <audio id="audio" preload="none"></audio>
+
+  <footer class="footer">
+    <p>Speech recognition by OpenAI Whisper through <a href="https://github.com/huggingface/transformers.js">Transformers.js</a>. Norwegian by <a href="https://huggingface.co/NbAiLab">NB-Whisper</a> from the National Library of Norway.</p>
+    <p>The model downloads once and stays cached. Keep this tab open while it works.</p>
+  </footer>
 
   <script type="module" src="app.js"></script>
 </body>
