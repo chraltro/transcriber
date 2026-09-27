@@ -1,0 +1,21 @@
+name: Memory diagnostic
+on:
+  push:
+    branches: ['claude/**']
+    paths: ['.github/workflows/memory-diag.yml']
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: |
+          npm i --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium webkit
+      - run: node tests/e2e.mjs
+        env:
+          ONLY: '^X '
+          EXTRA_CASES: "[{\"name\": \"X baseline\", \"engine\": \"webkit\", \"model\": \"tiny\", \"url\": \"https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b\", \"lang\": \"english\", \"segments\": 3, \"memoryLimitMB\": 4000, \"title\": \"Xi\\u2019s Just Not That Into You\"}, {\"name\": \"X no backdrop\", \"engine\": \"webkit\", \"model\": \"tiny\", \"url\": \"https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b\", \"lang\": \"english\", \"segments\": 3, \"memoryLimitMB\": 4000, \"title\": \"Xi\\u2019s Just Not That Into You\", \"css\": \".backdrop{display:none!important}\"}, {\"name\": \"X no backdrop-filter\", \"engine\": \"webkit\", \"model\": \"tiny\", \"url\": \"https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b\", \"lang\": \"english\", \"segments\": 3, \"memoryLimitMB\": 4000, \"title\": \"Xi\\u2019s Just Not That Into You\", \"css\": \"*{-webkit-backdrop-filter:none!important;backdrop-filter:none!important}\"}, {\"name\": \"X no animations\", \"engine\": \"webkit\", \"model\": \"tiny\", \"url\": \"https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b\", \"lang\": \"english\", \"segments\": 3, \"memoryLimitMB\": 4000, \"title\": \"Xi\\u2019s Just Not That Into You\", \"css\": \"*,*::before,*::after{animation:none!important;transition:none!important}\"}, {\"name\": \"X no art images\", \"engine\": \"webkit\", \"model\": \"tiny\", \"url\": \"https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b\", \"lang\": \"english\", \"segments\": 3, \"memoryLimitMB\": 4000, \"title\": \"Xi\\u2019s Just Not That Into You\", \"css\": \".art img{display:none!important}\"}, {\"name\": \"X system fonts\", \"engine\": \"webkit\", \"model\": \"tiny\", \"url\": \"https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b\", \"lang\": \"english\", \"segments\": 3, \"memoryLimitMB\": 4000, \"title\": \"Xi\\u2019s Just Not That Into You\", \"css\": \"*{font-family:system-ui,sans-serif!important}\"}, {\"name\": \"X no filters\", \"engine\": \"webkit\", \"model\": \"tiny\", \"url\": \"https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b\", \"lang\": \"english\", \"segments\": 3, \"memoryLimitMB\": 4000, \"title\": \"Xi\\u2019s Just Not That Into You\", \"css\": \"*{filter:none!important}.logo{filter:none!important}\"}, {\"name\": \"X everything off\", \"engine\": \"webkit\", \"model\": \"tiny\", \"url\": \"https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b\", \"lang\": \"english\", \"segments\": 3, \"memoryLimitMB\": 4000, \"title\": \"Xi\\u2019s Just Not That Into You\", \"css\": \".backdrop{display:none!important}*,*::before,*::after{animation:none!important;transition:none!important;-webkit-backdrop-filter:none!important;backdrop-filter:none!important;filter:none!important;font-family:system-ui,sans-serif!important}.art img{display:none!important}\"}]"

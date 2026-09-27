@@ -122,6 +122,8 @@ for (const c of CASES) {
   });
 
   await page.goto(`${base}/index.html${c.query || ''}`);
+  // Diagnostic cases can switch parts of the page's styling off.
+  if (c.css) await page.addStyleTag({ content: c.css });
   // The page settles on GPU or CPU before the model list is final.
   await page.waitForSelector('input[name=model]');
   await page.waitForTimeout(500);
