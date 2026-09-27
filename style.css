@@ -220,12 +220,10 @@ body.busy .logo .b3 { animation-delay: -0.6s; }
 
 .mini {
   position: fixed; z-index: 35; left: 50%; top: calc(var(--topbar) + 8px);
-  width: min(100% - 24px, 760px); height: 54px;
+  width: var(--page); height: 54px;
   display: grid; grid-template-columns: 38px 1fr auto; align-items: center; gap: 12px;
   padding: 0 10px 0 8px;
-  background: color-mix(in srgb, var(--surface-solid) 96%, transparent);
-  -webkit-backdrop-filter: blur(18px) saturate(1.3);
-  backdrop-filter: blur(18px) saturate(1.3);
+  background: var(--surface-solid);
   border: 1px solid var(--line-strong); border-radius: 18px;
   box-shadow: var(--shadow-pop);
   transform: translate(-50%, calc(-100% - var(--topbar) - 20px));
@@ -233,6 +231,14 @@ body.busy .logo .b3 { animation-delay: -0.6s; }
   overflow: hidden;
 }
 body.show-mini { --stick: calc(var(--topbar) + 72px); }
+/* A solid band behind the mini player, so text never shows between the floating bars. */
+body::before {
+  content: ""; position: fixed; z-index: 19; left: 0; right: 0; top: var(--topbar);
+  height: 82px; pointer-events: none;
+  background: linear-gradient(var(--bg) 88%, transparent);
+  opacity: 0; transition: opacity 0.35s;
+}
+body.show-mini::before { opacity: 1; }
 body.show-mini .mini { transform: translate(-50%, 0); }
 .mini .mini-art { --r: 10px; --size: 38px; width: 38px; }
 .mini-text { min-width: 0; display: grid; line-height: 1.25; }
@@ -752,9 +758,10 @@ body.has-session .settings-body { padding-top: 4px; }
 .switch .ts-icon { display: none; width: 17px; height: 17px; }
 .switch .track { width: 34px; height: 20px; border-radius: 999px; background: var(--surface-3); position: relative; transition: background 0.25s; flex: none; }
 .switch .knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface-solid); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); transition: transform 0.3s var(--ease); }
-.switch input:checked + .track { background: var(--accent); }
-.switch input:checked + .track .knob { transform: translateX(14px); }
-.switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch input:checked ~ .track { background: var(--accent); }
+.switch input:checked ~ .track .knob { transform: translateX(14px); }
+.switch input:focus-visible ~ .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch input:checked ~ .ts-icon { color: var(--accent); }
 
 .tool-actions { display: flex; gap: 6px; }
 .menu { position: relative; }

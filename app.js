@@ -98,7 +98,13 @@ function language() {
 
 const LANG_NAMES = { english: 'English', norwegian: 'Norsk', danish: 'Dansk' };
 
-class UserError extends Error {}
+class UserError extends Error {
+  // retry: false for mistakes in what was pasted, where trying again can't help.
+  constructor(message, { retry = true } = {}) {
+    super(message);
+    this.retry = retry;
+  }
+}
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -215,11 +221,11 @@ function progress(stage, fraction, detail = '', stats = null) {
   updateMini();
 }
 
-function showError(msg, title = "That didn't work") {
+function showError(msg, title = "That didn't work", { retry = true } = {}) {
   els.errorTitle.textContent = title;
   els.error.textContent = msg;
   els.errorCard.classList.remove('hidden');
-  els.errorRetry.classList.toggle('hidden', !state.lastAttempt);
+  els.errorRetry.classList.toggle('hidden', !retry || !state.lastAttempt);
 }
 
 function clearError() {
@@ -602,7 +608,7 @@ async function resolvePocketCasts(u) {
 
 async function resolveLink(raw) {
   let u;
-  try { u = new URL(normalizeLink(raw)); } catch { throw new UserError("That doesn't look like a link. Copy the episode's link from your podcast app (Share, then Copy link) and paste it here."); }
+  try { u = new URL(normalizeLink(raw)); } catch { throw new UserError("That doesn't look like a link. Copy the episode's link from your podcast app (Share, then Copy link) and paste it here.", { retry: false }); }
   const host = u.hostname.replace(/^www\./, '');
 
   if (host === 'podcasts.apple.com' || host === 'itunes.apple.com') return resolveApple(u);
@@ -1594,7 +1600,7 @@ async function run(getSource, resume = null) {
     els.waveWrap.classList.remove('loading');
     if (!state.source) hideSession();
     showError(err instanceof UserError ? err.message : `Something went wrong: ${err.message || err}`,
-      err instanceof UserError ? "That didn't work" : 'Something went wrong');
+      err instanceof UserError ? "That didn't work" : 'Something went wrong', { retry: err.retry !== false });
     els.errorCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
     els.errorCard.focus?.({ preventScroll: true });
     const job = loadJob();
@@ -1949,6 +1955,9 @@ function wireEvents() {
 }
 
 async function init() {
+  // The page is rebuilt after every load, so a restored scroll position points at nothing
+  // (after a crash-reload it would hide the resume card above the fold).
+  if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
   const savedLang = store.get('lang', null);
   if (savedLang) {
     const radio = document.querySelector(`input[name=lang][value="${CSS.escape(savedLang)}"]`);

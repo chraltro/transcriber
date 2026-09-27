@@ -48,20 +48,29 @@ Browsers only let a page read servers that allow it (CORS), and the free public 
 
 Some hosts block browsers entirely (for example Anchor, now Spotify for Creators). For those, download the episode and pick the file under "More options", or deploy the included `cors-proxy-worker.js` as a free Cloudflare Worker and paste its URL there.
 
-If the page reloads before a transcript finishes (usually the browser running out of memory), it offers to resume from where it stopped without downloading the episode again. Finished transcripts download as `.txt`, or as `.srt`/`.vtt` subtitles with timestamps.
+## Reading and listening
+
+- The transcript comes in paragraphs. Whisper works in 30 second windows, and where a window was cut mid-sentence the pieces are joined again, so copied text reads naturally.
+- Click any passage to hear it from there: the playing passage is highlighted and followed. Playback uses the copy that was transcribed, so dynamically inserted ads can't shift it out of sync.
+- The episode's waveform draws itself while the audio is decoded and lights up as it is transcribed. Afterwards it is a scrubber.
+- Search inside the transcript (press `/`), toggle timestamps, copy, or export as `.txt`, `.srt` or `.vtt`. On phones, Save opens the share sheet.
+- Finished transcripts are kept in this browser (IndexedDB) under Recent transcripts, and nothing is uploaded anywhere.
+- If the page reloads before a transcript finishes (usually the browser running out of memory), it offers to resume from where it stopped without downloading the episode again.
+- Drop an audio file anywhere on the page, or pick one. Title, show and cover art are read from the file's ID3 tag.
 
 ## Testing
 
-- `npm test`: unit tests for MP3/WAV indexing, link and feed parsing, title matching, segmentation, the streaming transcriber, subtitles and model choices. `NETWORK_TESTS=1 npm test` also checks every model file the app can request exists on Hugging Face.
+- `npm test`: unit tests for MP3/WAV indexing, ID3 tags, link and feed parsing, title matching, paragraphs, waveform levels, segmentation, the streaming transcriber, subtitles and model choices. `NETWORK_TESTS=1 npm test` also checks every model file the app can request exists on Hugging Face.
 - `npm run test:e2e`: loads the app in real browsers, pastes real links (Pocket Casts, NRK and a Danish show via Apple, Spotify, RSS) and waits for real Whisper output. It covers Chromium, Firefox, an iPhone profile in WebKit, WebGPU in software, a reload mid-transcript followed by resume, and memory over a long run, and checks that each transcript is in the chosen language.
 
 Both run in GitHub Actions on every push to a `claude/**` branch that touches the app.
 
 ## Files
 
-- `index.html`, `style.css`: the page
+- `index.html`, `style.css`: the page. Fonts (Newsreader, Geist, Geist Mono; SIL Open Font License) are self-hosted in `fonts/`
 - `app.js`: link resolution, downloading, decoding, UI
 - `worker.js`: runs Whisper off the main thread on audio streamed in from the page
-- `lib/`: the logic both use, kept free of the DOM so it can be unit tested (MP3/WAV indexing, link parsing, text cleanup, splitting audio at pauses into 30 second windows, model choices, subtitles)
+- `lib/`: the logic both use, kept free of the DOM so it can be unit tested (MP3/WAV indexing, ID3 tags, link parsing, text cleanup, paragraphs, waveform levels, splitting audio at pauses into 30 second windows, model choices, subtitles)
+- `ui/`: the waveform canvas and the library of recent transcripts
 - `coi-sw.js`: service worker that enables multi-threaded WASM on GitHub Pages
 - `cors-proxy-worker.js`: optional self-hosted proxy
