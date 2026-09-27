@@ -128,7 +128,7 @@ for (const c of CASES) {
   // The page settles on GPU or CPU before the model list is final.
   await page.waitForSelector('input[name=model]');
   await page.waitForTimeout(500);
-  const gpuUsed = await page.evaluate(() => document.querySelector('#device-hint').textContent.includes('can use the GPU'));
+  const gpuUsed = await page.evaluate(() => document.body.dataset.gpu === '1');
   if (c.gpu && !gpuUsed) console.log('  WARNING: the page did not detect the GPU');
   await page.click(`input[value=${c.lang}] + span`);
   await page.click(`input[name=model][value=${c.model || 'base'}]`);
@@ -202,10 +202,10 @@ for (const c of CASES) {
       console.log(`  ${c.lang} common-word share: ${(score * 100).toFixed(0)}% of ${text.split(/\s+/).length} words`);
       if (score < 0.12 && !c.skipLanguageCheck) { result = `transcript does not look ${c.lang} (${(score * 100).toFixed(0)}% common words)`; break; }
       if (c.gpu) {
-        const device = await page.evaluate(() => document.querySelector('#detail').textContent + ' ' + document.querySelector('#device-hint').textContent);
-        console.log(`  device: ${device.slice(0, 160)}`);
-        // A WebGPU failure falls back to the CPU and the hint stops offering the GPU.
-        if (!gpuUsed || !device.includes('can use the GPU')) { result = 'GPU case ran without WebGPU (or fell back to the CPU)'; break; }
+        const device = await page.evaluate(() => ({ detail: document.querySelector('#detail').textContent, gpu: document.body.dataset.gpu }));
+        console.log(`  device: ${JSON.stringify(device)}`);
+        // A WebGPU failure falls back to the CPU and clears the GPU flag.
+        if (!gpuUsed || device.gpu !== '1') { result = 'GPU case ran without WebGPU (or fell back to the CPU)'; break; }
       }
       result = 'ok';
       console.log(`  title: ${s.title}`);

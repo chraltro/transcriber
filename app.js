@@ -17,9 +17,8 @@ const IS_MOBILE = IS_IOS || /Android/i.test(navigator.userAgent);
 
 const els = {
   form: $('#url-form'), url: $('#url'), go: $('#go'), paste: $('#paste'), models: $('#models'), file: $('#file'), proxy: $('#proxy'),
-  deviceHint: $('#device-hint'), deviceChip: $('#device-chip'), modelNote: $('#model-note'),
+  deviceHint: $('#device-hint'), modelNote: $('#model-note'), draft: $('#draft'), stepTranscribe: $('#step-transcribe'),
   settings: $('#settings'), settingsToggle: $('#settings-toggle'), settingsSummary: $('#settings-summary'),
-  heroWave: $('#hero-wave'),
   episodesCard: $('#episodes-card'), feedTitle: $('#feed-title'), feedCount: $('#feed-count'), feedArt: $('#feed-art'),
   episodesNote: $('#episodes-note'), episodes: $('#episodes'), filter: $('#episode-filter'),
   progressCard: $('#progress-card'), art: $('#art'), show: $('#session-show'), title: $('#episode-title'), steps: $('#steps'),
@@ -181,14 +180,20 @@ function artInto(box, { art, title, show } = {}, { loading = false } = {}) {
 
 /* ---------- session card: steps, status, stats ---------- */
 
-const STEPS = ['find', 'download', 'model', 'transcribe'];
+const STEPS = ['find', 'download', 'model', 'draft', 'transcribe'];
 const STEP_OF = [
   [/^(Looking up|Reading link|Finding)/, 'find'],
   [/^Downloading episode/, 'download'],
   [/speech model/i, 'model'],
-  [/^Transcribing/, 'transcribe'],
+  [/^Sketching/, 'draft'],
+  [/^(Transcribing|Refining)/, 'transcribe'],
   [/^Done/, 'done'],
 ];
+
+function showSteps(drafting) {
+  els.steps.querySelector('[data-step=draft]').classList.toggle('hidden', !drafting);
+  els.stepTranscribe.textContent = drafting ? 'Refine' : 'Transcribe';
+}
 
 function setStep(step) {
   const at = step === 'done' ? STEPS.length : STEPS.indexOf(step);
@@ -214,10 +219,14 @@ function progress(stage, fraction, detail = '', stats = null) {
   const step = STEP_OF.find(([re]) => re.test(stage))?.[1];
   if (step) setStep(step);
   if (step === 'download') wave.setDownload(fraction);
-  const waiting = fraction == null && step !== 'transcribe' && step !== 'done';
+  const waiting = fraction == null && step !== 'transcribe' && step !== 'draft' && step !== 'done';
   els.waveWrap.classList.toggle('loading', waiting && step !== undefined);
   if (stats || step !== 'transcribe') renderStats(stats);
-  if (step === 'transcribe') els.tailText.textContent = stats?.[0]?.v ? `Listening · ${stats[0].v}` : 'Listening';
+  updateMediaSession();
+  if (step === 'transcribe' || step === 'draft') {
+    const word = stage === 'Refining' ? 'Refining' : stage === 'Sketching' ? 'Sketching' : 'Listening';
+    els.tailText.textContent = stats?.[0]?.v ? `${word} · ${stats[0].v}` : word;
+  }
   updateMini();
 }
 
@@ -232,7 +241,58 @@ function clearError() {
   els.errorCard.classList.add('hidden');
 }
 
+/* ---------- keep running in the background (phones) ----------
+ * iOS suspends a page, and its workers, as soon as another app is in front, unless the page is
+ * playing audio. While a transcript is being made, a silent track plays and the lock screen
+ * shows the progress. It starts inside the tap that started the job, as iOS requires. */
+let keepAlive = null;
+
+function silentWav(seconds = 2, rate = 8000) {
+  const n = seconds * rate;
+  const buf = new ArrayBuffer(44 + n * 2);
+  const v = new DataView(buf);
+  const str = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVEfmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, n * 2, true);
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
+function startKeepAlive() {
+  if (!IS_MOBILE) return;
+  if (!keepAlive) {
+    keepAlive = new Audio(URL.createObjectURL(silentWav()));
+    keepAlive.loop = true;
+    keepAlive.setAttribute('playsinline', '');
+  }
+  if (!audio.paused) return; // the episode itself is playing, which keeps the page alive anyway
+  keepAlive.play().catch(() => {});
+}
+
+function stopKeepAlive() {
+  keepAlive?.pause();
+  if ('mediaSession' in navigator && audio.paused) navigator.mediaSession.metadata = null;
+}
+
+let sessionLine = '';
+function updateMediaSession() {
+  if (!IS_MOBILE || !('mediaSession' in navigator) || !window.MediaMetadata || !state.busy) return;
+  const line = `${els.stage.textContent}${wave.total && (wave.done || wave.draftDone) ? ` · ${fmtTime(wave.done || wave.draftDone)} / ${fmtTime(wave.total)}` : ''}`;
+  if (line === sessionLine) return;
+  sessionLine = line;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: state.source?.title || 'Transcriber',
+      artist: line,
+      album: 'Transcriber',
+      artwork: state.source?.art && !state.source.art.startsWith('data:') ? [{ src: state.source.art, sizes: '600x600' }] : [],
+    });
+  } catch {}
+}
+
 function setBusy(busy) {
+  if (busy) startKeepAlive(); else stopKeepAlive();
   state.busy = busy;
   window.__transcriberBusy = busy; // coi-sw.js never reloads the page while this is set
   document.body.classList.toggle('busy', busy);
@@ -264,6 +324,8 @@ function releaseWakeLock() {
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
+  // Time spent in the background (suspended by the OS) doesn't count as the model stalling.
+  state.lastHeard = Date.now();
   state.wakeLock = null; // browsers release the lock when the page is hidden
   if (state.busy) acquireWakeLock();
 });
@@ -826,16 +888,22 @@ function queryJson(name) {
 const DTYPE_OVERRIDE = queryJson('dtype');
 const SESSION_OVERRIDE = queryJson('session');
 
-async function transcribeAudio(blob, fromSec = 0) {
+// pass: 'single' (one model), 'draft' (quick sketch with Tiny) or 'refine' (the chosen model
+// rewrites the sketch window by window; the windows line up because they are cut from the same
+// audio the same way).
+const STAGE = { single: 'Transcribing', draft: 'Sketching', refine: 'Refining' };
+
+async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), pass = 'single' } = {}) {
   const worker = getWorker();
   const id = ++state.jobSeq;
-  const model = modelFor(selectedModel(), language());
+  const model = modelFor(modelKey, language());
+  const stage = STAGE[pass];
   const files = new Map();
   let total = 0;
   let buffered = 0;
   let ready = false;
   let wake = null;
-  let lastHeard = Date.now();
+  state.lastHeard = Date.now();
   let deviceLine = '';
   let finish;
   let fail;
@@ -844,16 +912,17 @@ async function transcribeAudio(blob, fromSec = 0) {
   state.rejectRun = fail;
   const nudge = () => { const w = wake; wake = null; w?.(); };
   const watchdog = setInterval(() => {
-    if (Date.now() - lastHeard < WATCHDOG_MS) return;
+    if (document.visibilityState !== 'visible' || Date.now() - state.lastHeard < WATCHDOG_MS) return;
     fail(new UserError('The speech model stopped responding, most likely because the browser ran out of memory. Try a smaller model, then Resume: your progress is saved.'));
     nudge();
   }, 15000);
 
-  progress('Loading speech model', null, 'First run downloads the model, then it is cached');
+  if (pass === 'refine') progress('Refining', null, `Loading the ${model.name} model`);
+  else progress('Loading speech model', null, 'First run downloads the model, then it is cached');
 
   worker.onmessage = ({ data: m }) => {
     if (m.id !== id) return; // from an earlier job in this worker
-    lastHeard = Date.now();
+    state.lastHeard = Date.now();
     switch (m.type) {
       case 'status':
         if (!ready) progress(m.text, null, '');
@@ -869,14 +938,15 @@ async function transcribeAudio(blob, fromSec = 0) {
         } else {
           break;
         }
-        progress('Downloading speech model', size ? loaded / size : null, `${fmtBytes(loaded)} of ${fmtBytes(size)} · only needed once`,
+        progress(pass === 'refine' ? 'Refining' : 'Downloading speech model', size ? loaded / size : null,
+          `Downloading the ${model.name} model: ${fmtBytes(loaded)} of ${fmtBytes(size)}, only needed once`,
           size ? [{ v: `${Math.round((loaded / size) * 100)}%`, l: 'model' }] : null);
         break;
       }
       case 'ready':
         ready = true;
         deviceLine = m.device === 'webgpu' ? 'On your GPU' : 'On your CPU, so this takes a while';
-        progress('Transcribing', total ? fromSec / total : 0, deviceLine,
+        progress(stage, total ? fromSec / total : 0, deviceLine,
           total ? [{ v: `${fmtTime(fromSec)} / ${fmtTime(total)}` }] : null);
         break;
       case 'buffered':
@@ -885,13 +955,18 @@ async function transcribeAudio(blob, fromSec = 0) {
         break;
       case 'segment': {
         buffered = m.buffered;
-        addSegment(m);
-        wave.setDone(m.end);
+        if (pass === 'refine') {
+          refineSegment(m);
+          wave.setDone(m.end);
+        } else {
+          addSegment({ ...m, draft: pass === 'draft' });
+          if (pass === 'draft') wave.setDraftDone(m.end); else wave.setDone(m.end);
+        }
         saveProgress(m.end, total);
         const rate = (m.end - fromSec) / Math.max(m.elapsed, 0.001);
         const eta = (total - m.end) / Math.max(rate, 0.001);
         progress(
-          'Transcribing',
+          stage,
           total ? m.end / total : null,
           deviceLine,
           [{ v: `${fmtTime(m.end)} / ${fmtTime(total)}` }, { v: `${rate.toFixed(1)}×`, l: 'speed' }, { v: fmtSpan(eta), l: 'left' }]
@@ -984,11 +1059,12 @@ function addSegment(seg, { fresh = true, into = null } = {}) {
   if (!state.segments.length && !into) host.replaceChildren();
   const prev = state.segments[state.segments.length - 1];
   const follow = !into && !state.busy ? false : !into && nearLive();
-  state.segments.push({ start: seg.start, end: seg.end, text: seg.text });
+  state.segments.push(seg.draft ? { start: seg.start, end: seg.end, text: seg.text, draft: true } : { start: seg.start, end: seg.end, text: seg.text });
 
   const span = el('span', 'seg', seg.text.trim());
   span.dataset.start = seg.start;
   span.dataset.end = seg.end;
+  if (seg.draft) span.classList.add('draft');
   if (fresh) span.classList.add('fresh');
 
   if (prev && state.lastPara && continues(prev.text, seg.text) && state.lastPara.words < MAX_PARAGRAPH_WORDS) {
@@ -1015,6 +1091,39 @@ function addSegment(seg, { fresh = true, into = null } = {}) {
   if (els.search.value.trim()) scheduleSearch();
   if (follow) requestAnimationFrame(() => scrollToLive());
   else if (state.busy) els.jump.classList.remove('hidden');
+}
+
+// The better model's text for one window replaces the sketch in place. Paragraphs are
+// rebuilt once at the end, since better text can move sentence boundaries.
+function refineSegment(m) {
+  const i = state.segments.findIndex((s) => Math.abs(s.start - m.start) < 0.05);
+  const text = (m.text || '').trim();
+  if (i < 0) {
+    if (text) {
+      state.segments.push({ start: m.start, end: m.end, text });
+      state.segments.sort((a, b) => a.start - b.start);
+      rebuildTranscript(); // keeps spans and segments lined up for the windows still to come
+    }
+    return;
+  }
+  state.segments[i] = { start: m.start, end: m.end, text };
+  const span = state.segEls[i];
+  if (!span) { state.needsRebuild = true; return; }
+  if (text !== span.textContent.trim()) {
+    span.textContent = text;
+    span.classList.remove('fresh');
+    void span.offsetWidth;
+    span.classList.add('fresh');
+  }
+  span.classList.remove('draft');
+  if (!text) state.needsRebuild = true;
+}
+
+function rebuildTranscript() {
+  const y = window.scrollY;
+  const segs = state.segments.filter((s) => s.text && s.text.trim());
+  restoreTranscript(segs);
+  window.scrollTo(0, y);
 }
 
 function liveAnchor() {
@@ -1204,9 +1313,22 @@ function startPlayback() {
   });
 }
 
+// Attach the audio before anyone taps play: iOS only starts playback when play() runs
+// directly in the tap, not after waiting for storage (that took a second tap).
+function attachAudio(blob) {
+  releaseAudio();
+  const src = URL.createObjectURL(blob);
+  state.audioObjectUrl = src;
+  audio.src = src;
+  state.audioReadyFor = state.audioKey;
+}
+
+const audioReady = () => !!audio.getAttribute('src') && state.audioReadyFor === state.audioKey;
+
 async function togglePlay() {
   if (!state.playable) return;
   if (!audio.paused) { audio.pause(); return; }
+  if (audioReady()) { startPlayback(); return; }
   if (!(await ensureAudio())) {
     setPlayable(false);
     toast('The audio for this transcript is no longer stored in this browser.');
@@ -1220,7 +1342,7 @@ async function playFrom(t) {
     toast('Audio is not available for this transcript.');
     return;
   }
-  if (!(await ensureAudio())) { setPlayable(false); return; }
+  if (!audioReady() && !(await ensureAudio())) { setPlayable(false); return; }
   if (audio.readyState >= 1) audio.currentTime = t;
   else audio.addEventListener('loadedmetadata', () => { audio.currentTime = t; }, { once: true });
   wave.setPosition(t);
@@ -1265,6 +1387,8 @@ function onPlayState() {
   updateMini();
 }
 
+audio.addEventListener('play', () => { keepAlive?.pause(); });
+audio.addEventListener('pause', () => { if (state.busy) startKeepAlive(); });
 audio.addEventListener('play', onPlayState);
 audio.addEventListener('pause', onPlayState);
 audio.addEventListener('ended', onPlayState);
@@ -1527,7 +1651,8 @@ async function run(getSource, resume = null) {
     progress('Looking up the episode', null, '');
   }
   wave.reset(resume?.total || 0, resume?.levels ? decodeLevels(resume.levels) : null);
-  if (resume) wave.setDone(resume.doneSec || 0);
+  if (resume?.phase === 'draft') wave.setDraftDone(resume.doneSec || 0);
+  else if (resume) wave.setDone(resume.doneSec || 0);
   window.scrollTo({ top: 0, behavior: 'smooth' });
   try {
     const source = resume ? { ...resume.source } : await getSource();
@@ -1560,23 +1685,44 @@ async function run(getSource, resume = null) {
     await applyTags(blob, state.source);
     if (!current()) return;
     showSessionMeta(state.source);
+    attachAudio(blob);
     setPlayable(true);
     wave.setSeekable(false);
 
     const fromSec = resume?.doneSec || 0;
+    const modelKey = resume?.model || selectedModel();
+    const drafting = resume ? !!resume.plan && resume.plan === 'draft' : els.draft.checked && modelKey !== 'tiny';
+    let phase = resume?.phase || (drafting ? 'draft' : 'single');
+    showSteps(drafting);
     saveJob({
       id: resume?.id || newId(),
       source: { kind: 'audio', title: state.source.title, show: state.source.show, art: state.source.art, url: source.url, fileId: source.fileId },
       key,
       title: state.source.title,
       lang: language(),
-      model: selectedModel(),
+      model: modelKey,
       segments: state.segments,
       doneSec: fromSec,
       total: resume?.total || 0,
       levels: resume?.levels || '',
+      plan: drafting ? 'draft' : 'single',
+      phase,
     });
-    await transcribeAudio(blob, fromSec);
+    if (phase === 'refine') wave.setDraftDone(resume?.total || wave.total);
+    let refineFrom = phase === 'refine' ? fromSec : 0;
+    if (phase === 'draft') {
+      await transcribeAudio(blob, fromSec, { modelKey: 'tiny', pass: 'draft' });
+      if (!current()) return;
+      phase = 'refine';
+      saveJob({ ...state.job, phase, doneSec: 0, segments: state.segments });
+      wave.setDraftDone(wave.total);
+      wave.setDone(0);
+      // Phones: one model in memory at a time.
+      if (IS_MOBILE) killWorker();
+      refineFrom = 0;
+    }
+    await transcribeAudio(blob, phase === 'single' ? fromSec : refineFrom, { modelKey, pass: phase === 'single' ? 'single' : 'refine' });
+    if (state.needsRebuild || phase === 'refine') { state.needsRebuild = false; rebuildTranscript(); }
     blob = null;
     if (!current()) return;
     await finishRun();
@@ -1709,11 +1855,25 @@ async function detectGpu() {
 }
 
 function updateDeviceChip() {
-  const gpu = state.gpu.available;
-  els.deviceChip.classList.toggle('gpu', gpu);
-  setIcon(els.deviceChip, gpu ? 'bolt' : 'cpu');
-  els.deviceChip.querySelector('span').textContent = gpu ? 'GPU' : 'CPU';
-  els.deviceChip.title = gpu ? 'Whisper runs on your graphics card' : 'Whisper runs on your processor (no GPU access in this browser)';
+  document.body.dataset.gpu = state.gpu.available ? '1' : '0';
+}
+
+// The front page's specimen: a made-up episode's waveform, a third of it played.
+function drawSpecimen() {
+  const canvas = $('#specimen-wave');
+  if (!canvas) return;
+  const w = new Waveform(canvas.parentElement, canvas, $('#specimen-tip'));
+  let seed = 7;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const levels = new Uint8Array(900);
+  let loud = 0.5;
+  for (let i = 0; i < levels.length; i++) {
+    if (rnd() < 0.08) loud = 0.25 + rnd() * 0.75; // a new speaker or sentence
+    levels[i] = rnd() < 0.06 ? 3 : Math.round(20 + loud * 140 * (0.6 + rnd() * 0.4));
+  }
+  w.reset(levels.length, levels);
+  w.setFinished(true);
+  w.setPosition(levels.length * 0.36);
 }
 
 function selectedModel() {
@@ -1727,13 +1887,6 @@ function modelSizeMB(m) {
 
 function refreshModels() {
   fillModels(selectedModel());
-}
-
-function pips(n) {
-  const box = el('span', 'pips');
-  for (let i = 1; i <= 5; i++) box.append(el('i', i <= n ? 'on' : ''));
-  box.setAttribute('aria-label', `${n} of 5`);
-  return box;
 }
 
 function fillModels(keep = null) {
@@ -1750,39 +1903,27 @@ function fillModels(keep = null) {
     input.name = 'model';
     input.value = key;
     input.checked = key === chosen;
-    const check = el('span', 'model-check');
-    check.append(icon('check'));
-    const top = el('span', 'model-top');
     const mb = modelSizeMB(m);
-    top.append(el('span', 'model-name', m.name), el('span', 'model-size', mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${mb} MB`));
-    const meters = el('span', 'meters');
-    const acc = el('span', 'meter-row');
-    acc.append(el('span', '', 'Accuracy'), pips(m.accuracy));
-    const spd = el('span', 'meter-row');
-    spd.append(el('span', '', 'Speed'), pips(state.gpu.available ? m.speed.gpu : m.speed.cpu));
-    meters.append(acc, spd);
-    label.append(input, check, top);
-    if (key === rec) label.append(el('span', 'tag', 'Best for this device'));
-    label.append(meters, el('span', 'model-note', m.note));
+    const span = el('span', '', key === 'turbo' ? 'Large' : m.name);
+    span.append(el('span', 'model-size', mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${mb} MB`));
+    label.append(input, span);
     els.models.append(label);
   }
-  els.modelNote.textContent = lang === 'norwegian' ? 'Tiny, Base and Small use NB-Whisper for Norwegian' : '';
   updateModelHint();
   updateSettingsSummary();
 }
 
 function updateModelHint() {
   const key = selectedModel();
-  const mb = modelSizeMB(MODELS[key]);
   const m = modelFor(key, language());
-  const parts = [state.gpu.available
-    ? 'Your browser can use the GPU, so an hour-long episode takes minutes.'
-    : 'No GPU access in this browser, so transcription runs on the CPU and can take about as long as the episode.'];
-  if (IS_IOS) parts.push('On iPhone and iPad, keep this page open with the screen on until it finishes: iOS pauses pages in the background.');
-  if (IS_MOBILE && mb > 300) parts.push('This model may be too big for a phone, and the browser can reload the page if it runs out of memory. Pick Base or Tiny if that happens.');
-  else if (!state.gpu.available && key === 'turbo') parts.push('Large v3 Turbo is very slow on a CPU.');
-  if (m.tuned) parts.push('For Norwegian this uses NB-Whisper, trained by the National Library of Norway, which writes Bokmål.');
-  els.deviceHint.textContent = parts.join(' ');
+  const mb = modelSizeMB(MODELS[key]);
+  const parts = [`${m.note}.`];
+  if (!state.gpu.available) parts.push('No GPU here, so this runs on the CPU and takes roughly as long as the episode.');
+  if (IS_IOS) parts.push('Keep the screen on until it finishes.');
+  if (IS_MOBILE && mb > 300) parts.push('This size may be too big for a phone.');
+  els.modelNote.textContent = parts.join(' ');
+  els.deviceHint.textContent = '';
+  els.draft.closest('.check').classList.toggle('hidden', key === 'tiny');
 }
 
 // Returning visitors (a saved choice or transcripts in the library) see settings folded into
@@ -1797,21 +1938,6 @@ function updateSettingsSummary() {
   els.settingsSummary.textContent = `${LANG_NAMES[language()]} · ${m?.name || ''} model`;
 }
 
-function buildHeroWave() {
-  let seed = 11;
-  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  const n = 64;
-  const bars = [];
-  for (let i = 0; i < n; i++) {
-    const b = el('i');
-    const env = Math.pow(Math.sin((Math.PI * (i + 0.5)) / n), 0.8);
-    b.style.setProperty('--h', `${Math.round((18 + 82 * rnd()) * env)}%`);
-    b.style.setProperty('--t', `${(1.6 + rnd() * 2.4).toFixed(2)}s`);
-    b.style.setProperty('--d', `${(-rnd() * 4).toFixed(2)}s`);
-    bars.push(b);
-  }
-  els.heroWave.replaceChildren(...bars);
-}
 
 function closeMenus() {
   els.exportMenu.classList.remove('open');
@@ -1969,9 +2095,9 @@ async function init() {
   } catch {}
   els.share.classList.toggle('hidden', !state.canShareFiles);
   if (!IS_MOBILE) els.dockSave.querySelector('span').textContent = 'Download';
-  buildHeroWave();
   if (store.get('model', null)) foldSettings(true);
   wireEvents();
+  drawSpecimen();
   fillModels();
   updateDeviceChip();
 

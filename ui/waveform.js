@@ -14,6 +14,7 @@ export class Waveform {
     this.total = 0;
     this.levels = new Uint8Array(0);
     this.done = 0;
+    this.draftDone = 0;
     this.download = null;
     this.position = null;
     this.seekable = false;
@@ -38,6 +39,7 @@ export class Waveform {
     this.total = total;
     this.levels = levels ? Uint8Array.from(levels) : new Uint8Array(Math.ceil(total));
     this.done = 0;
+    this.draftDone = 0;
     this.download = null;
     this.position = null;
     this.finished = false;
@@ -66,6 +68,8 @@ export class Waveform {
   }
 
   setDone(sec) { this.done = sec; this.schedule(); }
+  // Sketched by the quick model but not yet refined.
+  setDraftDone(sec) { this.draftDone = sec; this.schedule(); }
   setDownload(fraction) { this.download = fraction; this.schedule(); }
   setPosition(sec) { this.position = sec; this.schedule(); }
   setFinished(on) { this.finished = on; this.schedule(); }
@@ -114,6 +118,7 @@ export class Waveform {
     const color = (name) => css.getPropertyValue(name).trim();
     const idle = color('--wave-idle');
     const decoded = color('--wave-decoded');
+    const draft = color('--wave-draft');
     const grad = ctx.createLinearGradient(0, 0, w, 0);
     grad.addColorStop(0, color('--wave-done'));
     grad.addColorStop(1, color('--wave-done-2'));
@@ -125,7 +130,7 @@ export class Waveform {
     const mid = h / 2;
     const maxH = h * 0.9;
     const bars = this.total ? barHeights(this.levels, count) : new Float32Array(count).fill(-1);
-    const head = this.position ?? (this.finished ? null : this.done || null);
+    const head = this.position ?? (this.finished ? null : this.done || this.draftDone || null);
     const headX = head != null && this.total ? (head / this.total) * w : null;
 
     for (let i = 0; i < count; i++) {
@@ -146,6 +151,8 @@ export class Waveform {
           if (this.position != null && t > this.position) alpha = 0.38;
         } else if (t <= this.done) {
           fill = grad;
+        } else if (t <= this.draftDone) {
+          fill = draft;
         } else {
           fill = decoded;
         }
