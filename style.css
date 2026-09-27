@@ -296,11 +296,11 @@ main { width: var(--page); margin: 0 auto; padding-bottom: 40px; }
 
 /* ---------- hero ---------- */
 
-.hero { position: relative; padding: clamp(36px, 8vh, 84px) 0 8px; overflow-x: clip; }
+.hero { position: relative; padding: clamp(36px, 8vh, 84px) 0 8px; }
 .hero > *:not(.hero-wave) { position: relative; z-index: 1; }
 
 .hero-wave {
-  position: absolute; z-index: 0; top: 0; right: -6%; width: 62%; height: 300px;
+  position: absolute; z-index: 0; top: 0; right: 0; width: 60%; height: 300px;
   display: flex; align-items: center; justify-content: space-between; gap: 3px;
   -webkit-mask-image: radial-gradient(ellipse 60% 55% at 60% 50%, #000 20%, transparent 75%);
   mask-image: radial-gradient(ellipse 60% 55% at 60% 50%, #000 20%, transparent 75%);
@@ -821,7 +821,7 @@ body.has-session .settings-body { padding-top: 4px; }
 }
 .seg { border-radius: 4px; transition: background 0.3s, box-shadow 0.3s; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .seg.fresh { animation: ink 0.9s var(--ease) both; }
-@keyframes ink { from { opacity: 0; filter: blur(2px); } }
+@keyframes ink { from { opacity: 0; } }
 .transcript.playable .seg { cursor: pointer; }
 @media (hover: hover) {
   .transcript.playable .seg:hover { background: var(--surface-2); box-shadow: 0 0 0 2px var(--surface-2); }
@@ -915,7 +915,7 @@ body.has-session .settings-body { padding-top: 4px; }
 
 @media (max-width: 760px) {
   .models { grid-template-columns: repeat(2, 1fr); }
-  .hero-wave { width: 100%; right: -30%; top: -20px; height: 220px; opacity: 0.4; }
+  .hero-wave { width: 70%; right: 0; top: -20px; height: 220px; opacity: 0.4; }
 }
 
 @media (max-width: 640px) {
@@ -1008,6 +1008,30 @@ body.has-session .settings-body { padding-top: 4px; }
   .dock-btn .icon { width: 19px; height: 19px; }
   body.reading .jump, body.reading .toast { bottom: calc(86px + env(safe-area-inset-bottom)); }
   .mini { width: calc(100% - 16px); top: calc(var(--topbar) + 6px); }
+}
+
+/* Phones and tablets: the same look without the machinery that costs memory there. Measured
+   on an iPhone profile in WebKit (3x screen), the animated glow layers, backdrop blur, image
+   glows and animations together added about 450 MB, and memory is what gets a tab reloaded. */
+@media (hover: none), (max-width: 640px) {
+  .backdrop { display: none; }
+  html {
+    background:
+      radial-gradient(140vw 80vh at -20% -14%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 64%) no-repeat,
+      radial-gradient(110vw 60vh at 118% -6%, color-mix(in srgb, var(--accent-2) 16%, transparent), transparent 62%) no-repeat,
+      var(--bg);
+  }
+  body { background: transparent; }
+  *, *::before, *::after { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+  .topbar { background: var(--bg); }
+  .card, .settings, .source, .chip { background: var(--surface-solid); }
+  .toolbar, .mini { background: var(--surface-solid); }
+  body.reading .dock { background: var(--surface-solid); }
+  .art .art-glow { display: none; }
+  .art .art-img { box-shadow: 0 0 0 1px var(--line), 0 12px 26px -14px rgba(0, 0, 0, 0.6); }
+  .logo { filter: none; }
+  .session::before { display: none; }
+  body.busy *, body.busy *::before, body.busy *::after { animation: none !important; }
 }
 
 @media (hover: none) {
