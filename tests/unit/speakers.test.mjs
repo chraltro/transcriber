@@ -22,11 +22,15 @@ test('voices: the same voice matches, a different one is new, and it survives sa
   const a = [1, 0.1, 0, 0];
   const b = [0, 0, 1, 0.2];
   const v = new Voices();
-  assert.equal(v.match(a), 0);
-  assert.equal(v.match([0.95, 0.15, 0.05, 0]), 0);
-  assert.equal(v.match(b), 1);
+  assert.equal(v.match(a, 5), 0);
+  assert.equal(v.match([0.95, 0.15, 0.05, 0], 5), 0);
+  assert.equal(v.match(b, 5), 1);
   const again = new Voices(JSON.parse(JSON.stringify(v)));
-  assert.equal(again.match([0.02, 0, 0.9, 0.3]), 1);
+  assert.equal(again.match([0.02, 0, 0.9, 0.3], 5), 1);
+  // A short snippet joins a close voice but never starts a new one.
+  assert.equal(again.match([0.9, 0.3, 0.1, 0], 1), 0);
+  assert.equal(again.match([0, 1, 0, 0], 1), null);
+  assert.equal(again.list.length, 2);
   assert.ok(cosine(again.list[0].c, again.list[0].c) > 0.999);
 });
 
@@ -41,11 +45,11 @@ test('text parts take the speaker who talks most during them', () => {
 
 test('names come from introductions', () => {
   const segs = [
-    { speaker: 0, text: "Welcome to the show. I'm Derek Thompson." },
-    { speaker: 0, text: 'This is Plain English. Arvind Narayanan, welcome to the show.' },
-    { speaker: 1, text: 'Great to be here.' },
-    { speaker: 0, text: 'Sayash Kapoor, welcome to the show.' },
-    { speaker: 2, text: "It's fantastic to be here." },
+    { start: 0, end: 5, speaker: 0, text: "Welcome to the show. I'm Derek Thompson." },
+    { start: 5, end: 9, speaker: 0, text: 'This is Plain English. Arvind Narayanan, welcome to the show.' },
+    { start: 9, end: 11, speaker: 1, text: 'Great to be here.' },
+    { start: 11, end: 14, speaker: 0, text: 'Sayash Kapoor, welcome to the show.' },
+    { start: 14, end: 16, speaker: 2, text: "It's fantastic to be here." },
   ];
   const names = guessNames(segs, ['Derek Thompson', 'Arvind Narayanan', 'Sayash Kapoor', 'Plain English', 'OpenAI']);
   assert.deepEqual(names, { 0: 'Derek Thompson', 1: 'Arvind Narayanan', 2: 'Sayash Kapoor' });
@@ -72,4 +76,22 @@ test('long parts split into sentences with times shared out by length', () => {
   assert.equal(out[1].end, 20);
   assert.ok(out[0].end > 14 && out[0].end < 16);
   assert.equal(sentenceParts([{ start: 0, end: 5, text: 'Mr. smith went. e.g. this' }]).length, 1);
+});
+
+test('a short reply lost to the host does not hand the guest the wrong name', () => {
+  // The Plain English case: Arvind's "Hi Derek, great to be here" was too short to place, so
+  // the next new voice after his welcome was Sayash's. Being addressed by name decides it.
+  const segs = [
+    { start: 0, end: 4, speaker: 0, text: "I'm Derek Thompson." },
+    { start: 4, end: 8, speaker: 0, text: 'Arvind Narayanan, welcome to the show. Hi Derek, great to be here.' },
+    { start: 8, end: 12, speaker: 0, text: 'Sayash Kapoor, welcome to the show.' },
+    { start: 12, end: 14, speaker: 2, text: 'Fantastic to be here.' },
+    { start: 14, end: 18, speaker: 0, text: 'Sayash, what is the worldview you are arguing against?' },
+    { start: 18, end: 30, speaker: 2, text: 'There is this major point of discussion.' },
+    { start: 30, end: 36, speaker: 0, text: 'So Arvind, your co-author explained it. Arvind, what is the strongest evidence?' },
+    { start: 36, end: 50, speaker: 3, text: 'Let us start with the latter.' },
+    { start: 50, end: 55, speaker: 0, text: 'That is fair, Arvind.' },
+    { start: 55, end: 60, speaker: 3, text: 'Thanks.' },
+  ];
+  assert.deepEqual(guessNames(segs, ['Derek Thompson', 'Arvind Narayanan', 'Sayash Kapoor']), { 0: 'Derek Thompson', 2: 'Sayash Kapoor', 3: 'Arvind Narayanan' });
 });

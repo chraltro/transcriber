@@ -5,7 +5,7 @@ import { fmtTime, normTitle, bestTitleMatch, sameShow } from './lib/text.js';
 import { indexWav, wavPiece } from './lib/wav.js';
 import { toSrt, toVtt } from './lib/subtitles.js';
 import { tidy, plainText, wordCount, startsParagraph } from './lib/paragraphs.js';
-import { guessNames, speakerName } from './lib/speakers.js';
+import { guessNames, speakerName, labelParts } from './lib/speakers.js';
 import { nameGroups, glossaryFor } from './lib/names.js';
 import { isAd } from './lib/ads.js';
 import { id3Length, parseId3 } from './lib/id3.js';
@@ -984,7 +984,9 @@ const SESSION_OVERRIDE = queryJson('session');
 // pass: 'single' (one model), 'draft' (quick sketch with Tiny) or 'refine' (the chosen model
 // rewrites the sketch window by window; the windows line up because they are cut from the same
 // audio the same way).
-const STAGE = { single: 'Transcribing', draft: 'Sketching', refine: 'Refining' };
+const STAGE = { single: 'Transcribing', draft: 'Sketching', refine: 'Refining', speakers: 'Finding speakers' };
+// Phones run the speaker models after Whisper has been unloaded, never both at once.
+const speakersInline = () => speakersOn() && !IS_MOBILE;
 
 async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), pass = 'single', toSec = Infinity } = {}) {
   const worker = getWorker();
@@ -1010,7 +1012,8 @@ async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), 
     nudge();
   }, 15000);
 
-  if (pass === 'refine') progress('Refining', null, `Loading the ${model.name} model`);
+  if (pass === 'speakers') progress('Finding speakers', null, 'Loading the speaker model');
+  else if (pass === 'refine') progress('Refining', null, `Loading the ${model.name} model`);
   else progress('Loading speech model', null, 'First run downloads the model, then it is cached');
 
   worker.onmessage = ({ data: m }) => {
@@ -1031,8 +1034,8 @@ async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), 
         } else {
           break;
         }
-        progress(pass === 'refine' ? 'Refining' : 'Downloading speech model', size ? loaded / size : null,
-          `Downloading the ${model.name} model: ${fmtBytes(loaded)} of ${fmtBytes(size)}, only needed once`,
+        progress(pass === 'refine' ? 'Refining' : pass === 'speakers' ? 'Finding speakers' : 'Downloading speech model', size ? loaded / size : null,
+          `Downloading the ${pass === 'speakers' ? 'speaker' : model.name} model: ${fmtBytes(loaded)} of ${fmtBytes(size)}, only needed once`,
           size ? [{ v: `${Math.round((loaded / size) * 100)}%`, l: 'model' }] : null);
         break;
       }
@@ -1049,6 +1052,13 @@ async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), 
       case 'segment': {
         buffered = m.buffered;
         if (m.voices) state.voices = m.voices;
+        if (pass === 'speakers') {
+          labelWindow(m);
+          wave.setDone(m.end);
+          progress(stage, total ? m.end / total : null, 'Listening for who speaks when', [{ v: `${fmtTime(m.end)} / ${fmtTime(total)}` }]);
+          nudge();
+          break;
+        }
         // A window arrives as timed parts (sentences), each with its speaker if labelled.
         const pieces = (m.parts?.length ? m.parts : m.text ? [{ start: m.start, end: m.end, text: m.text }] : [])
           .map((x) => ({ ...x, w: m.start, text: correctText(x.text, state.vocab) }));
@@ -1103,7 +1113,8 @@ async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), 
       dtype: DTYPE_OVERRIDE,
       terms: (state.vocab?.terms || []).slice(0, 40),
       previous: state.segments.filter((x) => x.start < fromSec && x.text).slice(-4).map((x) => x.text).join(' '),
-      speakers: speakersOn(),
+      speakers: pass === 'speakers' || speakersInline(),
+      diarizeOnly: pass === 'speakers',
       voices: state.voices,
       lastSpeaker: [...state.segments].reverse().find((x) => x.start < fromSec && x.speaker != null)?.speaker ?? null,
       sessionOptions: SESSION_OVERRIDE,
@@ -1872,6 +1883,7 @@ async function run(getSource, resume = null) {
     blob = null;
     if (!current()) return;
     await finishRun();
+    if (IS_MOBILE && state.segments.length && current()) await labelSpeakers();
   } catch (err) {
     if (!current()) return; // cancelled or replaced: whoever took over owns the page now
     killWorker(); // never reuse a worker after an error
@@ -1948,6 +1960,57 @@ async function finishRun() {
   updateLayout();
   announce('Transcript finished.');
   toast(state.segments.length ? `Done: ${fmtNum(words)} words` : 'No speech found');
+}
+
+/* ---------- speakers after the fact (phones) ---------- */
+
+// The speaker pass labels the parts already in a window.
+function labelWindow(m) {
+  if (!m.speakers) return;
+  const inside = state.segments.filter((x) => x.start >= m.start - 0.05 && x.start < m.end - 0.05);
+  const before = [...state.segments].reverse().find((x) => x.start < m.start - 0.05 && x.speaker != null);
+  const labelled = labelParts(inside, m.speakers.turns, m.speakers.local, before?.speaker ?? null);
+  inside.forEach((x, i) => { if (labelled[i].speaker != null) x.speaker = labelled[i].speaker; else delete x.speaker; });
+}
+
+async function labelSpeakers({ from = 0, to = Infinity } = {}) {
+  if (state.busy || !state.segments.length || !speakersOn()) return;
+  const ctl = new AbortController();
+  state.abort = ctl;
+  const current = () => state.abort === ctl && !ctl.signal.aborted;
+  state.runStartedAt = performance.now();
+  state.labelling = true;
+  setBusy(true);
+  wave.setFinished(false);
+  wave.setDone(from);
+  try {
+    const blob = await refineAudio();
+    if (!current() || !blob) { state.labelling = false; setBusy(false); return; }
+    killWorker(); // a fresh worker: only the small speaker models in memory
+    await transcribeAudio(blob, from, { pass: 'speakers', toSec: to });
+    if (!current()) return;
+    rebuildTranscript();
+    refreshNames();
+    if (state.entryId) {
+      const entry = await getEntry(state.entryId);
+      if (entry) await saveEntry({ ...entry, segments: state.segments, voices: state.voices, speakerNames: state.speakerNames });
+    }
+    killWorker();
+    const voices = new Set(state.segments.map((x) => x.speaker).filter((x) => x != null)).size;
+    setStep('done');
+    progress('Done', 1, `${voices === 1 ? 'One voice' : `${voices} voices`} found in ${fmtSpan((performance.now() - state.runStartedAt) / 1000)}`,
+      [{ v: fmtTime(wave.total), l: 'audio' }, { v: fmtNum(wordCount(state.segments)), l: 'words' }]);
+  } catch (err) {
+    if (!current()) return;
+    killWorker();
+    console.warn('Speaker pass failed', err);
+    progress('Done', 1, 'Speaker labels could not be added');
+  }
+  state.labelling = false;
+  wave.setDone(wave.total);
+  wave.setFinished(true);
+  setBusy(false);
+  updateRefineBar();
 }
 
 /* ---------- refine: a bigger model redoes the whole transcript or a chosen passage ---------- */
@@ -2069,6 +2132,8 @@ async function refine({ from = 0, to = Infinity } = {}) {
       [{ v: fmtTime(wave.total), l: 'audio' }, { v: fmtNum(words), l: 'words' }]);
     updateRefineBar();
     toast(whole ? 'Transcript refined' : 'Passage refined');
+    // Phones label the refined stretch afterwards, with Whisper unloaded.
+    if (IS_MOBILE && speakersOn()) await labelSpeakers({ from, to });
   } catch (err) {
     if (!current()) return;
     killWorker();
@@ -2117,9 +2182,21 @@ document.addEventListener('selectionchange', () => {
 
 function cancel() {
   const refining = !!state.refineRange;
+  const labelling = state.labelling;
   state.abort?.abort();
   state.rejectRun?.(cancelled());
   killWorker();
+  if (labelling) {
+    state.labelling = false;
+    rebuildTranscript();
+    refreshNames();
+    wave.setDone(wave.total);
+    wave.setFinished(true);
+    setBusy(false);
+    progress('Done', 1, 'Speaker labels stopped; the transcript is complete');
+    updateRefineBar();
+    return;
+  }
   if (refining) {
     state.refineRange = null;
     rebuildTranscript();

@@ -98,6 +98,14 @@ self.onmessage = async ({ data }) => {
     if (data.type === 'start') {
       terms = data.terms || [];
       stream.start(id, data);
+      if (data.diarizeOnly) {
+        usePlainWasmBuild();
+        if (!(await loadDiarizer(id))) return;
+        if (stream.job?.id !== id) return;
+        post({ type: 'ready', id, device: 'wasm' });
+        await stream.ready(id);
+        return;
+      }
       post({ type: 'status', id, text: 'Loading speech model' });
       await load(data.model, data.device, data.hasF16, data.dtype, data.sessionOptions);
       if (stream.job?.id !== id) return;

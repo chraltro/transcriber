@@ -106,3 +106,26 @@ test('cancel stops a job', async () => {
   await s.push(1, new Float32Array(0), true);
   assert.ok(!posted.some((m) => m.type === 'done'));
 });
+
+test('speaker-only pass: windows cut as when transcribing, turns in episode time', async () => {
+  const { StreamingTranscriber } = await import('../../lib/stream.js');
+  const msgs = [];
+  let transcribed = 0;
+  const st = new StreamingTranscriber({
+    post: (m) => msgs.push(m),
+    transcribe: async () => { transcribed++; return 'x'; },
+    diarize: async (samples) => ({ turns: [{ spk: 0, start: 0, end: samples.length / 16000 }], prints: { 0: { print: [1, 0, 0], seconds: 5 } } }),
+    now: () => 0,
+  });
+  const audio = new Float32Array(16000 * 50).map((_, i) => Math.sin(i / 5) * 0.1);
+  st.start(1, { diarizeOnly: true, offsetSec: 100 });
+  await st.push(1, audio, true);
+  await st.ready(1);
+  const segs = msgs.filter((m) => m.type === 'segment');
+  assert.equal(transcribed, 0);
+  assert.ok(segs.length >= 2);
+  assert.equal(segs[0].speakers.turns[0].start, 100);
+  assert.equal(segs[1].speakers.turns[0].start, segs[1].start);
+  assert.deepEqual(segs[0].speakers.local, { 0: 0 });
+  assert.ok(msgs.some((m) => m.type === 'done'));
+});
