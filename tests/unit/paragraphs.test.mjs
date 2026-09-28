@@ -53,3 +53,16 @@ test('a question mark or exclamation Whisper puts at a mid-sentence cut is dropp
   assert.equal(tidy('the strongest piece of evidence today?', 'that you are right.'), 'the strongest piece of evidence today');
   assert.equal(tidy('Is it?', 'Yes.'), 'Is it?');
 });
+
+test('timed parts: one paragraph per window unless the voice changes', () => {
+  const parts = [
+    { start: 0, end: 4, w: 0, speaker: 0, text: 'Welcome to the show.' },
+    { start: 4, end: 9, w: 0, speaker: 0, text: 'Today we talk bridges.' },
+    { start: 9, end: 12, w: 0, speaker: 1, text: 'Thanks for having me.' },
+    { start: 12, end: 20, w: 0, speaker: 1, text: 'I love bridges.' },
+    { start: 30, end: 33, w: 30, speaker: 1, text: 'Especially old ones.' },
+  ];
+  const p = paragraphs(parts);
+  assert.deepEqual(p.map((x) => [x.speaker, x.segs.length]), [[0, 2], [1, 2], [1, 1]]);
+  assert.equal(plainText(parts.slice(0, 3), { names: { 0: 'Derek' } }), 'Derek: Welcome to the show. Today we talk bridges.\n\nSpeaker 2: Thanks for having me.');
+});

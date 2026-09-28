@@ -1,9 +1,12 @@
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/dist/transformers.min.js';
+import * as tf from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/dist/transformers.min.js';
 
 import { dtypeFor } from './lib/models.js';
 import { StreamingTranscriber } from './lib/stream.js';
 import { transcribeWindow } from './lib/prompted.js';
 import { buildPrompt } from './lib/context.js';
+import { createDiarizer } from './lib/diarize.js';
+
+const { pipeline, env } = tf;
 
 env.allowLocalModels = false;
 
@@ -29,8 +32,25 @@ const post = (msg) => self.postMessage(msg);
 let terms = [];
 let promptState = {};
 
+// The speaker models load once, on first use, and stay (they are small).
+let diarizer = null;
+let diarizerFailed = false;
+async function loadDiarizer(id) {
+  if (diarizer || diarizerFailed) return !!diarizer;
+  try {
+    post({ type: 'status', id, text: 'Loading speaker model' });
+    diarizer = await createDiarizer(tf, { progress_callback: (p) => post({ type: 'model-progress', id, ...p }) });
+  } catch (err) {
+    console.warn('Speaker models failed to load', err);
+    diarizerFailed = true;
+    post({ type: 'speakers-off', id, message: err?.message || String(err) });
+  }
+  return !!diarizer;
+}
+
 const stream = new StreamingTranscriber({
   post,
+  diarize: (samples) => diarizer(samples),
   transcribe: (samples, language, { previous } = {}) =>
     transcribeWindow(asr, samples, { language, prompt: buildPrompt(terms, previous), state: promptState }),
 });
@@ -53,7 +73,7 @@ async function load(model, device, hasF16, dtypeOverride, sessionOptions) {
       device,
       dtype,
       ...(sessionOptions ? { session_options: sessionOptions } : {}),
-      progress_callback: (p) => post({ type: 'model-progress', ...p }),
+      progress_callback: (p) => post({ type: 'model-progress', id: currentId, ...p }),
     });
   } catch (err) {
     // The page restarts with a fresh worker on the CPU path (and the small WASM build).
@@ -80,6 +100,8 @@ self.onmessage = async ({ data }) => {
       stream.start(id, data);
       post({ type: 'status', id, text: 'Loading speech model' });
       await load(data.model, data.device, data.hasF16, data.dtype, data.sessionOptions);
+      if (stream.job?.id !== id) return;
+      if (data.speakers && !(await loadDiarizer(id))) stream.job && (stream.job.speakers = false);
       if (stream.job?.id !== id) return;
       post({ type: 'ready', id, device: data.device });
       await stream.ready(id);

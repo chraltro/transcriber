@@ -4,7 +4,8 @@ import { AUDIO_EXT, audioCandidates, parseFeed, looksLikeFeed, findAudioInHtml, 
 import { fmtTime, normTitle, bestTitleMatch, sameShow } from './lib/text.js';
 import { indexWav, wavPiece } from './lib/wav.js';
 import { toSrt, toVtt } from './lib/subtitles.js';
-import { continues, tidy, plainText, wordCount, MAX_PARAGRAPH_WORDS } from './lib/paragraphs.js';
+import { tidy, plainText, wordCount, startsParagraph } from './lib/paragraphs.js';
+import { guessNames, speakerName } from './lib/speakers.js';
 import { id3Length, parseId3 } from './lib/id3.js';
 import { encodeLevels, decodeLevels } from './lib/levels.js';
 import { Waveform } from './ui/waveform.js';
@@ -18,7 +19,7 @@ const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platf
 const IS_MOBILE = IS_IOS || /Android/i.test(navigator.userAgent);
 
 const els = {
-  form: $('#url-form'), url: $('#url'), go: $('#go'), paste: $('#paste'), models: $('#models'), file: $('#file'), proxy: $('#proxy'), glossary: $('#glossary'),
+  form: $('#url-form'), url: $('#url'), go: $('#go'), paste: $('#paste'), models: $('#models'), file: $('#file'), proxy: $('#proxy'), glossary: $('#glossary'), speakers: $('#speakers'),
   deviceHint: $('#device-hint'), modelNote: $('#model-note'), refineBar: $('#refine-bar'), refineModel: $('#refine-model'), refineAll: $('#refine-all'), selPill: $('#sel-pill'), selModel: $('#sel-model'), stepTranscribe: $('#step-transcribe'),
   settings: $('#settings'), settingsToggle: $('#settings-toggle'), settingsSummary: $('#settings-summary'),
   episodesCard: $('#episodes-card'), feedTitle: $('#feed-title'), feedCount: $('#feed-count'), feedArt: $('#feed-art'),
@@ -64,6 +65,9 @@ const state = {
   runStartedAt: 0,
   find: { ranges: [], index: -1 },
   canShareFiles: false,
+  voices: [],         // voice prints heard so far, so labels stay the same across resumes and refines
+  speakerNames: {},   // names the reader gave
+  guessed: {},        // names from introductions ("I'm Derek Thompson")
 };
 
 const wave = new Waveform(els.waveWrap, els.wave, els.waveTip, { onSeek: (t) => playFrom(t) });
@@ -254,6 +258,57 @@ function vocabulary(source) {
   const user = userGlossary();
   const auto = extractTerms(source?.notes || '', source?.title || '', source?.show || '');
   return { terms: [...new Set([...user.terms, ...auto])].slice(0, 50), replace: user.replace };
+}
+
+/* ---------- speakers ---------- */
+
+const speakersOn = () => store.get('speakers', '1') === '1';
+const names = () => ({ ...state.guessed, ...state.speakerNames });
+
+function refreshNames() {
+  state.guessed = guessNames(state.segments, state.vocab?.terms || []);
+  const n = names();
+  for (const chip of els.transcript.querySelectorAll('.who')) chip.textContent = speakerName(chip.dataset.speaker, n);
+}
+
+function whoChip(speaker) {
+  const chip = el('button', 'who', speakerName(speaker, names()));
+  chip.type = 'button';
+  chip.dataset.speaker = speaker;
+  chip.dataset.hue = Number(speaker) % 6;
+  chip.title = 'Rename this speaker';
+  return chip;
+}
+
+// Renaming a speaker renames every paragraph they speak, here and in the saved copy.
+function renameSpeaker(chip) {
+  const id = chip.dataset.speaker;
+  const input = el('input', 'who-edit');
+  input.value = speakerName(id, names());
+  input.setAttribute('aria-label', 'Speaker name');
+  chip.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const commit = async (save) => {
+    if (done) return;
+    done = true;
+    const name = input.value.trim();
+    input.replaceWith(chip);
+    if (!save) return;
+    if (name && name !== `Speaker ${Number(id) + 1}`) state.speakerNames[id] = name; else delete state.speakerNames[id];
+    refreshNames();
+    if (state.job) saveJob({ ...state.job, speakerNames: state.speakerNames });
+    if (state.entryId && !state.busy) {
+      const entry = await getEntry(state.entryId);
+      if (entry) await saveEntry({ ...entry, speakerNames: state.speakerNames });
+    }
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+    if (e.key === 'Escape') commit(false);
+  });
+  input.addEventListener('blur', () => commit(true));
 }
 
 // A new glossary also fixes the transcript on screen, not just the next one.
@@ -991,14 +1046,18 @@ async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), 
         break;
       case 'segment': {
         buffered = m.buffered;
-        m.text = correctText(m.text, state.vocab);
+        if (m.voices) state.voices = m.voices;
+        // A window arrives as timed parts (sentences), each with its speaker if labelled.
+        const pieces = (m.parts?.length ? m.parts : m.text ? [{ start: m.start, end: m.end, text: m.text }] : [])
+          .map((x) => ({ ...x, w: m.start, text: correctText(x.text, state.vocab) }));
         if (pass === 'refine') {
-          refineSegment(m);
+          refineSegment(m, pieces);
           wave.setDone(m.end);
         } else {
-          addSegment({ ...m, draft: pass === 'draft' });
+          for (const x of pieces) addSegment({ ...x, draft: pass === 'draft' });
           if (pass === 'draft') wave.setDraftDone(m.end); else wave.setDone(m.end);
         }
+        if (pieces.some((x) => x.speaker != null)) refreshNames();
         saveProgress(m.end, total);
         const rate = (m.end - fromSec) / Math.max(m.elapsed, 0.001);
         const eta = (total - m.end) / Math.max(rate, 0.001);
@@ -1011,6 +1070,10 @@ async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), 
         nudge();
         break;
       }
+      case 'speakers-off':
+        console.warn('Speaker labels are off for this run:', m.message);
+        toast('Speaker labels are not available here');
+        break;
       case 'done':
         finish();
         break;
@@ -1037,7 +1100,10 @@ async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), 
       hasF16: state.gpu.f16,
       dtype: DTYPE_OVERRIDE,
       terms: (state.vocab?.terms || []).slice(0, 40),
-      previous: [...state.segments].reverse().find((x) => x.start < fromSec && x.text)?.text || '',
+      previous: state.segments.filter((x) => x.start < fromSec && x.text).slice(-4).map((x) => x.text).join(' '),
+      speakers: speakersOn(),
+      voices: state.voices,
+      lastSpeaker: [...state.segments].reverse().find((x) => x.start < fromSec && x.speaker != null)?.speaker ?? null,
       sessionOptions: SESSION_OVERRIDE,
       offsetSec: fromSec,
     });
@@ -1093,6 +1159,7 @@ function restoreTranscript(segments) {
   const frag = document.createDocumentFragment();
   for (const seg of segments || []) addSegment(seg, { fresh: false, into: frag });
   if (segments?.length) els.transcript.replaceChildren(frag);
+  if (segments?.some((x) => x.speaker != null)) refreshNames();
   updateLayout();
 }
 
@@ -1104,7 +1171,11 @@ function addSegment(seg, { fresh = true, into = null } = {}) {
   if (!state.segments.length && !into) host.replaceChildren();
   const prev = state.segments[state.segments.length - 1];
   const follow = !into && !state.busy ? false : !into && nearLive();
-  state.segments.push(seg.draft ? { start: seg.start, end: seg.end, text: seg.text, draft: true } : { start: seg.start, end: seg.end, text: seg.text });
+  const stored = { start: seg.start, end: seg.end, text: seg.text };
+  if (seg.w != null) stored.w = seg.w;
+  if (seg.speaker != null) stored.speaker = seg.speaker;
+  if (seg.draft) stored.draft = true;
+  state.segments.push(stored);
 
   const span = el('span', 'seg', seg.text.trim());
   span.dataset.start = seg.start;
@@ -1112,7 +1183,7 @@ function addSegment(seg, { fresh = true, into = null } = {}) {
   if (seg.draft) span.classList.add('draft');
   if (fresh) span.classList.add('fresh');
 
-  if (prev && state.lastPara && continues(prev.text, seg.text) && state.lastPara.words < MAX_PARAGRAPH_WORDS) {
+  if (prev && state.lastPara && !startsParagraph(prev, stored, state.lastPara.words)) {
     state.segEls[state.segEls.length - 1].textContent = tidy(prev.text, seg.text);
     state.lastPara.p.append(' ', span);
     state.lastPara.words += countWords(span.textContent);
@@ -1126,9 +1197,15 @@ function addSegment(seg, { fresh = true, into = null } = {}) {
     ts.setAttribute('aria-label', `Play from ${fmtTime(seg.start)}`);
     const p = el('p');
     p.append(span);
-    para.append(ts, p);
+    if (seg.speaker != null && seg.speaker !== state.lastPara?.speaker) {
+      const body = el('div', 'para-body');
+      body.append(whoChip(seg.speaker), p);
+      para.append(ts, body);
+    } else {
+      para.append(ts, p);
+    }
     host.append(para);
-    state.lastPara = { el: para, p, words: countWords(span.textContent) };
+    state.lastPara = { el: para, p, words: countWords(span.textContent), speaker: seg.speaker };
   }
   state.segEls.push(span);
   if (into) return;
@@ -1140,12 +1217,12 @@ function addSegment(seg, { fresh = true, into = null } = {}) {
 
 // The better model's text for one window replaces the sketch in place. Paragraphs are
 // rebuilt once at the end, since better text can move sentence boundaries.
-function refineSegment(m) {
-  const text = (m.text || '').trim();
+function refineSegment(m, pieces) {
+  const text = pieces.map((x) => x.text).join(' ').trim();
   const i = state.segments.findIndex((s) => Math.abs(s.start - m.start) < 0.05 && Math.abs(s.end - m.end) < 0.05);
   const span = state.segEls[i];
-  if (i >= 0 && span) {
-    state.segments[i] = { start: m.start, end: m.end, text };
+  if (pieces.length <= 1 && pieces[0]?.speaker == null && i >= 0 && span) {
+    state.segments[i] = { ...state.segments[i], start: m.start, end: m.end, text };
     if (text !== span.textContent.trim()) {
       span.textContent = text;
       span.classList.remove('fresh');
@@ -1158,7 +1235,7 @@ function refineSegment(m) {
   }
   // The window doesn't line up with an old one: replace whatever it overlaps.
   const keep = state.segments.filter((s) => s.end <= m.start + 0.05 || s.start >= m.end - 0.05);
-  if (text) keep.push({ start: m.start, end: m.end, text });
+  keep.push(...pieces.filter((x) => x.text));
   keep.sort((a, b) => a.start - b.start);
   state.segments = keep;
   rebuildTranscript();
@@ -1192,7 +1269,7 @@ function scrollToLive() {
 }
 
 function transcriptText() {
-  return plainText(state.segments, { timestamps: els.timestamps.checked });
+  return plainText(state.segments, { timestamps: els.timestamps.checked, names: names() });
 }
 
 /* ---------- search ---------- */
@@ -1286,8 +1363,8 @@ function saveFile(content, ext, type) {
 }
 
 const downloadTranscript = () => saveFile(textFile(), 'txt', 'text/plain');
-const downloadSrt = () => saveFile(toSrt(state.segments), 'srt', 'application/x-subrip');
-const downloadVtt = () => saveFile(toVtt(state.segments), 'vtt', 'text/vtt');
+const downloadSrt = () => saveFile(toSrt(state.segments, names()), 'srt', 'application/x-subrip');
+const downloadVtt = () => saveFile(toVtt(state.segments, names()), 'vtt', 'text/vtt');
 
 async function shareTranscript() {
   if (!state.segments.length) return;
@@ -1589,6 +1666,9 @@ async function openEntry(entry) {
   state.vocab = vocabulary(state.source);
   state.entryId = entry.id;
   state.transcriptModel = entry.refinedWith || entry.model;
+  state.voices = entry.voices || [];
+  state.speakerNames = entry.speakerNames || {};
+  state.guessed = {};
   state.sourceFile = null;
   state.audioKey = entry.key;
   beginSession(state.source);
@@ -1620,7 +1700,7 @@ function saveJob(job) {
 
 function saveProgress(doneSec, total) {
   if (!state.job) return;
-  saveJob({ ...state.job, segments: state.segments, doneSec, total: total || state.job.total, levels: encodeLevels(wave.levels) });
+  saveJob({ ...state.job, segments: state.segments, doneSec, total: total || state.job.total, levels: encodeLevels(wave.levels), voices: state.voices, speakerNames: state.speakerNames });
 }
 
 // A finished transcript keeps its audio (for playback) until the next episode replaces it.
@@ -1724,6 +1804,9 @@ async function run(getSource, resume = null) {
     state.audioKey = key;
     state.sourceFile = source.file || null;
     showSessionMeta(state.source);
+    state.voices = resume?.voices || [];
+    state.speakerNames = resume?.speakerNames || {};
+    state.guessed = {};
     if (resume) restoreTranscript(resume.segments);
     else resetTranscript();
 
@@ -1834,6 +1917,8 @@ async function finishRun() {
     key: job.key,
     source: { url: job.source?.url, fileId: job.source?.fileId },
     notes: job.source?.notes || '',
+    voices: state.voices,
+    speakerNames: state.speakerNames,
   } : null;
   if (entry) {
     await saveEntry(entry);
@@ -1922,7 +2007,7 @@ async function refine({ from = 0, to = Infinity } = {}) {
     const words = wordCount(state.segments);
     if (state.entryId) {
       const entry = await getEntry(state.entryId);
-      if (entry) await saveEntry({ ...entry, segments: state.segments, words, refinedWith: whole ? modelKey : entry.refinedWith });
+      if (entry) await saveEntry({ ...entry, segments: state.segments, words, voices: state.voices, speakerNames: state.speakerNames, refinedWith: whole ? modelKey : entry.refinedWith });
     }
     if (whole) state.transcriptModel = modelKey;
     if (IS_MOBILE) killWorker();
@@ -2008,6 +2093,8 @@ function cancel() {
 function offerResume(job, afterReload = true) {
   state.source = { ...job.source, key: job.key };
   state.vocab = vocabulary(state.source);
+  state.voices = job.voices || [];
+  state.speakerNames = job.speakerNames || {};
   state.audioKey = job.key;
   artInto(els.resumeArt, job.source);
   restoreTranscript(job.segments);
@@ -2141,6 +2228,7 @@ function wireEvents() {
   els.models.addEventListener('change', () => { store.set('model', selectedModel()); updateModelHint(); updateSettingsSummary(); });
   els.proxy.addEventListener('change', () => store.set('proxy', els.proxy.value.trim()));
   els.glossary.addEventListener('change', applyGlossary);
+  els.speakers.addEventListener('change', () => store.set('speakers', els.speakers.checked ? '1' : '0'));
   els.settingsToggle.addEventListener('click', () => {
     const open = els.settings.classList.toggle('open');
     els.settingsToggle.setAttribute('aria-expanded', String(open));
@@ -2229,6 +2317,8 @@ function wireEvents() {
   els.transcript.addEventListener('click', (e) => {
     const ts = e.target.closest('.ts');
     if (ts) { playFrom(Number(ts.dataset.t)); return; }
+    const who = e.target.closest('.who');
+    if (who) { renameSpeaker(who); return; }
     const seg = e.target.closest('.seg');
     if (!seg || !state.playable || !window.getSelection().isCollapsed) return;
     playFrom(Number(seg.dataset.start));
@@ -2287,6 +2377,7 @@ async function init() {
   }
   els.proxy.value = store.get('proxy', '');
   els.glossary.value = store.get('glossary', '');
+  els.speakers.checked = speakersOn();
   try {
     state.canShareFiles = !!navigator.canShare?.({ files: [new File(['x'], 'x.txt', { type: 'text/plain' })] });
   } catch {}
