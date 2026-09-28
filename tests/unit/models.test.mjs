@@ -46,4 +46,6 @@ test('ratings per language and the recommended size per device', () => {
   assert.equal(recommendedModel({ mobile: true, gpu: true }), 'base');
   assert.equal(recommendedModel({ mobile: false, gpu: true }), 'turbo');
   assert.equal(recommendedModel({ mobile: false, gpu: false }), 'small');
+  assert.equal(recommendedModel({ mobile: false, gpu: false, language: 'danish' }), 'turbo');
+  assert.equal(recommendedModel({ mobile: true, gpu: false, language: 'danish' }), 'base');
 });

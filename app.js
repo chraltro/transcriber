@@ -2424,10 +2424,11 @@ function refreshModels() {
 }
 
 function fillModels(keep = null) {
-  const saved = keep || store.get('model', null);
-  const rec = recommendedModel({ mobile: IS_MOBILE, gpu: state.gpu.available });
-  const chosen = MODELS[saved] ? saved : rec;
   const lang = language();
+  // Each language remembers its own choice: Danish wants a bigger model than English does.
+  const saved = keep || store.get(`model-${lang}`, null) || (lang !== 'danish' ? store.get('model', null) : null);
+  const rec = recommendedModel({ mobile: IS_MOBILE, gpu: state.gpu.available, language: lang });
+  const chosen = MODELS[saved] ? saved : rec;
   els.models.querySelectorAll('.model').forEach((l) => l.remove());
   for (const key of Object.keys(MODELS)) {
     const m = modelFor(key, lang);
@@ -2485,8 +2486,8 @@ function closeMenus() {
 }
 
 function wireEvents() {
-  document.querySelectorAll('input[name=lang]').forEach((r) => r.addEventListener('change', () => { store.set('lang', language()); refreshModels(); }));
-  els.models.addEventListener('change', () => { store.set('model', selectedModel()); updateModelHint(); updateSettingsSummary(); });
+  document.querySelectorAll('input[name=lang]').forEach((r) => r.addEventListener('change', () => { store.set('lang', language()); fillModels(); }));
+  els.models.addEventListener('change', () => { store.set('model', selectedModel()); store.set(`model-${language()}`, selectedModel()); updateModelHint(); updateSettingsSummary(); });
   els.proxy.addEventListener('change', () => store.set('proxy', els.proxy.value.trim()));
   els.glossary.addEventListener('change', applyGlossary);
   els.namesBtn.addEventListener('click', () => toggleNames());

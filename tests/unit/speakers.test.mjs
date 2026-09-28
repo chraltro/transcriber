@@ -124,3 +124,15 @@ test('one clear address names a voice nobody else claims, but not a passing one'
   ];
   assert.deepEqual(guessNames(segs, ['Derek Thompson', 'Arvind Narayanan', 'Sayash Kapoor']), { 0: 'Derek Thompson', 3: 'Arvind Narayanan' });
 });
+
+test('broken window text is recognised, ordinary text is not', async () => {
+  const { windowTrouble, speechSeconds } = await import('../../lib/prompted.js');
+  assert.deepEqual(windowTrouble('Så jeg synes faktisk, at vores performance har været ganske god.', 4), []);
+  assert.ok(windowTrouble('Sæææææææææ', 3).includes('stuck'));
+  assert.ok(windowTrouble('Det er der rigtig mange årsager til. Det er der rigtig mange årsager til. Det er der rigtig mange årsager til.', 5).includes('repeats'));
+  assert.ok(windowTrouble('i hvert', 25).includes('sparse'));
+  assert.deepEqual(windowTrouble('', 2), []);
+  const loud = new Float32Array(16000 * 3).map((_, i) => Math.sin(i / 3) * 0.2);
+  assert.equal(speechSeconds(loud), 3);
+  assert.equal(speechSeconds(new Float32Array(16000)), 0);
+});

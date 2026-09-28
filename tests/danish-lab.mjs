@@ -79,6 +79,7 @@ async function transcribe(modelId, audio, { timestamps = true, prompt = true } =
   }
   if (!asr) throw new Error('could not load');
   const segments = [];
+  const state = {};
   const t0 = Date.now();
   await new Promise((resolve, reject) => {
     const stream = new StreamingTranscriber({
@@ -89,12 +90,13 @@ async function transcribe(modelId, audio, { timestamps = true, prompt = true } =
       },
       // Whisper goes through the app's prompted path; other architectures through the pipeline.
       transcribe: asr.model.config.model_type === 'whisper'
-        ? (samples, language, { previous } = {}) => transcribeWindow(asr, samples, { language, prompt: prompt ? previous || '' : '', timestamps, state: {} })
+        ? (samples, language, { previous } = {}) => transcribeWindow(asr, samples, { language, prompt: prompt ? previous || '' : '', timestamps, state })
         : async (samples) => (await asr(samples, asr.model.config.model_type === 'cohere_asr' ? { language: 'da' } : {})).text.replace(/<unk>/g, '').replace(/\s+/g, ' ').trim(),
     });
     stream.start(1, { language: 'danish' });
     stream.push(1, audio, true).then(() => stream.ready(1)).catch(reject);
   });
+  console.log(`windows re-decoded: ${state.retries || 0} of ${segments.length}`);
   return { segments, secs: (Date.now() - t0) / 1000 };
 }
 

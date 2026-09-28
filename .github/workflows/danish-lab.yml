@@ -2,7 +2,7 @@ name: Danish lab
 on:
   push:
     branches: ['claude/**']
-    paths: ['tests/danish-lab.mjs', '.github/workflows/danish-lab.yml']
+    paths: ['tests/danish-lab.mjs', '.github/workflows/danish-lab.yml', 'lib/prompted.js']
   workflow_dispatch:
 jobs:
   search:
@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model: ['onnx-community/whisper-large-v3-turbo', 'onnx-community/whisper-large-v3-turbo|prompt=0', 'onnx-community/whisper-large-v3-turbo|ts=0', 'onnx-community/whisper-large-v3-turbo|ts=0|prompt=0', 'onnx-community/whisper-small', 'Xenova/whisper-medium', 'PierreMesure/roest-315m-onnx']
+        model: ['onnx-community/whisper-large-v3-turbo|run=1', 'onnx-community/whisper-large-v3-turbo|run=2', 'onnx-community/whisper-large-v3-turbo|run=3', 'onnx-community/whisper-small', 'Xenova/whisper-medium']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
