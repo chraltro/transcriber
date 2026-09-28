@@ -8,7 +8,7 @@ import { continues, tidy, plainText, wordCount, MAX_PARAGRAPH_WORDS } from './li
 import { id3Length, parseId3 } from './lib/id3.js';
 import { encodeLevels, decodeLevels } from './lib/levels.js';
 import { Waveform } from './ui/waveform.js';
-import { listEntries, saveEntry, deleteEntry } from './ui/library.js';
+import { listEntries, getEntry, saveEntry, deleteEntry } from './ui/library.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -17,7 +17,7 @@ const IS_MOBILE = IS_IOS || /Android/i.test(navigator.userAgent);
 
 const els = {
   form: $('#url-form'), url: $('#url'), go: $('#go'), paste: $('#paste'), models: $('#models'), file: $('#file'), proxy: $('#proxy'),
-  deviceHint: $('#device-hint'), modelNote: $('#model-note'), draft: $('#draft'), stepTranscribe: $('#step-transcribe'),
+  deviceHint: $('#device-hint'), modelNote: $('#model-note'), refineBar: $('#refine-bar'), refineModel: $('#refine-model'), refineAll: $('#refine-all'), selPill: $('#sel-pill'), selModel: $('#sel-model'), stepTranscribe: $('#step-transcribe'),
   settings: $('#settings'), settingsToggle: $('#settings-toggle'), settingsSummary: $('#settings-summary'),
   episodesCard: $('#episodes-card'), feedTitle: $('#feed-title'), feedCount: $('#feed-count'), feedArt: $('#feed-art'),
   episodesNote: $('#episodes-note'), episodes: $('#episodes'), filter: $('#episode-filter'),
@@ -293,6 +293,7 @@ function updateMediaSession() {
 
 function setBusy(busy) {
   if (busy) startKeepAlive(); else stopKeepAlive();
+  if (busy) els.refineBar.classList.add('hidden');
   state.busy = busy;
   window.__transcriberBusy = busy; // coi-sw.js never reloads the page while this is set
   document.body.classList.toggle('busy', busy);
@@ -893,7 +894,7 @@ const SESSION_OVERRIDE = queryJson('session');
 // audio the same way).
 const STAGE = { single: 'Transcribing', draft: 'Sketching', refine: 'Refining' };
 
-async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), pass = 'single' } = {}) {
+async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), pass = 'single', toSec = Infinity } = {}) {
   const worker = getWorker();
   const id = ++state.jobSeq;
   const model = modelFor(modelKey, language());
@@ -1007,13 +1008,19 @@ async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), 
     // more than MAX_AHEAD_SECONDS ahead of the worker, so memory stays flat.
     let pieces = 0;
     let cursor = fromSec;
-    for await (const piece of decodePieces(blob, (t) => { total = t; wave.setTotal(t); }, fromSec)) {
+    for await (let piece of decodePieces(blob, (t) => { total = t; wave.setTotal(t); }, fromSec)) {
       if (!pieces++ && !fromSec && piece.length < SAMPLE_RATE) throw new UserError('That audio is empty or too short to transcribe.');
+      let last = false;
+      if (cursor + piece.length / SAMPLE_RATE >= toSec) {
+        piece = piece.slice(0, Math.max(0, Math.round((toSec - cursor) * SAMPLE_RATE)));
+        last = true;
+      }
       wave.addPiece(cursor, piece);
       cursor += piece.length / SAMPLE_RATE;
       buffered += piece.length / SAMPLE_RATE;
       worker.postMessage({ type: 'audio', id, samples: piece }, [piece.buffer]);
       while (buffered > MAX_AHEAD_SECONDS) await Promise.race([new Promise((r) => { wake = r; }), finished]);
+      if (last) break;
     }
     worker.postMessage({ type: 'audio', id, samples: new Float32Array(0), final: true });
     await finished;
@@ -1096,34 +1103,40 @@ function addSegment(seg, { fresh = true, into = null } = {}) {
 // The better model's text for one window replaces the sketch in place. Paragraphs are
 // rebuilt once at the end, since better text can move sentence boundaries.
 function refineSegment(m) {
-  const i = state.segments.findIndex((s) => Math.abs(s.start - m.start) < 0.05);
   const text = (m.text || '').trim();
-  if (i < 0) {
-    if (text) {
-      state.segments.push({ start: m.start, end: m.end, text });
-      state.segments.sort((a, b) => a.start - b.start);
-      rebuildTranscript(); // keeps spans and segments lined up for the windows still to come
+  const i = state.segments.findIndex((s) => Math.abs(s.start - m.start) < 0.05 && Math.abs(s.end - m.end) < 0.05);
+  const span = state.segEls[i];
+  if (i >= 0 && span) {
+    state.segments[i] = { start: m.start, end: m.end, text };
+    if (text !== span.textContent.trim()) {
+      span.textContent = text;
+      span.classList.remove('fresh');
+      void span.offsetWidth;
+      span.classList.add('fresh');
     }
+    span.classList.remove('draft', 'refining');
+    if (!text) state.needsRebuild = true;
     return;
   }
-  state.segments[i] = { start: m.start, end: m.end, text };
-  const span = state.segEls[i];
-  if (!span) { state.needsRebuild = true; return; }
-  if (text !== span.textContent.trim()) {
-    span.textContent = text;
-    span.classList.remove('fresh');
-    void span.offsetWidth;
-    span.classList.add('fresh');
-  }
-  span.classList.remove('draft');
-  if (!text) state.needsRebuild = true;
+  // The window doesn't line up with an old one: replace whatever it overlaps.
+  const keep = state.segments.filter((s) => s.end <= m.start + 0.05 || s.start >= m.end - 0.05);
+  if (text) keep.push({ start: m.start, end: m.end, text });
+  keep.sort((a, b) => a.start - b.start);
+  state.segments = keep;
+  rebuildTranscript();
 }
 
 function rebuildTranscript() {
   const y = window.scrollY;
+  const range = state.refineRange;
   const segs = state.segments.filter((s) => s.text && s.text.trim());
   restoreTranscript(segs);
+  if (range) markRefining(range.from, range.to, range.done);
   window.scrollTo(0, y);
+}
+
+function markRefining(from, to, done = from) {
+  state.segments.forEach((s, i) => state.segEls[i]?.classList.toggle('refining', s.start >= done - 0.05 && s.start < to - 0.05 && s.start >= from - 0.05));
 }
 
 function liveAnchor() {
@@ -1299,6 +1312,7 @@ async function refreshPlayable() {
 
 function setPlayable(on) {
   state.playable = on;
+  updateRefineBar();
   els.play.disabled = !on;
   els.dockPlay.classList.toggle('hidden', !on);
   els.miniPlay.classList.toggle('hidden', !on);
@@ -1534,6 +1548,8 @@ async function openEntry(entry) {
   clearError();
   releaseAudio();
   state.source = { title: entry.title, show: entry.show, art: entry.art, url: entry.source?.url, fileId: entry.source?.fileId, key: entry.key };
+  state.entryId = entry.id;
+  state.transcriptModel = entry.refinedWith || entry.model;
   state.sourceFile = null;
   state.audioKey = entry.key;
   beginSession(state.source);
@@ -1691,7 +1707,7 @@ async function run(getSource, resume = null) {
 
     const fromSec = resume?.doneSec || 0;
     const modelKey = resume?.model || selectedModel();
-    const drafting = resume ? !!resume.plan && resume.plan === 'draft' : els.draft.checked && modelKey !== 'tiny';
+    const drafting = !!resume && resume.plan === 'draft'; // older saved jobs only; refining is now on request
     let phase = resume?.phase || (drafting ? 'draft' : 'single');
     showSteps(drafting);
     saveJob({
@@ -1778,7 +1794,11 @@ async function finishRun() {
     key: job.key,
     source: { url: job.source?.url, fileId: job.source?.fileId },
   } : null;
-  if (entry) await saveEntry(entry);
+  if (entry) {
+    await saveEntry(entry);
+    state.entryId = entry.id;
+    state.transcriptModel = entry.model;
+  }
   wave.setDone(total);
   wave.setFinished(true);
   setStep('done');
@@ -1797,10 +1817,141 @@ async function finishRun() {
   toast(state.segments.length ? `Done: ${fmtNum(words)} words` : 'No speech found');
 }
 
+/* ---------- refine: a bigger model redoes the whole transcript or a chosen passage ---------- */
+
+const MODEL_ORDER = ['tiny', 'base', 'small', 'turbo'];
+
+function fillRefineModels() {
+  const lang = language();
+  const used = MODEL_ORDER.indexOf(state.transcriptModel);
+  const keep = els.refineModel.value;
+  els.refineModel.replaceChildren(...MODEL_ORDER.map((k) => {
+    const o = el('option', '', `${k === 'turbo' ? 'Large' : MODELS[k].name}${modelFor(k, lang).tuned ? ' (NB)' : ''}`);
+    o.value = k;
+    return o;
+  }));
+  const better = MODEL_ORDER.find((k, i) => i > used && (k !== 'turbo' || state.gpu.available || used >= 2)) || 'small';
+  els.refineModel.value = keep && keep !== state.transcriptModel ? keep : better;
+  els.selModel.textContent = `with ${els.refineModel.selectedOptions[0]?.textContent || ''}`;
+}
+
+function updateRefineBar() {
+  const show = !state.busy && state.playable && state.segments.length > 0 && !els.progressCard.classList.contains('hidden');
+  els.refineBar.classList.toggle('hidden', !show);
+  if (show) fillRefineModels();
+}
+
+async function refineAudio() {
+  if (state.sourceFile) return state.sourceFile;
+  const cached = state.audioKey ? await cachedAudio(state.audioKey) : null;
+  if (cached) return cached;
+  if (state.source?.url) return downloadAudio(state.source.url, state.audioKey || audioKey(state.source.url));
+  return null;
+}
+
+async function refine({ from = 0, to = Infinity } = {}) {
+  if (state.busy || !state.segments.length) return;
+  const modelKey = els.refineModel.value || 'small';
+  const ctl = new AbortController();
+  state.abort = ctl;
+  const current = () => state.abort === ctl && !ctl.signal.aborted;
+  clearError();
+  hideSelPill();
+  window.getSelection()?.removeAllRanges();
+  state.lastAttempt = () => refine({ from, to });
+  state.runStartedAt = performance.now();
+  setBusy(true);
+  const whole = from <= 0 && to === Infinity;
+  state.refineRange = { from, to, done: from };
+  markRefining(from, to);
+  wave.setFinished(false);
+  wave.setDraftDone(wave.total);
+  wave.setDone(from);
+  try {
+    progress('Refining', null, whole ? 'The whole transcript' : `${fmtTime(from)} to ${fmtTime(Math.min(to, wave.total))}`);
+    const blob = await refineAudio();
+    if (!current()) return;
+    if (!blob) throw new UserError('The audio for this transcript is no longer stored in this browser, and there is no link to fetch it again.', { retry: false });
+    await transcribeAudio(blob, from, { modelKey, pass: 'refine', toSec: to });
+    if (!current()) return;
+    state.refineRange = null;
+    rebuildTranscript();
+    wave.setDone(wave.total);
+    wave.setFinished(true);
+    const words = wordCount(state.segments);
+    if (state.entryId) {
+      const entry = await getEntry(state.entryId);
+      if (entry) await saveEntry({ ...entry, segments: state.segments, words, refinedWith: whole ? modelKey : entry.refinedWith });
+    }
+    if (whole) state.transcriptModel = modelKey;
+    if (IS_MOBILE) killWorker();
+    setBusy(false);
+    setStep('done');
+    progress('Done', 1, `Refined ${whole ? 'everything' : 'the passage'} with ${MODELS[modelKey].name === 'Large v3 Turbo' ? 'Large' : MODELS[modelKey].name} in ${fmtSpan((performance.now() - state.runStartedAt) / 1000)}`,
+      [{ v: fmtTime(wave.total), l: 'audio' }, { v: fmtNum(words), l: 'words' }]);
+    updateRefineBar();
+    toast(whole ? 'Transcript refined' : 'Passage refined');
+  } catch (err) {
+    if (!current()) return;
+    killWorker();
+    state.refineRange = null;
+    rebuildTranscript();
+    wave.setFinished(true);
+    setBusy(false);
+    progress('Stopped', null, '');
+    showError(err instanceof UserError ? err.message : `Refining failed: ${err.message || err}`, "Couldn't refine", { retry: err.retry !== false });
+    updateRefineBar();
+  }
+}
+
+// Select text in the transcript to refine just that passage.
+function selectedWindows() {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+  const range = sel.getRangeAt(0);
+  if (!els.transcript.contains(range.commonAncestorContainer)) return null;
+  const hit = state.segEls.map((span, i) => (range.intersectsNode(span) ? i : -1)).filter((i) => i >= 0);
+  if (!hit.length) return null;
+  return { from: state.segments[hit[0]].start, to: state.segments[hit[hit.length - 1]].end };
+}
+
+let pillTimer = 0;
+function hideSelPill() {
+  clearTimeout(pillTimer);
+  els.selPill.classList.add('hidden');
+}
+
+// On phones, tapping the pill collapses the selection before the tap lands, so the last
+// selected passage is remembered and the pill stays up a moment longer.
+document.addEventListener('selectionchange', () => {
+  if (state.busy || !state.playable) return hideSelPill();
+  const w = selectedWindows();
+  if (!w) {
+    clearTimeout(pillTimer);
+    pillTimer = setTimeout(() => els.selPill.classList.add('hidden'), 1500);
+    return;
+  }
+  clearTimeout(pillTimer);
+  state.lastSel = w;
+  fillRefineModels();
+  els.selPill.classList.remove('hidden');
+});
+
 function cancel() {
+  const refining = !!state.refineRange;
   state.abort?.abort();
   state.rejectRun?.(cancelled());
   killWorker();
+  if (refining) {
+    state.refineRange = null;
+    rebuildTranscript();
+    wave.setFinished(true);
+    setBusy(false);
+    els.steps.classList.add('stopped');
+    progress('Cancelled', null, 'Refining stopped. What was refined so far is kept.');
+    updateRefineBar();
+    return;
+  }
   clearJob();
   setBusy(false);
   els.steps.classList.add('stopped');
@@ -1923,7 +2074,6 @@ function updateModelHint() {
   if (IS_MOBILE && mb > 300) parts.push('This size may be too big for a phone.');
   els.modelNote.textContent = parts.join(' ');
   els.deviceHint.textContent = '';
-  els.draft.closest('.check').classList.toggle('hidden', key === 'tiny');
 }
 
 // Returning visitors (a saved choice or transcripts in the library) see settings folded into
@@ -1997,6 +2147,9 @@ function wireEvents() {
   }
 
   els.cancel.addEventListener('click', cancel);
+  els.refineAll.addEventListener('click', () => refine());
+  $('#refine-sel').addEventListener('click', () => { const w = selectedWindows() || state.lastSel; if (w) refine(w); });
+  els.refineModel.addEventListener('change', () => { els.selModel.textContent = `with ${els.refineModel.selectedOptions[0]?.textContent || ''}`; });
   els.sessionClose.addEventListener('click', closeSession);
   $('#new-transcript').addEventListener('click', () => { closeSession(); setTimeout(() => els.url.focus({ preventScroll: true }), 400); });
   document.querySelector('.brand').addEventListener('click', (e) => {

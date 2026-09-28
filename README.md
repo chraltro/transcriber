@@ -53,6 +53,7 @@ Some hosts block browsers entirely (for example Anchor, now Spotify for Creators
 - The transcript comes in paragraphs. Whisper works in 30 second windows, and where a window was cut mid-sentence the pieces are joined again, so copied text reads naturally.
 - Click any passage to hear it from there: the playing passage is highlighted and followed. Playback uses the copy that was transcribed, so dynamically inserted ads can't shift it out of sync.
 - The episode's waveform draws itself while the audio is decoded and lights up as it is transcribed. Afterwards it is a scrubber.
+- Refine on request: when a transcript is done (or reopened from the library), pick a bigger model and refine the whole thing, or select a badly transcribed passage and refine just that. The better text replaces the old window by window, and the library copy is updated.
 - Search inside the transcript (press `/`), toggle timestamps, copy, or export as `.txt`, `.srt` or `.vtt`. On phones, Save opens the share sheet.
 - Finished transcripts are kept in this browser (IndexedDB) under Recent transcripts, and nothing is uploaded anywhere.
 - If the page reloads before a transcript finishes (usually the browser running out of memory), it offers to resume from where it stopped without downloading the episode again.

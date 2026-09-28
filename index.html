@@ -100,7 +100,6 @@
           <fieldset class="segmented models" id="models">
             <legend>Model</legend>
           </fieldset>
-          <label class="check"><input type="checkbox" id="draft" checked><span>Quick draft first, then refine</span></label>
           <p class="hint" id="model-note"></p>
           <p class="hint" id="device-hint"></p>
           <details class="advanced">
@@ -188,6 +187,11 @@
         </div>
         <div class="stats" id="stats"></div>
         <button type="button" class="btn ghost small" id="cancel">Cancel</button>
+        <div class="refine hidden" id="refine-bar">
+          <label class="sr-only" for="refine-model">Model to refine with</label>
+          <select id="refine-model"></select>
+          <button type="button" class="btn ghost small" id="refine-all">Refine all</button>
+        </div>
       </div>
     </section>
 
@@ -232,6 +236,7 @@
     </section>
   </main>
 
+  <div class="pill sel-pill hidden" id="sel-pill"><button type="button" id="refine-sel">Refine this part</button><span id="sel-model"></span></div>
   <button type="button" class="pill jump hidden" id="jump-live"><svg class="icon"><use href="#i-down"/></svg><span>Jump to live</span></button>
 
   <nav class="dock hidden" id="dock" aria-label="Transcript actions">
