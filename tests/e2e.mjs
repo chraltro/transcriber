@@ -69,8 +69,10 @@ const CASES = [
   // WebKit needed 6 to 7 GB here before the app switched to the plain ONNX Runtime build.
   // The WebKit test browser itself idles at about 450 MB, hence the higher limit.
   // WebGPU in software. SwiftShader has no fp16, so this covers the fp32 encoder + 4-bit decoder path.
+  // Its emulated GPU memory lives in the tab and swings between about 1 and 1.3 GB on the same
+  // code from run to run, so this case has its own ceiling.
   // One segment proves the GPU path end to end; a software GPU is far too slow to wait for more.
-  { name: 'WebGPU (SwiftShader)', gpu: true, model: 'tiny', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 1, title: 'Xi’s Just Not That Into You' },
+  { name: 'WebGPU (SwiftShader)', gpu: true, model: 'tiny', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 1, memoryLimitMB: 1500, title: 'Xi’s Just Not That Into You' },
   { name: 'Firefox', engine: 'firefox', model: 'tiny', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 3, title: 'Xi’s Just Not That Into You' },
   { name: 'iPhone (WebKit)', engine: 'webkit', model: 'tiny', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 8, memoryLimitMB: 2000, title: 'Xi’s Just Not That Into You' },
   { name: 'Pocket Casts short link', url: 'https://pca.st/okm7xj7g', lang: 'english', resolveOnly: true, title: 'Xi’s Just Not That Into You' },
