@@ -48,3 +48,8 @@ test('plain text uses the paragraphs, optionally with timestamps', () => {
   assert.equal(plainText(segs, { timestamps: true }), '[0:00] It went to the end of the line. Done.\n\n[1:05] New topic.');
   assert.equal(wordCount(segs), 11);
 });
+
+test('a question mark or exclamation Whisper puts at a mid-sentence cut is dropped too', () => {
+  assert.equal(tidy('the strongest piece of evidence today?', 'that you are right.'), 'the strongest piece of evidence today');
+  assert.equal(tidy('Is it?', 'Yes.'), 'Is it?');
+});

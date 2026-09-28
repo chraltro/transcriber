@@ -103,6 +103,13 @@
           <p class="hint" id="model-note"></p>
           <p class="hint" id="device-hint"></p>
           <details class="advanced">
+            <summary>Names to watch for</summary>
+            <label class="field">
+              <span>One per line. Near-misses in the transcript are corrected, and the model is told to expect them. Write <code>wrong = Right</code> to force a fix. Names from the show notes are added on their own.</span>
+              <textarea id="glossary" rows="4" spellcheck="false" placeholder="Arvind Narayanan&#10;Hugging Face&#10;foom = FOOM"></textarea>
+            </label>
+          </details>
+          <details class="advanced">
             <summary>CORS proxy</summary>
             <label class="field">
               <span>For hosts that block browsers. Use <code>{url}</code> as the placeholder, or a prefix the link is appended to.</span>

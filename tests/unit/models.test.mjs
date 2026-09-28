@@ -13,11 +13,12 @@ test('CPU uses 8-bit weights; GPU picks by fp16 support', () => {
 test('Norwegian switches tiny/base/small to NB-Whisper, other languages keep stock Whisper', () => {
   assert.equal(modelFor('base', 'norwegian').id, 'onnx-community/nb-whisper-base-ONNX');
   assert.equal(modelFor('tiny', 'norwegian').id, 'Xenova/nb-whisper-tiny-beta');
-  assert.equal(modelFor('base', 'danish').id, 'onnx-community/whisper-base');
   assert.equal(modelFor('turbo', 'norwegian').id, MODELS.turbo.id);
   assert.equal(modelFor('small', 'english').note, 'Good balance');
   assert.equal(modelFor('nope', 'english'), null);
-  assert.equal(ALL_MODEL_IDS.length, 7);
+  assert.equal(ALL_MODEL_IDS.length, 10);
+  assert.equal(modelFor('base', 'english').id, 'onnx-community/whisper-base.en');
+  assert.equal(modelFor('base', 'danish').id, 'onnx-community/whisper-base');
   // The GPU and CPU file choices must exist for the NB models too (checked online below).
   assert.deepEqual(modelFiles('onnx-community/nb-whisper-small-ONNX', 'webgpu', true), ['onnx/encoder_model_fp16.onnx', 'onnx/decoder_model_merged_q4.onnx']);
 });

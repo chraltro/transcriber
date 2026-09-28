@@ -8,6 +8,8 @@ import { continues, tidy, plainText, wordCount, MAX_PARAGRAPH_WORDS } from './li
 import { id3Length, parseId3 } from './lib/id3.js';
 import { encodeLevels, decodeLevels } from './lib/levels.js';
 import { Waveform } from './ui/waveform.js';
+import { extractTerms } from './lib/context.js';
+import { correctText, parseGlossary } from './lib/glossary.js';
 import { listEntries, getEntry, saveEntry, deleteEntry } from './ui/library.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -16,7 +18,7 @@ const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platf
 const IS_MOBILE = IS_IOS || /Android/i.test(navigator.userAgent);
 
 const els = {
-  form: $('#url-form'), url: $('#url'), go: $('#go'), paste: $('#paste'), models: $('#models'), file: $('#file'), proxy: $('#proxy'),
+  form: $('#url-form'), url: $('#url'), go: $('#go'), paste: $('#paste'), models: $('#models'), file: $('#file'), proxy: $('#proxy'), glossary: $('#glossary'),
   deviceHint: $('#device-hint'), modelNote: $('#model-note'), refineBar: $('#refine-bar'), refineModel: $('#refine-model'), refineAll: $('#refine-all'), selPill: $('#sel-pill'), selModel: $('#sel-model'), stepTranscribe: $('#step-transcribe'),
   settings: $('#settings'), settingsToggle: $('#settings-toggle'), settingsSummary: $('#settings-summary'),
   episodesCard: $('#episodes-card'), feedTitle: $('#feed-title'), feedCount: $('#feed-count'), feedArt: $('#feed-art'),
@@ -239,6 +241,38 @@ function showError(msg, title = "That didn't work", { retry = true } = {}) {
 
 function clearError() {
   els.errorCard.classList.add('hidden');
+}
+
+/* ---------- names and terms ----------
+ * From the show notes and the reader's own glossary: they go into Whisper's prompt, and
+ * near-misses in the text are corrected. */
+function userGlossary() {
+  return parseGlossary(store.get('glossary', ''));
+}
+
+function vocabulary(source) {
+  const user = userGlossary();
+  const auto = extractTerms(source?.notes || '', source?.title || '', source?.show || '');
+  return { terms: [...new Set([...user.terms, ...auto])].slice(0, 50), replace: user.replace };
+}
+
+// A new glossary also fixes the transcript on screen, not just the next one.
+async function applyGlossary() {
+  store.set('glossary', els.glossary.value.trim());
+  state.vocab = vocabulary(state.source);
+  if (state.busy || !state.segments.length) return;
+  let changed = 0;
+  for (const s of state.segments) {
+    const fixed = correctText(s.text, state.vocab);
+    if (fixed !== s.text) { s.text = fixed; changed++; }
+  }
+  if (!changed) return;
+  rebuildTranscript();
+  if (state.entryId) {
+    const entry = await getEntry(state.entryId);
+    if (entry) await saveEntry({ ...entry, segments: state.segments });
+  }
+  toast(changed === 1 ? '1 passage corrected' : `${changed} passages corrected`);
 }
 
 /* ---------- keep running in the background (phones) ----------
@@ -492,7 +526,7 @@ async function resolveFeed(url, preferTitle) {
   if (!feed?.episodes.length) throw new UserError('Found the podcast feed, but it has no playable episodes.');
   if (preferTitle) {
     const hit = bestTitleMatch(feed.episodes, preferTitle);
-    if (hit) return { kind: 'audio', url: hit.url, title: hit.title, show: feed.title, art: hit.art || feed.image };
+    if (hit) return { kind: 'audio', url: hit.url, title: hit.title, show: feed.title, art: hit.art || feed.image, notes: hit.notes };
   }
   return { kind: 'list', ...feed };
 }
@@ -514,6 +548,7 @@ async function itunesLookupEpisodes(showId) {
           id: String(e.trackId), title: e.trackName, url: e.episodeUrl, date: e.releaseDate,
           duration: e.trackTimeMillis ? fmtTime(e.trackTimeMillis / 1000) : '',
           art: e.artworkUrl600 || e.artworkUrl160 || art, show: e.collectionName || show?.collectionName || '',
+          notes: e.description || e.shortDescription || '',
         }));
       if (show || episodes.length) return { show, episodes, art };
     } catch {}
@@ -543,7 +578,7 @@ async function resolveApple(u) {
   const { show, episodes, art } = await itunesLookupEpisodes(showId);
   if (episodeId) {
     const ep = episodes.find((e) => e.id === episodeId);
-    if (ep) return { kind: 'audio', url: ep.url, title: ep.title, show: ep.show, art: ep.art };
+    if (ep) return { kind: 'audio', url: ep.url, title: ep.title, show: ep.show, art: ep.art, notes: ep.notes };
   }
   if (show?.feedUrl) {
     try { return await resolveFeed(show.feedUrl); } catch (err) { if (err.name === 'AbortError') throw err; }
@@ -559,7 +594,7 @@ async function findByName(showName, episodeTitle) {
   if (episodeTitle) {
     const eps = await itunesSearch(`${episodeTitle} ${showName || ''}`.trim(), 'podcastEpisode',
       (e) => e.episodeUrl && (!showName || sameShow(e.collectionName, showName)));
-    const hit = bestTitleMatch(eps.map((e) => ({ title: e.trackName, url: e.episodeUrl, show: e.collectionName, art: e.artworkUrl600 || e.artworkUrl160 })), episodeTitle);
+    const hit = bestTitleMatch(eps.map((e) => ({ title: e.trackName, url: e.episodeUrl, show: e.collectionName, art: e.artworkUrl600 || e.artworkUrl160, notes: e.description || e.shortDescription })), episodeTitle);
     if (hit) return { kind: 'audio', ...hit };
   }
   if (!showName) return null;
@@ -570,7 +605,7 @@ async function findByName(showName, episodeTitle) {
   const { episodes, art } = await itunesLookupEpisodes(show.collectionId);
   if (episodeTitle) {
     const hit = bestTitleMatch(episodes, episodeTitle);
-    if (hit) return { kind: 'audio', url: hit.url, title: hit.title, show: hit.show, art: hit.art };
+    if (hit) return { kind: 'audio', url: hit.url, title: hit.title, show: hit.show, art: hit.art, notes: hit.notes };
   } else if (episodes.length) {
     return { kind: 'list', title: show.collectionName, image: art || show.artworkUrl600, episodes };
   }
@@ -609,14 +644,14 @@ async function resolveSpotify(u) {
     // automatically; otherwise the user picks from the closest matches.
     const eps = await itunesSearch(title, 'podcastEpisode', (e) => e.episodeUrl);
     const exact = eps.filter((e) => normTitle(e.trackName) === normTitle(title));
-    if (exact.length === 1) return { kind: 'audio', url: exact[0].episodeUrl, title: exact[0].trackName, show: exact[0].collectionName, art: exact[0].artworkUrl600 || exact[0].artworkUrl160 };
+    if (exact.length === 1) return { kind: 'audio', url: exact[0].episodeUrl, title: exact[0].trackName, show: exact[0].collectionName, art: exact[0].artworkUrl600 || exact[0].artworkUrl160, notes: exact[0].description };
     const words = new Set(normTitle(title).split(' '));
     const close = (exact.length ? exact : eps)
       .map((e) => ({ e, shared: normTitle(e.trackName).split(' ').filter((w) => words.has(w)).length }))
       .filter((x) => x.shared >= Math.min(2, words.size))
       .sort((a, b) => b.shared - a.shared)
       .slice(0, 10)
-      .map(({ e }) => ({ title: e.trackName, show: e.collectionName, url: e.episodeUrl, date: e.releaseDate, duration: e.trackTimeMillis ? fmtTime(e.trackTimeMillis / 1000) : '', art: e.artworkUrl600 || e.artworkUrl160 }));
+      .map(({ e }) => ({ title: e.trackName, show: e.collectionName, url: e.episodeUrl, date: e.releaseDate, duration: e.trackTimeMillis ? fmtTime(e.trackTimeMillis / 1000) : '', art: e.artworkUrl600 || e.artworkUrl160, notes: e.description }));
     if (close.length) return { kind: 'list', title: `Which episode is "${title}"?`, image: info.thumbnail_url || '', episodes: close };
     throw new UserError(
       `Couldn't find "${title}" in Apple's podcast directory. Spotify links don't say which show an episode belongs to, ` +
@@ -736,7 +771,7 @@ function renderEpisodes() {
     btn.addEventListener('click', () => {
       if (state.busy) return;
       els.episodesCard.classList.add('hidden');
-      run(() => Promise.resolve({ kind: 'audio', url: ep.url, title: ep.title, show: ep.show || feed.title, art: ep.art || feed.image }));
+      run(() => Promise.resolve({ kind: 'audio', url: ep.url, title: ep.title, show: ep.show || feed.title, art: ep.art || feed.image, notes: ep.notes }));
     });
     li.append(btn);
     items.push(li);
@@ -956,6 +991,7 @@ async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), 
         break;
       case 'segment': {
         buffered = m.buffered;
+        m.text = correctText(m.text, state.vocab);
         if (pass === 'refine') {
           refineSegment(m);
           wave.setDone(m.end);
@@ -1000,6 +1036,8 @@ async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), 
       device: state.gpu.available ? 'webgpu' : 'wasm',
       hasF16: state.gpu.f16,
       dtype: DTYPE_OVERRIDE,
+      terms: (state.vocab?.terms || []).slice(0, 40),
+      previous: [...state.segments].reverse().find((x) => x.start < fromSec && x.text)?.text || '',
       sessionOptions: SESSION_OVERRIDE,
       offsetSec: fromSec,
     });
@@ -1547,7 +1585,8 @@ async function openEntry(entry) {
   if (state.busy) return;
   clearError();
   releaseAudio();
-  state.source = { title: entry.title, show: entry.show, art: entry.art, url: entry.source?.url, fileId: entry.source?.fileId, key: entry.key };
+  state.source = { title: entry.title, show: entry.show, art: entry.art, url: entry.source?.url, fileId: entry.source?.fileId, key: entry.key, notes: entry.notes || '' };
+  state.vocab = vocabulary(state.source);
   state.entryId = entry.id;
   state.transcriptModel = entry.refinedWith || entry.model;
   state.sourceFile = null;
@@ -1681,6 +1720,7 @@ async function run(getSource, resume = null) {
     }
     const key = audioKey(source.url || source.fileId);
     state.source = { ...source, key };
+    state.vocab = vocabulary(state.source);
     state.audioKey = key;
     state.sourceFile = source.file || null;
     showSessionMeta(state.source);
@@ -1712,7 +1752,7 @@ async function run(getSource, resume = null) {
     showSteps(drafting);
     saveJob({
       id: resume?.id || newId(),
-      source: { kind: 'audio', title: state.source.title, show: state.source.show, art: state.source.art, url: source.url, fileId: source.fileId },
+      source: { kind: 'audio', title: state.source.title, show: state.source.show, art: state.source.art, url: source.url, fileId: source.fileId, notes: (source.notes || '').slice(0, 4000) },
       key,
       title: state.source.title,
       lang: language(),
@@ -1793,6 +1833,7 @@ async function finishRun() {
     levels: encodeLevels(wave.levels),
     key: job.key,
     source: { url: job.source?.url, fileId: job.source?.fileId },
+    notes: job.source?.notes || '',
   } : null;
   if (entry) {
     await saveEntry(entry);
@@ -1966,6 +2007,7 @@ function cancel() {
 
 function offerResume(job, afterReload = true) {
   state.source = { ...job.source, key: job.key };
+  state.vocab = vocabulary(state.source);
   state.audioKey = job.key;
   artInto(els.resumeArt, job.source);
   restoreTranscript(job.segments);
@@ -2098,6 +2140,7 @@ function wireEvents() {
   document.querySelectorAll('input[name=lang]').forEach((r) => r.addEventListener('change', () => { store.set('lang', language()); refreshModels(); }));
   els.models.addEventListener('change', () => { store.set('model', selectedModel()); updateModelHint(); updateSettingsSummary(); });
   els.proxy.addEventListener('change', () => store.set('proxy', els.proxy.value.trim()));
+  els.glossary.addEventListener('change', applyGlossary);
   els.settingsToggle.addEventListener('click', () => {
     const open = els.settings.classList.toggle('open');
     els.settingsToggle.setAttribute('aria-expanded', String(open));
@@ -2243,6 +2286,7 @@ async function init() {
     if (radio) radio.checked = true;
   }
   els.proxy.value = store.get('proxy', '');
+  els.glossary.value = store.get('glossary', '');
   try {
     state.canShareFiles = !!navigator.canShare?.({ files: [new File(['x'], 'x.txt', { type: 'text/plain' })] });
   } catch {}

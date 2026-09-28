@@ -68,3 +68,12 @@ test('phrase loops inside a sentence collapse to two copies', () => {
   assert.equal(collapseLoops('Ha ha ha.'), 'Ha ha');
   assert.equal(collapseLoops('1 2 3 4 5'), '1 2 3 4 5');
 });
+
+test('doubled short words are stutters; "that that" and "had had" can be speech', async () => {
+  const { collapseStutter } = await import('../../lib/text.js');
+  assert.equal(collapseStutter('and the the argument is'), 'and the argument is');
+  assert.equal(collapseStutter('I I think so'), 'I think so');
+  assert.equal(collapseStutter('det det er'), 'det er');
+  assert.equal(collapseStutter('he said that that was fine'), 'he said that that was fine');
+  assert.equal(collapseStutter('there there'), 'there there');
+});

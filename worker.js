@@ -2,6 +2,8 @@ import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transfo
 
 import { dtypeFor } from './lib/models.js';
 import { StreamingTranscriber } from './lib/stream.js';
+import { transcribeWindow } from './lib/prompted.js';
+import { buildPrompt } from './lib/context.js';
 
 env.allowLocalModels = false;
 
@@ -22,12 +24,15 @@ function usePlainWasmBuild() {
 
 const post = (msg) => self.postMessage(msg);
 
+// Names and terms from the show notes, sent with each job; with the previous window's words
+// they make up the prompt Whisper sees before every window.
+let terms = [];
+let promptState = {};
+
 const stream = new StreamingTranscriber({
   post,
-  transcribe: async (samples, language) => {
-    const result = await asr(samples, { language, task: 'transcribe', return_timestamps: false });
-    return result.text;
-  },
+  transcribe: (samples, language, { previous } = {}) =>
+    transcribeWindow(asr, samples, { language, prompt: buildPrompt(terms, previous), state: promptState }),
 });
 
 class GpuFailed extends Error {}
@@ -56,6 +61,7 @@ async function load(model, device, hasF16, dtypeOverride, sessionOptions) {
     throw err;
   }
   loadedKey = key;
+  promptState = {};
 }
 
 // Anything that escapes (a library callback, a rejected promise nobody awaited) is reported
@@ -70,6 +76,7 @@ self.onmessage = async ({ data }) => {
   if (data.type === 'start') currentId = id;
   try {
     if (data.type === 'start') {
+      terms = data.terms || [];
       stream.start(id, data);
       post({ type: 'status', id, text: 'Loading speech model' });
       await load(data.model, data.device, data.hasF16, data.dtype, data.sessionOptions);
