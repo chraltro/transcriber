@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model: ['onnx-community/whisper-small', 'onnx-community/whisper-base', 'onnx-community/whisper-medium', 'Xenova/whisper-medium', 'varsan-g/hviske-v2-onnx']
+        model: ['onnx-community/whisper-small', 'onnx-community/whisper-base', 'PierreMesure/roest-315m-onnx', 'syvai/hviske-v5-tiny', 'hlevring/parakeet-rnnt-110m-da-dk-onnx', 'varsan-g/hviske-v2-onnx', 'Xenova/whisper-medium']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

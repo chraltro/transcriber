@@ -34,16 +34,31 @@ async function search() {
   for (const r of rows) console.log(`- ${r.id}  (${r.downloads} downloads)  [${r.tags}]\n    ${r.onnx}`);
 }
 
-async function danishEpisodeUrl() {
-  for (const term of ['Genstart', 'Tiden', 'Millionærklubben']) {
+// Danish podcasts to try, in order; some hosts refuse downloads from data centres.
+async function danishEpisodes() {
+  const out = [];
+  for (const term of ['Genstart', 'Tiden', 'Millionærklubben', 'Den sorte boks', 'Politiken', 'Information']) {
     try {
       const s = await (await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=podcast&limit=1&country=dk`)).json();
       const l = await (await fetch(`https://itunes.apple.com/lookup?id=${s.results[0].collectionId}&entity=podcastEpisode&limit=3&country=dk`)).json();
       const ep = l.results.find((r) => r.wrapperType === 'podcastEpisode');
-      if (ep?.episodeUrl) return { title: `${s.results[0].collectionName}: ${ep.trackName}`, url: ep.episodeUrl };
+      if (ep?.episodeUrl) out.push({ title: `${s.results[0].collectionName}: ${ep.trackName}`, url: ep.episodeUrl });
     } catch {}
   }
-  throw new Error('No Danish episode found');
+  return out;
+}
+
+function cutClip(eps) {
+  for (const ep of eps) {
+    try {
+      execSync(`curl -sSL --fail -A "Mozilla/5.0" -o episode.bin "${ep.url}"`, { stdio: 'pipe' });
+      execSync(`ffmpeg -loglevel error -y -ss 90 -t ${SECONDS} -i episode.bin -ac 1 -ar 16000 clip.wav`, { stdio: 'pipe' });
+      return ep;
+    } catch (e) {
+      console.log(`skipping ${ep.title}: ${String(e.stderr || e.message).split('\n')[0]}`);
+    }
+  }
+  throw new Error('No Danish episode could be downloaded');
 }
 
 function loadClip() {
@@ -56,7 +71,7 @@ async function transcribe(modelId, audio) {
   for (const dtype of ['q8', 'fp32']) {
     try {
       asr = await tf.pipeline('automatic-speech-recognition', modelId, { dtype });
-      console.log(`loaded ${modelId} (${dtype})`);
+      console.log(`loaded ${modelId} (${dtype}, ${asr.model.config.model_type})`);
       break;
     } catch (e) {
       console.log(`${modelId} ${dtype}: ${e.message.split('\n')[0]}`);
@@ -72,7 +87,10 @@ async function transcribe(modelId, audio) {
         if (m.type === 'segment') segments.push({ start: m.start, end: m.end, text: m.text });
         if (m.type === 'done') resolve();
       },
-      transcribe: (samples, language, { previous } = {}) => transcribeWindow(asr, samples, { language, prompt: previous || '', state: {} }),
+      // Whisper goes through the app's prompted path; other architectures through the pipeline.
+      transcribe: asr.model.config.model_type === 'whisper'
+        ? (samples, language, { previous } = {}) => transcribeWindow(asr, samples, { language, prompt: previous || '', state: {} })
+        : async (samples) => (await asr(samples, asr.model.config.model_type === 'cohere_asr' ? { language: 'da' } : {})).text.trim(),
     });
     stream.start(1, { language: 'danish' });
     stream.push(1, audio, true).then(() => stream.ready(1)).catch(reject);
@@ -96,9 +114,8 @@ function wer(hyp, ref) {
 if (MODE === 'search') {
   await search();
 } else if (MODE === 'ref') {
-  const ep = await danishEpisodeUrl();
+  const ep = cutClip(await danishEpisodes());
   console.log(ep.title);
-  execSync(`ffmpeg -loglevel error -ss 90 -t ${SECONDS} -i "${ep.url}" -ac 1 -ar 16000 clip.wav`);
   const audio = loadClip();
   const { segments, secs } = await transcribe('onnx-community/whisper-large-v3-turbo', audio);
   writeFileSync('ref.json', JSON.stringify({ title: ep.title, segments }));
