@@ -142,6 +142,7 @@ const promptTerms = cfg.prompt === 'user' ? withUser.terms : cfg.prompt === 'aut
 const segments = [];
 const parts = [];
 let voices = 0;
+let voiceList = [];
 const t0 = Date.now();
 await new Promise((resolve, reject) => {
   const stream = new StreamingTranscriber({
@@ -150,7 +151,7 @@ await new Promise((resolve, reject) => {
       if (m.type === 'segment') {
         segments.push({ start: m.start, end: m.end, text: m.text });
         parts.push(...(m.parts || []));
-        if (m.voices) voices = m.voices.length;
+        if (m.voices) { voices = m.voices.length; voiceList = m.voices; }
         if (segments.length % 20 === 0) console.log(`  ${Math.round(m.end)} s of ${Math.round(seconds)}`);
       }
       if (m.type === 'speakers-off') console.log(`SPEAKERS OFF: ${m.message}`);
@@ -216,6 +217,10 @@ if (CONFIG === 'T') {
   const counts = {};
   for (const p of parts) if (p.speaker != null) counts[p.speaker] = (counts[p.speaker] || 0) + (p.end - p.start);
   console.log(`\nSPEAKERS: ${voices} voices, diarization ${diarizeSec.toFixed(0)} s total (${(diarizeSec / (seconds / 60)).toFixed(1)} s per audio minute), names ${JSON.stringify(names)}`);
+  // How alike the voices are to each other: same-person pairs that were split show up high.
+  const dot = (a, b) => a.reduce((x, v, i) => x + v * b[i], 0);
+  console.log('voice similarity (weight in seconds):');
+  voiceList.forEach((v, i) => console.log(`  ${i} (${Math.round(v.n)} s): ${voiceList.map((w) => dot(v.c, w.c).toFixed(2)).join(' ')}`));
   console.log(`talk time: ${Object.entries(counts).map(([k, v]) => `${speakerName(k, names)} ${(v / 60).toFixed(1)} min`).join(', ')}`);
   let cur = null;
   const paras = [];
