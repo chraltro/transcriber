@@ -2,16 +2,12 @@ name: Accuracy lab
 on:
   push:
     branches: ['claude/**']
-    paths: ['tests/accuracy-lab.mjs', '.github/workflows/accuracy-lab.yml', 'lib/prompted.js', 'lib/context.js', 'lib/glossary.js']
+    paths: ['tests/accuracy-lab.mjs', '.github/workflows/accuracy-lab.yml', 'lib/prompted.js', 'lib/context.js', 'lib/glossary.js', 'lib/speakers.js', 'lib/diarize.js', 'lib/stream.js']
   workflow_dispatch:
 jobs:
-  lab:
+  ref:
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        config: [A, B, C, F]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,6 +15,31 @@ jobs:
           node-version: 22
       - run: sudo apt-get install -y ffmpeg >/dev/null
       - run: npm i --no-save @huggingface/transformers@4.3.0
+      - run: node tests/accuracy-lab.mjs
+        env:
+          CONFIG: REF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ref
+          path: ref.json
+  lab:
+    needs: ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [B, C, T, S]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sudo apt-get install -y ffmpeg >/dev/null
+      - run: npm i --no-save @huggingface/transformers@4.3.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: ref
       - run: node tests/accuracy-lab.mjs
         env:
           CONFIG: ${{ matrix.config }}

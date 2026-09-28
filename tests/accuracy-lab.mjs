@@ -1,23 +1,53 @@
 // English accuracy lab: one real episode (Plain English, "AI as a normal technology") through
-// the app's own streaming, prompting and correction code, in several configurations, scored
-// on the names and terms a reader flagged in the Base transcript.
-//   A  Base (multilingual), no prompt: the app before this change
-//   B  Base.en, no prompt
-//   C  Base.en with the prompt (show-note names + the previous window)
-//   D  C, then near-miss correction against the show-note names
-//   E  D, plus a short glossary a reader might type (correction only)
-//   F  Base.en with that glossary in the prompt too, then corrected: the app with a glossary
-// CONFIG picks which transcription to run (A, B, C or F); D and E are computed from C.
-import { pipeline } from '@huggingface/transformers';
+// the app's own streaming, prompting, timestamp, speaker and correction code, scored two ways:
+// on the names and terms a reader flagged in an early Base transcript, and by word error rate
+// against Large v3 Turbo on the first REF_MINUTES (the REF config writes that reference).
+//   A    Base (multilingual), no prompt: the app before the English models
+//   B    Base.en, no prompt
+//   C    Base.en with the prompt (show-note names + the previous window)
+//   T    C with timestamps and speaker labels: the app now
+//   S    Small.en, as T
+//   F    Base.en with a typed glossary in the prompt, then corrected
+// C also prints D (C corrected against show-note names) and E (C corrected with the glossary).
+import * as tf from '@huggingface/transformers';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { StreamingTranscriber } from '../lib/stream.js';
 import { transcribeWindow } from '../lib/prompted.js';
 import { buildPrompt, extractTerms, plainText } from '../lib/context.js';
 import { correctText, parseGlossary } from '../lib/glossary.js';
 import { dtypeFor } from '../lib/models.js';
+import { createDiarizer } from '../lib/diarize.js';
+import { guessNames, speakerName } from '../lib/speakers.js';
 
 const CONFIG = process.env.CONFIG || 'C';
-const MINUTES = Number(process.env.MINUTES || 40);
+const REF_MINUTES = Number(process.env.REF_MINUTES || 15);
+const MINUTES = CONFIG === 'REF' ? REF_MINUTES : Number(process.env.MINUTES || 40);
+const CONFIGS = {
+  REF: { model: 'onnx-community/whisper-large-v3-turbo' },
+  A: { model: 'onnx-community/whisper-base', pipelineOnly: true },
+  B: { model: 'onnx-community/whisper-base.en' },
+  C: { model: 'onnx-community/whisper-base.en', prompt: 'auto' },
+  T: { model: 'onnx-community/whisper-base.en', prompt: 'auto', timestamps: true, speakers: true },
+  S: { model: 'onnx-community/whisper-small.en', prompt: 'auto', timestamps: true },
+  F: { model: 'onnx-community/whisper-base.en', prompt: 'user' },
+};
+const cfg = CONFIGS[CONFIG];
+
+// Word error rate: word-level edit distance over the reference length, after lowercasing and
+// dropping punctuation, so only wording counts.
+const words = (t) => t.toLowerCase().replace(/[‘’]/g, "'").replace(/[-–—/]/g, ' ').replace(/[^\p{L}\p{N}' ]/gu, ' ').split(/\s+/).filter(Boolean);
+function wer(hyp, ref) {
+  const h = words(hyp);
+  const r = words(ref);
+  let prev = Array.from({ length: h.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= r.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= h.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (r[i - 1] === h[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return { errors: prev[h.length], words: r.length };
+}
 
 async function findEpisode() {
   const s = await (await fetch('https://itunes.apple.com/search?term=Plain+English+Derek+Thompson&entity=podcast&limit=5')).json();
@@ -98,45 +128,91 @@ const audio = decode(ep.url, MINUTES * 60);
 const seconds = audio.length / 16000;
 console.log(`audio: ${(seconds / 60).toFixed(1)} min`);
 
-const modelId = CONFIG === 'A' ? 'onnx-community/whisper-base' : 'onnx-community/whisper-base.en';
-const asr = await pipeline('automatic-speech-recognition', modelId, { dtype: dtypeFor(modelId, 'wasm') });
+const modelId = cfg.model;
+const asr = await tf.pipeline('automatic-speech-recognition', modelId, { dtype: dtypeFor(modelId, 'wasm') });
+const diarize = cfg.speakers ? await createDiarizer(tf) : null;
+let diarizeSec = 0;
+const timedDiarize = diarize && (async (samples) => { const t = Date.now(); try { return await diarize(samples); } finally { diarizeSec += (Date.now() - t) / 1000; } });
 const promptState = {};
 let fallbacks = 0;
 const warn = console.warn;
 console.warn = (...a) => { fallbacks++; warn(...a); };
+const promptTerms = cfg.prompt === 'user' ? withUser.terms : cfg.prompt === 'auto' ? terms : null;
 
 const segments = [];
+const parts = [];
+let voices = 0;
 const t0 = Date.now();
 await new Promise((resolve, reject) => {
   const stream = new StreamingTranscriber({
     now: () => Date.now(),
     post: (m) => {
       if (m.type === 'segment') {
-        segments.push({ start: m.start, text: m.text });
+        segments.push({ start: m.start, end: m.end, text: m.text });
+        parts.push(...(m.parts || []));
+        if (m.voices) voices = m.voices.length;
         if (segments.length % 20 === 0) console.log(`  ${Math.round(m.end)} s of ${Math.round(seconds)}`);
       }
+      if (m.type === 'speakers-off') console.log(`SPEAKERS OFF: ${m.message}`);
       if (m.type === 'done') resolve();
     },
-    transcribe: CONFIG === 'A'
+    diarize: timedDiarize,
+    transcribe: cfg.pipelineOnly
       ? async (samples, language) => (await asr(samples, { language, task: 'transcribe' })).text.trim()
       : (samples, language, { previous } = {}) =>
-        transcribeWindow(asr, samples, { language, prompt: CONFIG === 'C' ? buildPrompt(terms, previous) : CONFIG === 'F' ? buildPrompt(withUser.terms, previous) : '', state: promptState }),
+        transcribeWindow(asr, samples, { language, prompt: promptTerms ? buildPrompt(promptTerms, previous) : '', timestamps: !!cfg.timestamps, state: promptState }),
   });
-  stream.start(1, { language: 'english' });
+  stream.start(1, { language: 'english', speakers: !!cfg.speakers });
   stream.push(1, audio, true).then(() => stream.ready(1)).catch(reject);
 });
 const secs = (Date.now() - t0) / 1000;
-console.log(`${modelId}: ${(seconds / secs).toFixed(1)}x realtime, ${segments.length} windows, prompt path broken: ${!!promptState.broken}, fallbacks logged: ${fallbacks}`);
+console.log(`${modelId}: ${(seconds / secs).toFixed(1)}x realtime, ${segments.length} windows, ${parts.length} parts, prompt path broken: ${!!promptState.broken}, fallbacks logged: ${fallbacks}`);
+
+if (CONFIG === 'REF') {
+  writeFileSync('ref.json', JSON.stringify(segments));
+  console.log(segments.slice(0, 6).map((s) => `[${Math.round(s.start)}] ${s.text}`).join('\n'));
+  process.exit(0);
+}
+
+function werReport(label, segs) {
+  if (!existsSync('ref.json')) { console.log('no reference; skipping WER'); return; }
+  const ref = JSON.parse(readFileSync('ref.json', 'utf8'));
+  const until = ref[ref.length - 1].end;
+  const hyp = segs.filter((s) => s.start < until - 0.5).map((s) => s.text).join(' ');
+  const { errors, words: n } = wer(hyp, ref.map((s) => s.text).join(' '));
+  console.log(`WER ${label} ${(100 * errors / n).toFixed(1)}% (${errors} of ${n} words, first ${(until / 60).toFixed(0)} min, against Large v3 Turbo)`);
+}
 
 const shown = CONFIG === 'F' ? segments.map((s) => ({ ...s, text: correctText(s.text, withUser) })) : segments;
 report(CONFIG, shown);
+werReport(CONFIG, shown);
 lines(CONFIG, shown);
 if (CONFIG === 'C') {
   const auto = { terms, replace: [] };
   const d = segments.map((s) => ({ ...s, text: correctText(s.text, auto) }));
   report('D', d);
-  lines('D', d);
+  werReport('D', d);
   const e = segments.map((s) => ({ ...s, text: correctText(s.text, withUser) }));
   report('E', e, ' (with typed glossary)');
+  werReport('E', e);
   lines('E', e);
+}
+if (CONFIG === 'T' || CONFIG === 'S') {
+  const lens = parts.map((p) => p.end - p.start);
+  console.log(`parts: ${parts.length}, median ${lens.sort((a, b) => a - b)[lens.length >> 1]?.toFixed(1)} s, longest ${lens[lens.length - 1]?.toFixed(1)} s`);
+}
+if (CONFIG === 'T') {
+  const names = guessNames(parts, terms);
+  const counts = {};
+  for (const p of parts) if (p.speaker != null) counts[p.speaker] = (counts[p.speaker] || 0) + (p.end - p.start);
+  console.log(`\nSPEAKERS: ${voices} voices, diarization ${diarizeSec.toFixed(0)} s total (${(diarizeSec / (seconds / 60)).toFixed(1)} s per audio minute), names ${JSON.stringify(names)}`);
+  console.log(`talk time: ${Object.entries(counts).map(([k, v]) => `${speakerName(k, names)} ${(v / 60).toFixed(1)} min`).join(', ')}`);
+  let cur = null;
+  const paras = [];
+  for (const p of parts) {
+    if (p.start > 900) break;
+    if (!cur || cur.speaker !== p.speaker) { cur = { speaker: p.speaker, start: p.start, text: [] }; paras.push(cur); }
+    cur.text.push(p.text);
+  }
+  for (const p of paras) console.log(`[${Math.round(p.start)}] ${(p.speaker == null ? '?' : speakerName(p.speaker, names))}: ${p.text.join(' ').slice(0, 220)}`);
 }
