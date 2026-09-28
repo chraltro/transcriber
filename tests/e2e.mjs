@@ -81,7 +81,10 @@ const CASES = [
   // NB tiny peaks at 1.75 to 2.1 GB here against about 1.1 GB for stock tiny, with the same file
   // sizes. Every weight format and ONNX Runtime memory setting measured the same or worse, and
   // stock tiny's Norwegian is unusable, so this is an accepted cost; the limit still catches growth.
-  { name: 'Norwegian, tiny on iPhone (WebKit)', engine: 'webkit', model: 'tiny', url: nrk.url, lang: 'norwegian', segments: 3, memoryLimitMB: 2400, title: nrk.title },
+  // WebKit's peak for this case swings by 300 MB on unchanged code (1976 to 2251 MB before speaker
+  // labels, 2094 to 2450 MB since, with the speaker models kept out of phone transcription). The
+  // leak check is "Memory over a long run"; this ceiling only catches a jump.
+  { name: 'Norwegian, tiny on iPhone (WebKit)', engine: 'webkit', model: 'tiny', url: nrk.url, lang: 'norwegian', segments: 3, memoryLimitMB: 2600, title: nrk.title },
   { name: 'Apple, Danish (Omny)', url: omny.url, lang: 'danish', segments: 3, title: omny.title },
   { name: 'Spotify episode', url: 'https://open.spotify.com/episode/2ebY3WNejLNbK47emgjd1E', lang: 'english', resolveOnly: true, titleIncludes: 'Alcohol' },
   { name: 'RSS feed', url: 'https://feeds.megaphone.fm/hubermanlab', lang: 'english', expectList: true },
