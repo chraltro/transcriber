@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { framesToTurns, Voices, labelParts, guessNames, speakerName, cosine } from '../../lib/speakers.js';
+import { framesToTurns, Voices, labelParts, guessNames, speakerName, cosine, sentenceParts } from '../../lib/speakers.js';
 import { splitTimestamps, coveredUntil } from '../../lib/prompted.js';
 
 test('frame classes become single-speaker turns; overlap and blips drop out', () => {
@@ -63,4 +63,13 @@ test('timestamp tokens split a window into timed parts', () => {
   assert.equal(coveredUntil(parts), 10);
   assert.deepEqual(splitTimestamps([1, 2], B, 5).map((p) => [p.start, p.end]), [[0, 5]]);
   assert.equal(coveredUntil(splitTimestamps([t(0), 1, t(4)], B, 20)), 4);
+});
+
+test('long parts split into sentences with times shared out by length', () => {
+  const out = sentenceParts([{ start: 10, end: 20, text: 'Sayash Kapoor, welcome to the show. It is fantastic to be here.' }, { start: 20, end: 22, text: 'Yes.' }]);
+  assert.deepEqual(out.map((p) => p.text), ['Sayash Kapoor, welcome to the show.', 'It is fantastic to be here.', 'Yes.']);
+  assert.equal(out[0].start, 10);
+  assert.equal(out[1].end, 20);
+  assert.ok(out[0].end > 14 && out[0].end < 16);
+  assert.equal(sentenceParts([{ start: 0, end: 5, text: 'Mr. smith went. e.g. this' }]).length, 1);
 });

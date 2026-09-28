@@ -68,8 +68,11 @@ async function findEpisode() {
   throw new Error('Episode not found');
 }
 
+// The episode carries dynamically inserted ads that change between downloads, so the reference
+// job saves the file it used (ep.mp3) and every other job transcribes that same file.
 function decode(url, seconds) {
-  const raw = execSync(`ffmpeg -loglevel error -t ${seconds} -i "${url}" -ac 1 -ar 16000 -f f32le -`, { maxBuffer: 1 << 30 });
+  if (!existsSync('ep.mp3')) execSync(`curl -sSL --fail -o ep.mp3 "${url}"`);
+  const raw = execSync(`ffmpeg -loglevel error -t ${seconds} -i ep.mp3 -ac 1 -ar 16000 -f f32le -`, { maxBuffer: 1 << 30 });
   return new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
 }
 
