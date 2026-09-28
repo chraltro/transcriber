@@ -1,9 +1,14 @@
 name: End-to-end test
 
+# The slow one: real models on real podcasts in Chromium, iPhone WebKit and Firefox (about 20
+# minutes). It runs when the transcription engine changes, every night, and on demand; look and
+# feel changes are covered by the UI test (ui.yml).
 on:
   push:
     branches: ['claude/**']
-    paths: ['app.js', 'worker.js', 'index.html', 'style.css', 'lib/**', 'ui/**', 'fonts/**', 'tests/**', '.github/workflows/e2e.yml']
+    paths: ['worker.js', 'coi-sw.js', 'lib/stream.js', 'lib/prompted.js', 'lib/diarize.js', 'lib/segment.js', 'lib/models.js', 'lib/mp3.js', 'lib/wav.js', 'lib/links.js', 'lib/id3.js', 'tests/e2e.mjs', '.github/workflows/e2e.yml']
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
     inputs:
       only:

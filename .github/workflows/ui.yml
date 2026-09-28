@@ -1,0 +1,33 @@
+name: UI test
+
+# Every push: unit tests and the fast UI test (the real page with the speech models swapped for
+# a fake worker). Takes a couple of minutes. Real models and real podcasts are e2e.yml.
+on:
+  push:
+    branches: ['claude/**']
+  workflow_dispatch:
+
+jobs:
+  ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Unit tests
+        run: npm test
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-1.56.1
+      - run: npx playwright install --with-deps chromium
+      - name: UI test
+        run: node tests/ui.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-screenshots
+          path: ui-shots/
