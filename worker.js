@@ -39,7 +39,7 @@ async function loadDiarizer(id) {
   if (diarizer || diarizerFailed) return !!diarizer;
   try {
     post({ type: 'status', id, text: 'Loading speaker model' });
-    diarizer = await createDiarizer(tf, { progress_callback: (p) => post({ type: 'model-progress', id, ...p }) });
+    diarizer = await createDiarizer(tf, { device: 'wasm', progress_callback: (p) => post({ type: 'model-progress', id, ...p }) });
   } catch (err) {
     console.warn('Speaker models failed to load', err);
     diarizerFailed = true;

@@ -181,6 +181,16 @@ function werReport(label, segs) {
   const hyp = segs.filter((s) => s.start < until - 0.5).map((s) => s.text).join(' ');
   const { errors, words: n } = wer(hyp, ref.map((s) => s.text).join(' '));
   console.log(`WER ${label} ${(100 * errors / n).toFixed(1)}% (${errors} of ${n} words, first ${(until / 60).toFixed(0)} min, against Large v3 Turbo)`);
+  // Windows are cut at the same places in every run, so they can be compared one by one.
+  const byWindow = ref.map((r) => {
+    const h = segs.filter((x) => x.start >= r.start - 0.5 && x.start < r.end - 0.5).map((x) => x.text).join(' ');
+    return { start: r.start, ...wer(h, r.text), hyp: h, ref: r.text };
+  }).sort((a, b) => b.errors - a.errors);
+  if (process.env.WORST !== '0') {
+    for (const w of byWindow.slice(0, 5)) {
+      console.log(`  worst [${Math.round(w.start)}] ${w.errors} of ${w.words}\n    REF ${w.ref}\n    HYP ${w.hyp}`);
+    }
+  }
 }
 
 const shown = CONFIG === 'F' ? segments.map((s) => ({ ...s, text: correctText(s.text, withUser) })) : segments;

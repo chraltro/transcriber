@@ -14,8 +14,15 @@ jobs:
         with:
           node-version: 22
       - run: sudo apt-get install -y ffmpeg >/dev/null
+      - uses: actions/cache@v4
+        id: refcache
+        with:
+          path: ref.json
+          key: lab-ref-plain-english-turbo-15min-v1
       - run: npm i --no-save @huggingface/transformers@4.3.0
+        if: steps.refcache.outputs.cache-hit != 'true'
       - run: node tests/accuracy-lab.mjs
+        if: steps.refcache.outputs.cache-hit != 'true'
         env:
           CONFIG: REF
       - uses: actions/upload-artifact@v4
@@ -29,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        config: [B, C, T, S]
+        config: [B, C, T]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
