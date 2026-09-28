@@ -5,7 +5,7 @@ const SITE = process.env.SITE || 'https://chraltro.github.io/transcriber/';
 let failures = 0;
 const check = (ok, msg) => { console.log(`${ok ? 'PASS' : 'FAIL'} ${msg}`); if (!ok) failures++; };
 
-for (const f of ['', 'app.js', 'worker.js', 'coi-sw.js', 'style.css', 'ui/waveform.js', 'ui/library.js', 'fonts/newsreader.woff2', 'lib/paragraphs.js', 'lib/id3.js', 'lib/levels.js', 'lib/models.js', 'lib/stream.js', 'lib/mp3.js', 'lib/wav.js', 'lib/links.js', 'lib/text.js', 'lib/segment.js', 'lib/subtitles.js']) {
+for (const f of ['', 'app.js', 'worker.js', 'coi-sw.js', 'style.css', 'ui/waveform.js', 'ui/library.js', 'ui/speakermap.js', 'fonts/roboto-slab.woff2', 'fonts/jetbrains-mono.woff2', 'lib/speakers.js', 'lib/diarize.js', 'lib/speakermap.js', 'lib/names.js', 'lib/ads.js', 'lib/glossary.js', 'lib/context.js', 'lib/prompted.js', 'lib/paragraphs.js', 'lib/id3.js', 'lib/levels.js', 'lib/models.js', 'lib/stream.js', 'lib/mp3.js', 'lib/wav.js', 'lib/links.js', 'lib/text.js', 'lib/segment.js', 'lib/subtitles.js']) {
   const r = await fetch(SITE + f);
   check(r.ok, `${f || 'index.html'} ${r.status} ${r.headers.get('content-type')}`);
 }

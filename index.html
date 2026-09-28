@@ -5,13 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Transcriber</title>
   <meta name="description" content="Paste a podcast link and get the full transcript in English, Norwegian or Danish. Whisper runs right in your browser: no account, no API key, nothing uploaded.">
-  <meta name="theme-color" content="#f6f4ef" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#111110" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#e6edef" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0a1d24" media="(prefers-color-scheme: dark)">
   <meta name="color-scheme" content="light dark">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23ff7a45'/%3E%3Cstop offset='1' stop-color='%23e8341c'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cg stroke='%23fff' stroke-width='2.4' stroke-linecap='round' fill='none'%3E%3Cpath d='M8 13v6M12 9v14M16 12v8'/%3E%3Cpath d='M20.5 12h4.5M20.5 16h4.5M20.5 20h3'/%3E%3C/g%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23ff4d6a'/%3E%3Cstop offset='1' stop-color='%23e42a4b'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cg stroke='%23fff' stroke-width='2.4' stroke-linecap='round' fill='none'%3E%3Cpath d='M8 13v6M12 9v14M16 12v8'/%3E%3Cpath d='M20.5 12h4.5M20.5 16h4.5M20.5 20h3'/%3E%3C/g%3E%3C/svg%3E">
   <!-- Enables multi-threaded WASM on GitHub Pages (which can't set COOP/COEP headers itself). -->
   <script src="coi-sw.js"></script>
-  <link rel="preload" href="fonts/newsreader.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/roboto-slab.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/jetbrains-mono.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -50,9 +51,17 @@
 
   <header class="topbar">
     <a class="brand" href="./" aria-label="Transcriber, start over">
-      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="currentColor"/><g stroke="var(--bg)" stroke-width="2.4" stroke-linecap="round" fill="none"><path d="M8 13v6M12 9v14M16 12v8"/><path d="M20.5 12h4.5M20.5 16h4.5M20.5 20h3"/></g></svg>
+      <span class="logo-box"><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><g stroke-width="3" stroke-linecap="round" fill="none"><path stroke="var(--accent)" d="M7 13v6M12 8v16"/><path stroke="currentColor" d="M17 12v8M22 10v12M27 14v4"/></g></svg></span>
       <span class="wordmark">Transcriber</span>
     </a>
+    <div class="context">
+      <span class="crumb" id="top-crumb">Transcripts / local Whisper</span>
+      <span class="context-line" id="top-context">New transcript</span>
+    </div>
+    <div class="top-meta" aria-live="off">
+      <span id="top-date"></span>
+      <span id="top-status">Nothing leaves this browser</span>
+    </div>
   </header>
 
   <div class="mini" id="mini" aria-hidden="true">
@@ -65,9 +74,24 @@
     <div class="mini-bar"><span id="mini-bar"></span></div>
   </div>
 
+  <div class="shell">
+  <aside class="spine" aria-label="Pipeline">
+    <p class="spine-label">Pipeline</p>
+    <ol class="steps" id="steps" aria-label="Progress">
+      <li data-step="find"><i></i><span>Find episode</span><small class="note"></small></li>
+      <li data-step="download"><i></i><span>Download</span><small class="note"></small></li>
+      <li data-step="model"><i></i><span>Speech model</span><small class="note"></small></li>
+      <li data-step="draft" class="hidden"><i></i><span>Draft</span><small class="note"></small></li>
+      <li data-step="transcribe"><i></i><span id="step-transcribe">Transcribe</span><small class="note"></small></li>
+      <li data-step="speakers"><i></i><span>Speakers</span><small class="note"></small></li>
+    </ol>
+    <p class="spine-foot" id="spine-foot"></p>
+  </aside>
+
   <main id="main">
-    <section class="hero" id="hero">
-      <h1>Podcast<br>to text.</h1>
+    <section class="hero panel" id="hero">
+      <p class="kicker">New transcript · runs in this browser</p>
+      <h1>Podcast to text.</h1>
 
       <form id="url-form" class="command" autocomplete="off" novalidate>
         <label for="url" class="sr-only">Podcast link</label>
@@ -81,10 +105,6 @@
 
       <p class="under">Apple Podcasts, Pocket Casts, Spotify or RSS. Or <label class="file-pick">open an audio file<input type="file" id="file" accept="audio/*,video/*,.mp3,.m4a,.aac,.ogg,.opus,.wav,.flac,.mp4"></label>.</p>
 
-      <figure class="specimen" aria-hidden="true">
-        <div class="specimen-wave"><canvas id="specimen-wave"></canvas><span id="specimen-tip"></span></div>
-        <p class="specimen-text"><span class="specimen-ts">12:40</span>A school opened on the far bank, and <mark>the stairs that nobody wanted became the busiest ten metres in the city.</mark> Nobody who approved the budget saw it coming.</p>
-      </figure>
 
       <div class="settings" id="settings">
         <button type="button" class="settings-toggle" id="settings-toggle" aria-expanded="false" aria-controls="settings-body">
@@ -173,16 +193,10 @@
         <div class="session-info">
           <p class="eyebrow" id="session-show"></p>
           <h2 id="episode-title">Transcript</h2>
-          <ol class="steps" id="steps" aria-label="Progress">
-            <li data-step="find"><i></i><span>Find</span></li>
-            <li data-step="download"><i></i><span>Download</span></li>
-            <li data-step="model"><i></i><span>Model</span></li>
-            <li data-step="draft" class="hidden"><i></i><span>Draft</span></li>
-            <li data-step="transcribe"><i></i><span id="step-transcribe">Transcribe</span></li>
-          </ol>
         </div>
         <button type="button" class="icon-btn session-close hidden" id="session-close" aria-label="Close transcript"><svg class="icon"><use href="#i-x"/></svg></button>
       </div>
+      <div class="tiles" id="stats"></div>
       <div class="timeline">
         <button type="button" class="play" id="play" aria-label="Play" disabled><svg class="icon"><use href="#i-play"/></svg></button>
         <div class="wave" id="wave-wrap" role="progressbar" aria-labelledby="stage" aria-valuemin="0" aria-valuemax="100">
@@ -195,7 +209,6 @@
           <h3 id="stage">Working</h3>
           <p id="detail"></p>
         </div>
-        <div class="stats" id="stats"></div>
         <button type="button" class="btn ghost small" id="cancel">Cancel</button>
         <div class="refine hidden" id="refine-bar">
           <label class="sr-only" for="refine-model">Model to refine with</label>
@@ -204,13 +217,46 @@
         </div>
         <button type="button" class="btn ghost small hidden" id="names-btn" aria-expanded="false" aria-controls="names-panel">Check names</button>
       </div>
-      <div class="names hidden" id="names-panel">
-        <p class="hint">Names spelled more than one way in this transcript. Tap the right spelling to fix the others, here and in future transcripts.</p>
-        <ul class="names-list" id="names-list"></ul>
-      </div>
     </section>
 
-    <article class="reader hidden" id="result-card" aria-label="Transcript">
+    <section class="card map-card hidden" id="map-card" aria-labelledby="map-title">
+      <div class="panel-head">
+        <div>
+          <p class="kicker" id="map-kicker">Who speaks when</p>
+          <h2 id="map-title">Speaker map</h2>
+          <p class="panel-sub">Tap a cell to play from there. Drag across cells to pick an interval.</p>
+        </div>
+        <div class="map-actions hidden" id="map-sel">
+          <span class="scope" id="map-scope"></span>
+          <button type="button" class="btn ghost small" id="map-play"><svg class="icon"><use href="#i-play"/></svg><span>Play</span></button>
+          <button type="button" class="btn ghost small" id="map-refine">Refine</button>
+          <button type="button" class="btn ghost small" id="map-copy"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button>
+          <button type="button" class="btn ghost small" id="map-clear">Clear</button>
+        </div>
+      </div>
+      <div class="map-summary hidden" id="map-summary"></div>
+      <div class="map-wrap" id="map-grid"></div>
+    </section>
+
+    <div class="duo" id="duo">
+      <section class="card talk-card hidden" id="talk-card" aria-labelledby="talk-title">
+        <p class="kicker">Talk time</p>
+        <h2 id="talk-title">Voices</h2>
+        <ol class="talk" id="talk-list"></ol>
+      </section>
+      <section class="card names hidden" id="names-panel" aria-labelledby="names-title">
+        <p class="kicker">Spellings</p>
+        <h2 id="names-title">Check names</h2>
+        <p class="hint">Names spelled more than one way in this transcript. Tap the right spelling to fix the others, here and in future transcripts.</p>
+        <ul class="names-list" id="names-list"></ul>
+      </section>
+    </div>
+
+    <article class="reader card hidden" id="result-card" aria-label="Transcript">
+      <div class="reader-head">
+        <p class="kicker">Transcript log</p>
+        <h2>Transcript</h2>
+      </div>
       <div class="toolbar" id="toolbar">
         <div class="search-field find">
           <svg class="icon"><use href="#i-search"/></svg>
@@ -235,6 +281,7 @@
           </div>
         </div>
       </div>
+      <div class="log-head" aria-hidden="true"><span>Time</span><span>Speaker</span><span>Text</span></div>
       <div class="transcript" id="transcript" tabindex="0" aria-label="Transcript" aria-live="off"></div>
       <div class="tail hidden" id="tail" aria-hidden="true"><span class="tail-bars"><i></i><i></i><i></i><i></i></span><span id="tail-text">Listening</span></div>
       <div class="reader-foot hidden" id="reader-foot">
@@ -242,14 +289,18 @@
       </div>
     </article>
 
-    <section class="library hidden" id="library" aria-labelledby="library-heading">
+    <section class="library card hidden" id="library" aria-labelledby="library-heading">
       <div class="library-head">
-        <h2 id="library-heading">Recent transcripts</h2>
-        <span class="hint">Kept in this browser only</span>
+        <div>
+          <p class="kicker">Kept in this browser only</p>
+          <h2 id="library-heading">Recent transcripts</h2>
+        </div>
       </div>
+      <div class="log-head lib-head" aria-hidden="true"><span></span><span>Episode</span><span>Length</span><span>Words</span></div>
       <ul class="library-list" id="library-list"></ul>
     </section>
   </main>
+  </div>
 
   <div class="pill sel-pill hidden" id="sel-pill"><button type="button" id="refine-sel">Refine this part</button><span id="sel-model"></span></div>
   <button type="button" class="pill jump hidden" id="jump-live"><svg class="icon"><use href="#i-down"/></svg><span>Jump to live</span></button>
@@ -268,7 +319,7 @@
   <audio id="audio" preload="none"></audio>
 
   <footer class="footer">
-    <p>Runs in your browser with <a href="https://github.com/huggingface/transformers.js">Whisper</a> and <a href="https://huggingface.co/NbAiLab">NB-Whisper</a>. Nothing is uploaded.</p>
+    <p>Transcriber / runs in your browser with <a href="https://github.com/huggingface/transformers.js">Whisper</a>, <a href="https://huggingface.co/NbAiLab">NB-Whisper</a> and <a href="https://huggingface.co/pyannote/segmentation-3.0">pyannote</a> / nothing is uploaded</p>
   </footer>
 
   <script type="module" src="app.js"></script>

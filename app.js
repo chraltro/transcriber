@@ -14,6 +14,8 @@ import { Waveform } from './ui/waveform.js';
 import { extractTerms } from './lib/context.js';
 import { correctText, parseGlossary } from './lib/glossary.js';
 import { listEntries, getEntry, saveEntry, deleteEntry } from './ui/library.js';
+import { SpeakerMap } from './ui/speakermap.js';
+import { speakerMap, talkTime, selection } from './lib/speakermap.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -37,6 +39,9 @@ const els = {
   timestamps: $('#timestamps'),
   library: $('#library'), libraryList: $('#library-list'),
   jump: $('#jump-live'), dock: $('#dock'), dockPlay: $('#dock-play'), dockCopy: $('#dock-copy'), dockSave: $('#dock-save'),
+  topContext: $('#top-context'), topCrumb: $('#top-crumb'), topStatus: $('#top-status'), topDate: $('#top-date'), spineFoot: $('#spine-foot'),
+  mapCard: $('#map-card'), mapGrid: $('#map-grid'), mapSel: $('#map-sel'), mapScope: $('#map-scope'), mapSummary: $('#map-summary'), mapKicker: $('#map-kicker'),
+  mapPlay: $('#map-play'), mapRefine: $('#map-refine'), mapCopy: $('#map-copy'), mapClear: $('#map-clear'), talkCard: $('#talk-card'), talkList: $('#talk-list'),
   mini: $('#mini'), miniArt: $('#mini-art'), miniTitle: $('#mini-title'), miniStatus: $('#mini-status'), miniPlay: $('#mini-play'), miniBar: $('#mini-bar'),
   dropzone: $('#dropzone'), toast: $('#toast'), announce: $('#announce'), audio: $('#audio'),
 };
@@ -188,13 +193,14 @@ function artInto(box, { art, title, show } = {}, { loading = false } = {}) {
 
 /* ---------- session card: steps, status, stats ---------- */
 
-const STEPS = ['find', 'download', 'model', 'draft', 'transcribe'];
+const STEPS = ['find', 'download', 'model', 'draft', 'transcribe', 'speakers'];
 const STEP_OF = [
   [/^(Looking up|Reading link|Finding)/, 'find'],
   [/^Downloading episode/, 'download'],
   [/speech model/i, 'model'],
   [/^Sketching/, 'draft'],
   [/^(Transcribing|Refining)/, 'transcribe'],
+  [/^Finding speakers/, 'speakers'],
   [/^Done/, 'done'],
 ];
 
@@ -213,6 +219,14 @@ function setStep(step) {
   });
 }
 
+// The spine's red status line under a step ("82.2 MB", "Base · CPU", "3 voices").
+function setNote(step, text) {
+  const n = els.steps.querySelector(`[data-step=${step}] .note`);
+  if (n) n.textContent = text || '';
+}
+
+const DEFAULT_STATUS = 'Nothing leaves this browser';
+
 function renderStats(items) {
   els.stats.replaceChildren(...(items || []).map(({ v, l }) => {
     const s = el('span', 'stat', v);
@@ -226,6 +240,9 @@ function progress(stage, fraction, detail = '', stats = null) {
   els.detail.textContent = detail;
   const step = STEP_OF.find(([re]) => re.test(stage))?.[1];
   if (step) setStep(step);
+  if (step === 'download') { const mb = detail.match(/[\d.]+ MB(?: of [\d.]+ MB)?/); if (mb) setNote('download', mb[0]); }
+  if ((step === 'transcribe' || step === 'speakers') && stats?.[0]?.v) setNote(step, stats[0].v);
+  els.topStatus.textContent = state.busy ? [stage, stats?.[0]?.v].filter(Boolean).join(' · ') : (stage === 'Done' && detail ? detail : DEFAULT_STATUS);
   if (step === 'download') wave.setDownload(fraction);
   const waiting = fraction == null && step !== 'transcribe' && step !== 'draft' && step !== 'done';
   els.waveWrap.classList.toggle('loading', waiting && step !== undefined);
@@ -271,6 +288,9 @@ function refreshNames() {
   state.guessed = guessNames(state.segments, state.vocab?.terms || []);
   const n = names();
   for (const chip of els.transcript.querySelectorAll('.who')) chip.textContent = speakerName(chip.dataset.speaker, n);
+  const voices = new Set(state.segments.map((x) => x.speaker).filter((x) => x != null)).size;
+  setNote('speakers', voices ? `${voices} ${voices === 1 ? 'voice' : 'voices'}` : '');
+  updateMap();
 }
 
 function whoChip(speaker) {
@@ -311,6 +331,107 @@ function renameSpeaker(chip) {
     if (e.key === 'Escape') commit(false);
   });
   input.addEventListener('blur', () => commit(true));
+}
+
+/* ---------- speaker map and talk time ---------- */
+
+const map = new SpeakerMap(els.mapGrid, {
+  onPlay: (t) => {
+    scrollToTime(t);
+    if (state.playable) playFrom(t);
+  },
+  onSelect: (range) => {
+    state.mapSel = range ? selection(state.segments, range.from, range.to) : null;
+    renderMapSelection();
+  },
+});
+
+// Throttled: while a transcript streams in, the map redraws at most every half second.
+let mapTimer = 0;
+function updateMap(now = false) {
+  if (now) {
+    clearTimeout(mapTimer);
+    mapTimer = 0;
+    drawMap();
+  } else if (!mapTimer) {
+    mapTimer = setTimeout(() => { mapTimer = 0; drawMap(); }, 500);
+  }
+}
+
+function drawMap() {
+  const segs = state.segments;
+  const show = segs.length > 0 && !els.resultCard.classList.contains('hidden');
+  const labelled = segs.some((x) => x.speaker != null);
+  els.resultCard.classList.toggle('speakers', labelled);
+  els.mapCard.classList.toggle('hidden', !show);
+  if (!show) {
+    els.talkCard.classList.add('hidden');
+    return;
+  }
+  const narrow = window.matchMedia('(max-width: 640px)').matches;
+  const m = speakerMap(segs, wave.total || 0, { maxCols: narrow ? 20 : 44 });
+  const n = names();
+  map.render(m, (sp) => speakerName(sp, n));
+  if (!audio.paused) map.setPlayhead(audio.currentTime);
+  const cell = m.cell >= 60 ? `${m.cell / 60} min` : `${m.cell} s`;
+  els.mapKicker.textContent = `Who speaks when · ${cell} cells · 0:00–${fmtTime(m.total)}`;
+  renderTalk(labelled ? talkTime(segs) : []);
+  if (state.mapSel) renderMapSelection();
+}
+
+function renderTalk(list) {
+  els.talkCard.classList.toggle('hidden', !list.length);
+  const n = names();
+  const most = list[0]?.seconds || 1;
+  els.talkList.replaceChildren(...list.map((t) => {
+    const li = el('li');
+    const name = el('span', 'who-name', speakerName(t.speaker, n));
+    const amount = el('span', 'amount', `${fmtTime(t.seconds)} · ${Math.round(t.fraction * 100)}%`);
+    const bar = el('span', 'bar');
+    const fill = el('span');
+    fill.style.width = `${(t.seconds / most) * 100}%`;
+    bar.append(fill);
+    li.append(name, amount, bar);
+    return li;
+  }));
+}
+
+function renderMapSelection() {
+  const sel = state.mapSel;
+  const on = !!sel?.segments.length;
+  els.mapSel.classList.toggle('hidden', !on);
+  els.mapSummary.classList.toggle('hidden', !on);
+  if (!on) return;
+  els.mapScope.textContent = `Selected · ${fmtTime(sel.from)}–${fmtTime(sel.to)}`;
+  els.mapRefine.classList.toggle('hidden', state.busy || !state.playable);
+  const words = wordCount(sel.segments);
+  const talk = talkTime(sel.segments);
+  const n = names();
+  const cell = (label, value, hot = false) => {
+    const d = el('div');
+    const b = el('b', hot ? 'hot' : '', value);
+    d.append(el('small', '', label), b);
+    return d;
+  };
+  els.mapSummary.replaceChildren(
+    cell('Selected interval', `${fmtTime(sel.from)}–${fmtTime(sel.to)}`, true),
+    cell('Length', fmtSpan(sel.to - sel.from)),
+    cell('Words', fmtNum(words)),
+    cell('Voices', talk.length ? talk.slice(0, 2).map((t) => `${speakerName(t.speaker, n).split(' ')[0]} ${Math.round(t.fraction * 100)}%`).join(' · ') : 'Not labelled'),
+  );
+}
+
+function clearMapSelection() {
+  state.mapSel = null;
+  map.clear();
+  renderMapSelection();
+}
+
+function scrollToTime(t) {
+  const span = state.segEls[segmentAt(t)];
+  if (!span) return;
+  state.userScrolledAt = 0;
+  span.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
 // A new glossary also fixes the transcript on screen, not just the next one.
@@ -1042,8 +1163,9 @@ async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), 
       case 'ready':
         ready = true;
         deviceLine = m.device === 'webgpu' ? 'On your GPU' : 'On your CPU, so this takes a while';
+        if (pass !== 'speakers') setNote('model', `${model.name} · ${m.device === 'webgpu' ? 'GPU' : 'CPU'}`);
         progress(stage, total ? fromSec / total : 0, deviceLine,
-          total ? [{ v: `${fmtTime(fromSec)} / ${fmtTime(total)}` }] : null);
+          total ? [{ v: `${fmtTime(fromSec)} / ${fmtTime(total)}`, l: 'position' }] : null);
         break;
       case 'buffered':
         buffered = m.seconds;
@@ -1055,7 +1177,7 @@ async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), 
         if (pass === 'speakers') {
           labelWindow(m);
           wave.setDone(m.end);
-          progress(stage, total ? m.end / total : null, 'Listening for who speaks when', [{ v: `${fmtTime(m.end)} / ${fmtTime(total)}` }]);
+          progress(stage, total ? m.end / total : null, 'Listening for who speaks when', [{ v: `${fmtTime(m.end)} / ${fmtTime(total)}`, l: 'position' }]);
           nudge();
           break;
         }
@@ -1077,7 +1199,7 @@ async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), 
           stage,
           total ? m.end / total : null,
           deviceLine,
-          [{ v: `${fmtTime(m.end)} / ${fmtTime(total)}` }, { v: `${rate.toFixed(1)}×`, l: 'speed' }, { v: fmtSpan(eta), l: 'left' }]
+          [{ v: `${fmtTime(m.end)} / ${fmtTime(total)}`, l: 'position' }, { v: `${rate.toFixed(1)}×`, l: 'speed' }, { v: fmtSpan(eta), l: 'left' }]
         );
         nudge();
         break;
@@ -1157,6 +1279,10 @@ function emptyState(text) {
 }
 
 function resetTranscript() {
+  els.resultCard.classList.remove('speakers');
+  state.mapSel = null;
+  map.clear();
+  renderMapSelection();
   state.segments = [];
   state.segEls = [];
   state.lastPara = null;
@@ -1173,6 +1299,7 @@ function restoreTranscript(segments) {
   for (const seg of segments || []) addSegment(seg, { fresh: false, into: frag });
   if (segments?.length) els.transcript.replaceChildren(frag);
   if (segments?.some((x) => x.speaker != null)) refreshNames();
+  updateMap(true);
   updateLayout();
 }
 
@@ -1187,7 +1314,10 @@ function addSegment(seg, { fresh = true, into = null } = {}) {
   const follow = !into && !state.busy ? false : !into && nearLive();
   const stored = { start: seg.start, end: seg.end, text: seg.text };
   if (seg.w != null) stored.w = seg.w;
-  if (seg.speaker != null) stored.speaker = seg.speaker;
+  if (seg.speaker != null) {
+    stored.speaker = seg.speaker;
+    els.resultCard.classList.add('speakers');
+  }
   if (seg.draft) stored.draft = true;
   state.segments.push(stored);
 
@@ -1227,6 +1357,7 @@ function addSegment(seg, { fresh = true, into = null } = {}) {
   }
   state.segEls.push(span);
   if (into) return;
+  updateMap();
   updateLayout();
   if (els.search.value.trim()) scheduleSearch();
   if (follow) requestAnimationFrame(() => scrollToLive());
@@ -1343,9 +1474,7 @@ function goToMatch(i, scroll = true) {
 
 /* ---------- copy, export, share ---------- */
 
-async function copyTranscript() {
-  const text = transcriptText();
-  if (!text) return;
+async function copyText(text) {
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -1358,6 +1487,12 @@ async function copyTranscript() {
     document.execCommand('copy');
     ta.remove();
   }
+}
+
+async function copyTranscript() {
+  const text = transcriptText();
+  if (!text) return;
+  await copyText(text);
   toast(`Copied ${fmtNum(wordCount(state.segments))} words`);
   const label = els.copy.querySelector('span');
   label.textContent = 'Copied';
@@ -1542,6 +1677,7 @@ audio.addEventListener('ended', onPlayState);
 audio.addEventListener('timeupdate', () => {
   if (!audio.getAttribute('src') || (audio.paused && !audio.currentTime)) return;
   wave.setPosition(audio.currentTime);
+  map.setPlayhead(audio.currentTime);
   highlightPlaying(segmentAt(audio.currentTime));
   updateMini();
 });
@@ -1558,6 +1694,7 @@ function beginSession(meta, { loading = false } = {}) {
   showSessionMeta(meta, { loading });
   els.steps.classList.remove('failed', 'stopped');
   els.steps.querySelectorAll('li').forEach((li) => li.classList.remove('done', 'active'));
+  els.steps.querySelectorAll('.note').forEach((n) => { n.textContent = ''; });
   renderStats(null);
   updateLayout();
 }
@@ -1568,6 +1705,7 @@ function showSessionMeta(meta, { loading = false } = {}) {
   artInto(els.art, meta, { loading });
   artInto(els.miniArt, meta, { loading });
   els.miniTitle.textContent = meta?.title || '';
+  els.topContext.textContent = [meta?.show, meta?.title].filter(Boolean).join(' · ') || 'Transcript';
 }
 
 function hideSession() {
@@ -1626,6 +1764,11 @@ function closeSession() {
   els.resumeCard.classList.add('hidden');
   els.episodesCard.classList.add('hidden');
   clearError();
+  els.topContext.textContent = 'New transcript';
+  els.topStatus.textContent = DEFAULT_STATUS;
+  els.steps.querySelectorAll('li').forEach((li) => li.classList.remove('done', 'active'));
+  els.steps.querySelectorAll('.note').forEach((n) => { n.textContent = ''; });
+  updateMap();
   updateLayout();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -1655,7 +1798,7 @@ async function renderLibrary() {
     const art = el('div', 'art');
     const text = el('div', 'entry-text');
     text.append(el('span', 'entry-title', e.title));
-    text.append(el('span', 'entry-meta', [relativeDay(e.createdAt), fmtTime(e.total || 0), `${fmtNum(e.words)} words`].join(' · ')));
+    text.append(el('span', 'entry-meta', [relativeDay(e.createdAt), e.show, LANG_NAMES[e.lang]].filter(Boolean).join(' · ')));
     const open = el('button', 'entry-open');
     open.type = 'button';
     open.setAttribute('aria-label', `Open the transcript of ${e.title}`);
@@ -1669,7 +1812,7 @@ async function renderLibrary() {
       toast('Transcript deleted');
       renderLibrary();
     });
-    card.append(art, text, open, del);
+    card.append(art, text, el('span', 'entry-num', fmtTime(e.total || 0)), el('span', 'entry-num', fmtNum(e.words)), open, del);
     li.append(card);
     requestAnimationFrame(() => artInto(art, e));
     return li;
@@ -2267,24 +2410,6 @@ function updateDeviceChip() {
   document.body.dataset.gpu = state.gpu.available ? '1' : '0';
 }
 
-// The front page's specimen: a made-up episode's waveform, a third of it played.
-function drawSpecimen() {
-  const canvas = $('#specimen-wave');
-  if (!canvas) return;
-  const w = new Waveform(canvas.parentElement, canvas, $('#specimen-tip'));
-  let seed = 7;
-  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  const levels = new Uint8Array(900);
-  let loud = 0.5;
-  for (let i = 0; i < levels.length; i++) {
-    if (rnd() < 0.08) loud = 0.25 + rnd() * 0.75; // a new speaker or sentence
-    levels[i] = rnd() < 0.06 ? 3 : Math.round(20 + loud * 140 * (0.6 + rnd() * 0.4));
-  }
-  w.reset(levels.length, levels);
-  w.setFinished(true);
-  w.setPosition(levels.length * 0.36);
-}
-
 function selectedModel() {
   return els.models.querySelector('input[name=model]:checked')?.value || 'small';
 }
@@ -2344,6 +2469,13 @@ function foldSettings(fold) {
 function updateSettingsSummary() {
   const m = MODELS[selectedModel()];
   els.settingsSummary.textContent = `${LANG_NAMES[language()]} · ${m?.name || ''} model`;
+  els.spineFoot.textContent = `${LANG_NAMES[language()]} / ${m?.name || ''}\n${state.gpu.available ? 'GPU' : 'CPU'} / speakers ${speakersOn() ? 'on' : 'off'}\nNothing uploaded`;
+  els.topCrumb.textContent = `Transcripts / ${LANG_NAMES[language()]} / ${m?.name || ''}`;
+}
+
+function tickClock() {
+  const d = new Date();
+  els.topDate.textContent = `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} · ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
 }
 
 
@@ -2358,6 +2490,16 @@ function wireEvents() {
   els.proxy.addEventListener('change', () => store.set('proxy', els.proxy.value.trim()));
   els.glossary.addEventListener('change', applyGlossary);
   els.namesBtn.addEventListener('click', () => toggleNames());
+  els.mapPlay.addEventListener('click', () => { if (state.mapSel) { scrollToTime(state.mapSel.from); if (state.playable) playFrom(state.mapSel.from); } });
+  els.mapRefine.addEventListener('click', () => { const s = state.mapSel; if (s) { clearMapSelection(); refine({ from: s.from, to: s.to }); } });
+  els.mapCopy.addEventListener('click', async () => {
+    const s = state.mapSel;
+    if (!s) return;
+    await copyText(plainText(s.segments, { timestamps: els.timestamps.checked, names: names() }));
+    toast(`Copied ${fmtNum(wordCount(s.segments))} words`);
+  });
+  els.mapClear.addEventListener('click', clearMapSelection);
+  window.addEventListener('resize', () => updateMap());
   els.speakers.addEventListener('change', () => store.set('speakers', els.speakers.checked ? '1' : '0'));
   els.settingsToggle.addEventListener('click', () => {
     const open = els.settings.classList.toggle('open');
@@ -2515,7 +2657,8 @@ async function init() {
   if (!IS_MOBILE) els.dockSave.querySelector('span').textContent = 'Download';
   if (store.get('model', null)) foldSettings(true);
   wireEvents();
-  drawSpecimen();
+  tickClock();
+  setInterval(tickClock, 30000);
   fillModels();
   updateDeviceChip();
 
