@@ -77,7 +77,8 @@ const CASES = [
   { name: 'iPhone (WebKit)', engine: 'webkit', model: 'tiny', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 8, memoryLimitMB: 2000, title: 'Xi’s Just Not That Into You' },
   { name: 'Pocket Casts short link', url: 'https://pca.st/okm7xj7g', lang: 'english', resolveOnly: true, title: 'Xi’s Just Not That Into You' },
   // Norwegian runs NB-Whisper (base and tiny).
-  { name: 'Apple, Norwegian (NRK)', url: nrk.url, lang: 'norwegian', segments: 3, title: nrk.title },
+  // NB-Whisper Base ships 186 MB of weights (stock Base 77 MB), and speaker labels add their models.
+  { name: 'Apple, Norwegian (NRK)', url: nrk.url, lang: 'norwegian', segments: 3, memoryLimitMB: 1400, title: nrk.title },
   // NB tiny peaks at 1.75 to 2.1 GB here against about 1.1 GB for stock tiny, with the same file
   // sizes. Every weight format and ONNX Runtime memory setting measured the same or worse, and
   // stock tiny's Norwegian is unusable, so this is an accepted cost; the limit still catches growth.
