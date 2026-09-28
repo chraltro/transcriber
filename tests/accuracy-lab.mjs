@@ -5,8 +5,9 @@
 //   B  Base.en, no prompt
 //   C  Base.en with the prompt (show-note names + the previous window)
 //   D  C, then near-miss correction against the show-note names
-//   E  D, plus a short glossary a reader might type
-// CONFIG picks which transcription to run (A, B or C); D and E are computed from C.
+//   E  D, plus a short glossary a reader might type (correction only)
+//   F  Base.en with that glossary in the prompt too, then corrected: the app with a glossary
+// CONFIG picks which transcription to run (A, B, C or F); D and E are computed from C.
 import { pipeline } from '@huggingface/transformers';
 import { execSync } from 'node:child_process';
 import { StreamingTranscriber } from '../lib/stream.js';
@@ -44,8 +45,8 @@ function decode(url, seconds) {
 
 // good: the right spelling; bad: the mistakes from the review (and close cousins).
 const TARGETS = [
-  ['Arvind Narayanan', /Narayanan/g, /Narayan(?!an)|Naryan|Arvind,/gi],
-  ['Sayash Kapoor', /Kapoor/g, /Slyash|Sayosh|\bKapur\b|Capoor|Kapor\b|Kupor/gi],
+  ['Arvind Narayanan', /Narayanan/g, /Arvind, Naray|Narayan(?!an)|Naryan/gi],
+  ['Sayash Kapoor', /Kapoor/g, /Slyash|Sayosh|Sayyash|\bKapur\b|Capoor|Kapor\b|Kupor/gi],
   ['Derek Thompson', /Derek Thompson/g, /Derrick|Thomson/g],
   ['OpenAI', /Open ?AI/g, /open air|opening AI/gi],
   ['Hugging Face', /Hugging Face/g, /hugging phase|hocking face/gi],
@@ -53,11 +54,11 @@ const TARGETS = [
   ['Nvidia', /Nvidia|NVIDIA/g, /\bin video\b/gi],
   ['Jensen Huang', /Jensen Huang/g, /Jensen (Wong|Hwang|Wang)/gi],
   ['doomers', /\bdoomers?\b/gi, /dumors|tumors|\bdume\b|\bdoomer's\b/gi],
-  ['foom', /\bfoom\b/gi, /\bfum\b|\bfoam\b/gi],
+  ['foom', /\bfoom\b/gi, /\bfum\b|\bfoam\b|\bfume\b|\bFOM\b/gi],
   ['effective altruism', /effective altruis/gi, /effective athlet/gi],
   ['recursive self-improvement', /recursive self.improvement/gi, /christmas self/gi],
   ['AGI-pilled', /AGI.pilled/gi, /GI PILD|\bpild\b/gi],
-  ['agent swarms', /agent swarm/gi, /asian swarm/gi],
+  ['agent swarms', /agent swarm/gi, /asian swarm|agents?'? swamp/gi],
 ];
 
 function score(text) {
@@ -88,6 +89,9 @@ function lines(label, segments) {
 const ep = await findEpisode();
 console.log(`${ep.show}: ${ep.title}\n${ep.url.slice(0, 100)}\nnotes: ${ep.notes.slice(0, 600)}`);
 const terms = extractTerms(ep.notes, ep.title, ep.show);
+// What a reader might type after skimming a first transcript.
+const USER = parseGlossary('Sayash Kapoor\nArvind Narayanan\nOpenAI\nHugging Face\nJensen Huang\ndoomers\nfoom\nAGI-pilled\neffective altruists');
+const withUser = { terms: [...new Set([...USER.terms, ...terms])], replace: USER.replace };
 console.log(`terms (${terms.length}): ${terms.join(', ')}`);
 
 const audio = decode(ep.url, MINUTES * 60);
@@ -116,7 +120,7 @@ await new Promise((resolve, reject) => {
     transcribe: CONFIG === 'A'
       ? async (samples, language) => (await asr(samples, { language, task: 'transcribe' })).text.trim()
       : (samples, language, { previous } = {}) =>
-        transcribeWindow(asr, samples, { language, prompt: CONFIG === 'C' ? buildPrompt(terms, previous) : '', state: promptState }),
+        transcribeWindow(asr, samples, { language, prompt: CONFIG === 'C' ? buildPrompt(terms, previous) : CONFIG === 'F' ? buildPrompt(withUser.terms, previous) : '', state: promptState }),
   });
   stream.start(1, { language: 'english' });
   stream.push(1, audio, true).then(() => stream.ready(1)).catch(reject);
@@ -124,16 +128,15 @@ await new Promise((resolve, reject) => {
 const secs = (Date.now() - t0) / 1000;
 console.log(`${modelId}: ${(seconds / secs).toFixed(1)}x realtime, ${segments.length} windows, prompt path broken: ${!!promptState.broken}, fallbacks logged: ${fallbacks}`);
 
-report(CONFIG, segments);
-lines(CONFIG, segments);
+const shown = CONFIG === 'F' ? segments.map((s) => ({ ...s, text: correctText(s.text, withUser) })) : segments;
+report(CONFIG, shown);
+lines(CONFIG, shown);
 if (CONFIG === 'C') {
   const auto = { terms, replace: [] };
   const d = segments.map((s) => ({ ...s, text: correctText(s.text, auto) }));
   report('D', d);
   lines('D', d);
-  const user = parseGlossary('Sayash Kapoor\nArvind Narayanan\nHugging Face\nJensen Huang\ndoomers\nfoom\nAGI-pilled\neffective altruists');
-  const vocab = { terms: [...new Set([...user.terms, ...terms])], replace: user.replace };
-  const e = segments.map((s) => ({ ...s, text: correctText(s.text, vocab) }));
+  const e = segments.map((s) => ({ ...s, text: correctText(s.text, withUser) }));
   report('E', e, ' (with typed glossary)');
   lines('E', e);
 }

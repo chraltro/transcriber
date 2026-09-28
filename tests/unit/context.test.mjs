@@ -16,6 +16,14 @@ test('show notes give names and terms, not links, stopwords or titles', () => {
   assert.ok(!plainText(NOTES).includes('<p>'));
 });
 
+test('credits and Title Case titles do not become terms', () => {
+  const terms = extractTerms(
+    'Derek talks with Arvind Narayanan and Sayash Kapoor. Host: Derek Thompson Guests: Arvind Narayanan and Sayash Kapoor Producer: Devon Baroldi Additional Production: Ben Glicksman Visit our site',
+    'The Single Smartest Case Against AI Doom', 'Plain English with Derek Thompson');
+  for (const t of ['Arvind Narayanan', 'Sayash Kapoor', 'Devon Baroldi', 'Ben Glicksman', 'Derek Thompson']) assert.ok(terms.includes(t), `${t} in ${terms.join('|')}`);
+  assert.ok(!terms.some((t) => /Producer|Production|Visit|Smartest|Single/.test(t)), terms.join('|'));
+});
+
 test('the prompt holds the glossary and the latest words, within a size limit', () => {
   const p = buildPrompt(['Arvind Narayanan', 'OpenAI'], 'one two three four');
   assert.equal(p, 'Arvind Narayanan, OpenAI. one two three four');
@@ -34,6 +42,8 @@ test('near-misses of known names are fixed; everyday phrases are not', () => {
   assert.equal(fix('in the open air of the city'), 'in the open air of the city');
   assert.equal(fix('Arvind Narayanan is right'), 'Arvind Narayanan is right');
   assert.equal(fix('nothing to see'), 'nothing to see');
+  assert.equal(fix('at least for the Open Air Hugging Phase incident'), 'at least for the OpenAI Hugging Face incident');
+  assert.equal(fix('Open air is nice.'), 'Open air is nice.');
   assert.equal(soundKey('Hugging Phase'), soundKey('hugging face'));
 });
 
