@@ -95,3 +95,21 @@ test('a short reply lost to the host does not hand the guest the wrong name', ()
   ];
   assert.deepEqual(guessNames(segs, ['Derek Thompson', 'Arvind Narayanan', 'Sayash Kapoor']), { 0: 'Derek Thompson', 2: 'Sayash Kapoor', 3: 'Arvind Narayanan' });
 });
+
+test('an address mid-way through the last lines of a turn counts, and misspelled first names too', () => {
+  const segs = [
+    { start: 0, end: 4, speaker: 0, text: "I'm Derek Thompson." },
+    { start: 4, end: 8, speaker: 0, text: 'Sayyash, what is the worldview?' },
+    { start: 8, end: 12, speaker: 0, text: 'And how did you get there?' },
+    { start: 12, end: 30, speaker: 2, text: 'There is this major point.' },
+    { start: 30, end: 34, speaker: 0, text: 'Arvind, what is the strongest piece of evidence today?' },
+    { start: 34, end: 36, speaker: 0, text: 'That you are right?' },
+    { start: 36, end: 40, speaker: 0, text: 'And what is the single thing you got wrong?' },
+    { start: 40, end: 60, speaker: 3, text: 'Let us start with the latter.' },
+    { start: 60, end: 64, speaker: 0, text: 'Right. Sayash, same question to you.' },
+    { start: 64, end: 80, speaker: 2, text: 'Sure.' },
+    { start: 80, end: 84, speaker: 0, text: 'Thanks, Arvind.' },
+    { start: 84, end: 90, speaker: 3, text: 'Of course.' },
+  ];
+  assert.deepEqual(guessNames(segs, ['Derek Thompson', 'Arvind Narayanan', 'Sayash Kapoor']), { 0: 'Derek Thompson', 2: 'Sayash Kapoor', 3: 'Arvind Narayanan' });
+});
