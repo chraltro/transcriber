@@ -66,7 +66,7 @@ function loadClip() {
   return new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
 }
 
-async function transcribe(modelId, audio) {
+async function transcribe(modelId, audio, { timestamps = true, prompt = true } = {}) {
   let asr;
   for (const dtype of ['q8', 'fp32']) {
     try {
@@ -89,8 +89,8 @@ async function transcribe(modelId, audio) {
       },
       // Whisper goes through the app's prompted path; other architectures through the pipeline.
       transcribe: asr.model.config.model_type === 'whisper'
-        ? (samples, language, { previous } = {}) => transcribeWindow(asr, samples, { language, prompt: previous || '', state: {} })
-        : async (samples) => (await asr(samples, asr.model.config.model_type === 'cohere_asr' ? { language: 'da' } : {})).text.trim(),
+        ? (samples, language, { previous } = {}) => transcribeWindow(asr, samples, { language, prompt: prompt ? previous || '' : '', timestamps, state: {} })
+        : async (samples) => (await asr(samples, asr.model.config.model_type === 'cohere_asr' ? { language: 'da' } : {})).text.replace(/<unk>/g, '').replace(/\s+/g, ' ').trim(),
     });
     stream.start(1, { language: 'danish' });
     stream.push(1, audio, true).then(() => stream.ready(1)).catch(reject);
@@ -117,19 +117,21 @@ if (MODE === 'search') {
   const ep = cutClip(await danishEpisodes());
   console.log(ep.title);
   const audio = loadClip();
-  const { segments, secs } = await transcribe('onnx-community/whisper-large-v3-turbo', audio);
+  const { segments, secs } = await transcribe('onnx-community/whisper-large-v3-turbo', audio, { timestamps: false, prompt: false });
   writeFileSync('ref.json', JSON.stringify({ title: ep.title, segments }));
   console.log(`reference: ${(audio.length / 16000 / secs).toFixed(1)}x realtime\n${segments.map((s) => s.text).join('\n')}`);
 } else {
-  const id = process.env.MODEL;
+  // MODEL may carry options: "id|ts=0|prompt=0"
+  const [id, ...opts] = process.env.MODEL.split('|');
+  const flags = Object.fromEntries(opts.map((o) => o.split('=')).map(([k, v]) => [k, v !== '0']));
   const audio = loadClip();
   const ref = existsSync('ref.json') ? JSON.parse(readFileSync('ref.json', 'utf8')) : null;
-  const { segments, secs } = await transcribe(id, audio);
+  const { segments, secs } = await transcribe(id, audio, { timestamps: flags.ts ?? true, prompt: flags.prompt ?? true });
   const text = segments.map((s) => s.text).join(' ');
-  console.log(`\n=== ${id}: ${(audio.length / 16000 / secs).toFixed(1)}x realtime`);
+  console.log(`\n=== ${process.env.MODEL}: ${(audio.length / 16000 / secs).toFixed(1)}x realtime`);
   if (ref) {
     const { errors, words: n } = wer(text, ref.segments.map((s) => s.text).join(' '));
-    console.log(`WER ${id} ${(100 * errors / n).toFixed(1)}% (${errors} of ${n} words against Large v3 Turbo, ${ref.title})`);
+    console.log(`WER ${process.env.MODEL} ${(100 * errors / n).toFixed(1)}% (${errors} of ${n} words against Large v3 Turbo, ${ref.title})`);
   }
   console.log(segments.map((s) => `[${Math.round(s.start)}] ${s.text}`).join('\n'));
 }
