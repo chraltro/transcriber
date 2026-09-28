@@ -1183,6 +1183,8 @@ function addSegment(seg, { fresh = true, into = null } = {}) {
   const span = el('span', 'seg', seg.text.trim());
   span.dataset.start = seg.start;
   span.dataset.end = seg.end;
+  if (seg.w != null) span.dataset.w = seg.w;
+  if (seg.speaker != null) span.dataset.speaker = seg.speaker;
   if (seg.draft) span.classList.add('draft');
   if (fresh) span.classList.add('fresh');
 

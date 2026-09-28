@@ -61,7 +61,7 @@ const nrk = await appleEpisodeLink('Abels tårn', 'no');
 const omny = await appleEpisodeLink('Millionærklubben', 'dk');
 
 const CASES = [
-  { name: 'Pocket Casts episode', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 8, title: 'Xi’s Just Not That Into You' },
+  { name: 'Pocket Casts episode', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 8, speakers: true, title: 'Xi’s Just Not That Into You' },
   // Simulates the browser killing the tab: reload after 3 segments, then resume from the saved point.
   { name: 'Resume after reload', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 6, reloadAfter: 3, title: 'Xi’s Just Not That Into You' },
   // Memory must stay flat over a longer run, or a long episode eventually gets the tab killed.
@@ -154,10 +154,15 @@ for (const c of CASES) {
       detail: document.querySelector('#detail').textContent,
       error: document.querySelector('#error-card').classList.contains('hidden') ? '' : document.querySelector('#error').textContent,
       episodes: document.querySelector('#episodes-card').classList.contains('hidden') ? 0 : document.querySelectorAll('#episodes li').length,
-      // One span per Whisper window; paragraphs can join several.
-      segments: [...document.querySelectorAll('#transcript .seg')].map((s) => ({ start: Number(s.dataset.start), text: s.textContent })),
+      // One span per timed part; a Whisper window (data-w) can have several, and paragraphs join them.
+      parts: [...document.querySelectorAll('#transcript .seg')].map((s) => ({
+        start: Number(s.dataset.start), w: s.dataset.w ?? s.dataset.start, text: s.textContent,
+        speaker: s.dataset.speaker == null ? null : Number(s.dataset.speaker),
+      })),
       title: document.querySelector('#episode-title').textContent,
     }));
+    // Windows, as before parts existed: the case sizes count these.
+    s.segments = [...new Map(s.parts.map((x) => [x.w, x])).values()];
     const line = `${s.stage} | ${s.detail}`;
     if (line !== last) { console.log(`  ${Math.round((Date.now() - start) / 1000)}s ${line}`); last = line; }
     if (s.error) { result = `error: ${s.error}`; break; }
@@ -199,7 +204,7 @@ for (const c of CASES) {
         if (grew > 200) { result = `memory grew ${Math.round(grew)} MB during the run`; break; }
       }
       if (c.title && s.title !== c.title) { result = `wrong episode: "${s.title}"`; break; }
-      const text = s.segments.map((x) => x.text).join(' ');
+      const text = s.parts.map((x) => x.text).join(' ');
       const score = languageScore(text, c.lang);
       console.log(`  ${c.lang} common-word share: ${(score * 100).toFixed(0)}% of ${text.split(/\s+/).length} words`);
       if (score < 0.12 && !c.skipLanguageCheck) { result = `transcript does not look ${c.lang} (${(score * 100).toFixed(0)}% common words)`; break; }
@@ -209,6 +214,10 @@ for (const c of CASES) {
         // A WebGPU failure falls back to the CPU and clears the GPU flag.
         if (!gpuUsed || device.gpu !== '1') { result = 'GPU case ran without WebGPU (or fell back to the CPU)'; break; }
       }
+      const who = await page.evaluate(() => ({ chips: [...document.querySelectorAll('#transcript .who')].map((c) => c.textContent) }));
+      const voices = new Set(s.parts.map((x) => x.speaker).filter((x) => x != null));
+      console.log(`  speakers: ${voices.size} voices over ${s.parts.length} parts in ${s.segments.length} windows; chips ${JSON.stringify(who.chips.slice(0, 6))}`);
+      if (c.speakers && !voices.size) { result = 'no speaker labels'; break; }
       result = 'ok';
       console.log(`  title: ${s.title}`);
       s.segments.slice(0, 2).forEach((x) => console.log(`  > [${Math.round(x.start)}s] ${x.text.slice(0, 80)}`));
