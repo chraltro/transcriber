@@ -1,8 +1,8 @@
-name: Danish lab
+name: Language lab
 on:
   push:
     branches: ['claude/**']
-    paths: ['tests/danish-lab.mjs', '.github/workflows/danish-lab.yml', 'lib/prompted.js']
+    paths: ['tests/language-lab.mjs', '.github/workflows/language-lab.yml']
   workflow_dispatch:
 jobs:
   search:
@@ -13,12 +13,16 @@ jobs:
         with:
           node-version: 22
       - run: npm i --no-save @huggingface/transformers@4.3.0
-      - run: node tests/danish-lab.mjs
+      - run: node tests/language-lab.mjs
         env:
           MODE: search
   ref:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: [norwegian]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,12 +30,13 @@ jobs:
           node-version: 22
       - run: sudo apt-get install -y ffmpeg >/dev/null
       - run: npm i --no-save @huggingface/transformers@4.3.0
-      - run: node tests/danish-lab.mjs
+      - run: node tests/language-lab.mjs
         env:
           MODE: ref
+          LANG_NAME: ${{ matrix.lang }}
       - uses: actions/upload-artifact@v4
         with:
-          name: danish-ref
+          name: ref-${{ matrix.lang }}
           path: |
             clip.wav
             ref.json
@@ -42,7 +47,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model: ['onnx-community/whisper-large-v3-turbo|run=1', 'onnx-community/whisper-large-v3-turbo|run=2', 'onnx-community/whisper-large-v3-turbo|run=3', 'onnx-community/whisper-small', 'Xenova/whisper-medium']
+        include:
+          - { lang: norwegian, model: 'Xenova/nb-whisper-tiny-beta' }
+          - { lang: norwegian, model: 'onnx-community/nb-whisper-base-ONNX' }
+          - { lang: norwegian, model: 'onnx-community/nb-whisper-small-ONNX' }
+          - { lang: norwegian, model: 'onnx-community/whisper-small' }
+          - { lang: norwegian, model: 'onnx-community/whisper-large-v3-turbo' }
+          - { lang: norwegian, model: 'onnx-community/nb-whisper-medium-ONNX' }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -52,8 +63,9 @@ jobs:
       - run: npm i --no-save @huggingface/transformers@4.3.0
       - uses: actions/download-artifact@v4
         with:
-          name: danish-ref
-      - run: node tests/danish-lab.mjs
+          name: ref-${{ matrix.lang }}
+      - run: node tests/language-lab.mjs
         env:
           MODE: model
           MODEL: ${{ matrix.model }}
+          LANG_NAME: ${{ matrix.lang }}

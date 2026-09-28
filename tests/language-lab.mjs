@@ -1,6 +1,6 @@
-// Danish lab: which model to use for Danish. One real Danish clip (a DR podcast), transcribed
-// through the app's own streaming and prompting code by each candidate, compared with Large v3
-// Turbo by word error rate, and printed so the text can be read.
+// Language lab: which model to use for Danish and Norwegian (LANG). One real podcast clip in the
+// language, transcribed through the app's own streaming and prompting code by each candidate,
+// compared with a reference by word error rate, and printed so the text can be read.
 //   MODE=search  list Hugging Face models that might do Danish in the browser (ONNX weights)
 //   MODE=ref     cut the clip (clip.wav) and write the reference (ref.json) with Large v3 Turbo
 //   MODE=model   MODEL=<id>: transcribe the clip and compare
@@ -11,10 +11,12 @@ import { StreamingTranscriber } from '../lib/stream.js';
 import { transcribeWindow } from '../lib/prompted.js';
 
 const MODE = process.env.MODE || 'model';
+const LANG = process.env.LANG_NAME || 'danish';
+const REF_MODEL = process.env.REF_MODEL || 'onnx-community/whisper-large-v3-turbo';
 const SECONDS = Number(process.env.SECONDS || 300);
 
 async function search() {
-  const terms = ['danish', 'dansk', 'hviske', 'roest', 'coral', 'whisper-da', 'whisper danish', 'da-DK', 'nota', 'alvenir', 'syvai'];
+  const terms = ['nb-whisper', 'norwegian', 'norsk', 'nbailab', 'whisper-no', 'nynorsk', 'bokmål', 'nb-NO', 'danish', 'dansk', 'hviske', 'roest', 'whisper danish'];
   const seen = new Map();
   for (const q of terms) {
     try {
@@ -23,7 +25,7 @@ async function search() {
         const files = (m.siblings || []).map((s) => s.rfilename);
         const onnx = files.filter((f) => f.endsWith('.onnx'));
         if (!onnx.length || seen.has(m.id)) continue;
-        seen.set(m.id, { id: m.id, downloads: m.downloads, tags: (m.tags || []).filter((t) => /transformers\.js|whisper|wav2vec|asr|speech|^da$|danish/i.test(t)).join(','), onnx: onnx.slice(0, 8).join(' ') });
+        seen.set(m.id, { id: m.id, downloads: m.downloads, tags: (m.tags || []).filter((t) => /transformers\.js|whisper|wav2vec|asr|speech|^da$|^no$|^nb$|^nn$|danish|norw/i.test(t)).join(','), onnx: onnx.slice(0, 8).join(' ') });
       }
     } catch (e) {
       console.log(`search ${q} failed: ${e.message}`);
@@ -34,13 +36,18 @@ async function search() {
   for (const r of rows) console.log(`- ${r.id}  (${r.downloads} downloads)  [${r.tags}]\n    ${r.onnx}`);
 }
 
-// Danish podcasts to try, in order; some hosts refuse downloads from data centres.
-async function danishEpisodes() {
+// Podcasts to try, in order; some hosts refuse downloads from data centres.
+const SHOWS = {
+  danish: { country: 'dk', terms: ['Genstart', 'Tiden', 'Millionærklubben', 'Den sorte boks', 'Politiken', 'Information'] },
+  norwegian: { country: 'no', terms: ['Abels tårn', 'Aftenpodden', 'Loven og livet', 'Giæver og Joffen', 'Nokon må seie det'] },
+};
+async function episodes() {
   const out = [];
-  for (const term of ['Genstart', 'Tiden', 'Millionærklubben', 'Den sorte boks', 'Politiken', 'Information']) {
+  const { country, terms } = SHOWS[LANG];
+  for (const term of terms) {
     try {
-      const s = await (await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=podcast&limit=1&country=dk`)).json();
-      const l = await (await fetch(`https://itunes.apple.com/lookup?id=${s.results[0].collectionId}&entity=podcastEpisode&limit=3&country=dk`)).json();
+      const s = await (await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=podcast&limit=1&country=${country}`)).json();
+      const l = await (await fetch(`https://itunes.apple.com/lookup?id=${s.results[0].collectionId}&entity=podcastEpisode&limit=3&country=${country}`)).json();
       const ep = l.results.find((r) => r.wrapperType === 'podcastEpisode');
       if (ep?.episodeUrl) out.push({ title: `${s.results[0].collectionName}: ${ep.trackName}`, url: ep.episodeUrl });
     } catch {}
@@ -58,7 +65,7 @@ function cutClip(eps) {
       console.log(`skipping ${ep.title}: ${String(e.stderr || e.message).split('\n')[0]}`);
     }
   }
-  throw new Error('No Danish episode could be downloaded');
+  throw new Error(`No ${LANG} episode could be downloaded`);
 }
 
 function loadClip() {
@@ -93,7 +100,7 @@ async function transcribe(modelId, audio, { timestamps = true, prompt = true } =
         ? (samples, language, { previous } = {}) => transcribeWindow(asr, samples, { language, prompt: prompt ? previous || '' : '', timestamps, state })
         : async (samples) => (await asr(samples, asr.model.config.model_type === 'cohere_asr' ? { language: 'da' } : {})).text.replace(/<unk>/g, '').replace(/\s+/g, ' ').trim(),
     });
-    stream.start(1, { language: 'danish' });
+    stream.start(1, { language: LANG });
     stream.push(1, audio, true).then(() => stream.ready(1)).catch(reject);
   });
   console.log(`windows re-decoded: ${state.retries || 0} of ${segments.length}`);
@@ -116,11 +123,11 @@ function wer(hyp, ref) {
 if (MODE === 'search') {
   await search();
 } else if (MODE === 'ref') {
-  const ep = cutClip(await danishEpisodes());
+  const ep = cutClip(await episodes());
   console.log(ep.title);
   const audio = loadClip();
-  const { segments, secs } = await transcribe('onnx-community/whisper-large-v3-turbo', audio, { timestamps: false, prompt: false });
-  writeFileSync('ref.json', JSON.stringify({ title: ep.title, segments }));
+  const { segments, secs } = await transcribe(REF_MODEL, audio, { timestamps: false, prompt: false });
+  writeFileSync('ref.json', JSON.stringify({ title: ep.title, model: REF_MODEL, segments }));
   console.log(`reference: ${(audio.length / 16000 / secs).toFixed(1)}x realtime\n${segments.map((s) => s.text).join('\n')}`);
 } else {
   // MODEL may carry options: "id|ts=0|prompt=0"
@@ -133,7 +140,7 @@ if (MODE === 'search') {
   console.log(`\n=== ${process.env.MODEL}: ${(audio.length / 16000 / secs).toFixed(1)}x realtime`);
   if (ref) {
     const { errors, words: n } = wer(text, ref.segments.map((s) => s.text).join(' '));
-    console.log(`WER ${process.env.MODEL} ${(100 * errors / n).toFixed(1)}% (${errors} of ${n} words against Large v3 Turbo, ${ref.title})`);
+    console.log(`WER ${process.env.MODEL} ${(100 * errors / n).toFixed(1)}% (${errors} of ${n} words against ${ref.model}, ${ref.title})`);
   }
   console.log(segments.map((s) => `[${Math.round(s.start)}] ${s.text}`).join('\n'));
 }
