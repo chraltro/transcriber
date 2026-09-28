@@ -113,3 +113,14 @@ test('an address mid-way through the last lines of a turn counts, and misspelled
   ];
   assert.deepEqual(guessNames(segs, ['Derek Thompson', 'Arvind Narayanan', 'Sayash Kapoor']), { 0: 'Derek Thompson', 2: 'Sayash Kapoor', 3: 'Arvind Narayanan' });
 });
+
+test('one clear address names a voice nobody else claims, but not a passing one', () => {
+  const segs = [
+    { start: 0, end: 4, speaker: 0, text: "I'm Derek Thompson." },
+    { start: 4, end: 8, speaker: 0, text: 'Arvind, what is the strongest evidence?' },
+    { start: 8, end: 120, speaker: 3, text: 'Let us start with the latter.' },
+    { start: 120, end: 124, speaker: 0, text: 'Sayash, what do you think?' },
+    { start: 124, end: 150, speaker: 2, text: 'Briefly.' },
+  ];
+  assert.deepEqual(guessNames(segs, ['Derek Thompson', 'Arvind Narayanan', 'Sayash Kapoor']), { 0: 'Derek Thompson', 3: 'Arvind Narayanan' });
+});
