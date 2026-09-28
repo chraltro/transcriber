@@ -535,8 +535,8 @@ body.has-session .settings:not(.open) .settings-body, .settings.collapsible:not(
 }
 .wave.hovering .wave-tip { opacity: 1; }
 
-.session-status { display: flex; align-items: center; gap: 14px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
-.status-text { flex: 1; min-width: 0; }
+.session-status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.status-text { flex: 1 1 180px; min-width: 0; }
 #stage { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 #detail { margin: 2px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .stats { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
@@ -844,6 +844,29 @@ body.has-session .settings:not(.open) .settings-body, .settings.collapsible:not(
   .para p { font-size: 11.5pt; color: #000; }
   .transcript > .para:first-child p::first-letter { color: #000; }
 }
+
+/* names spelled several ways */
+.names { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.names .hint { margin: 0 0 10px; }
+.names-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.names-list li { display: flex; flex-wrap: wrap; gap: 6px; }
+.names-list button {
+  height: 32px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 999px;
+  background: var(--surface); color: var(--text); font: 500 13.5px var(--font-ui);
+}
+.names-list button small { margin-left: 6px; font: 11.5px var(--font-mono); color: var(--faint); }
+.names-list button.best { border-color: var(--text); }
+.names-list button:hover { background: var(--surface-2); }
+.names-empty { font-size: 14px; color: var(--muted); }
+
+/* sponsor reads */
+.para.ad p { color: var(--muted); }
+.para.ad p::before {
+  content: 'Ad'; display: inline-block; margin-right: 8px; padding: 0 5px; vertical-align: 2px;
+  border: 1px solid var(--line-strong); border-radius: 4px;
+  font: 600 10.5px/1.6 var(--font-ui); letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint);
+}
+.transcript > .para.ad:first-child p::first-letter { float: none; font-size: inherit; color: inherit; padding: 0; }
 
 /* refine: whole transcript from the session card, or a selected passage from the pill */
 .refine { display: flex; align-items: center; gap: 6px; }

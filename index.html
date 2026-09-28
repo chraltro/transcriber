@@ -202,6 +202,11 @@
           <select id="refine-model"></select>
           <button type="button" class="btn ghost small" id="refine-all">Refine all</button>
         </div>
+        <button type="button" class="btn ghost small hidden" id="names-btn" aria-expanded="false" aria-controls="names-panel">Check names</button>
+      </div>
+      <div class="names hidden" id="names-panel">
+        <p class="hint">Names spelled more than one way in this transcript. Tap the right spelling to fix the others, here and in future transcripts.</p>
+        <ul class="names-list" id="names-list"></ul>
       </div>
     </section>
 

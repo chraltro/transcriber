@@ -6,6 +6,8 @@ import { indexWav, wavPiece } from './lib/wav.js';
 import { toSrt, toVtt } from './lib/subtitles.js';
 import { tidy, plainText, wordCount, startsParagraph } from './lib/paragraphs.js';
 import { guessNames, speakerName } from './lib/speakers.js';
+import { nameGroups, glossaryFor } from './lib/names.js';
+import { isAd } from './lib/ads.js';
 import { id3Length, parseId3 } from './lib/id3.js';
 import { encodeLevels, decodeLevels } from './lib/levels.js';
 import { Waveform } from './ui/waveform.js';
@@ -19,7 +21,7 @@ const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platf
 const IS_MOBILE = IS_IOS || /Android/i.test(navigator.userAgent);
 
 const els = {
-  form: $('#url-form'), url: $('#url'), go: $('#go'), paste: $('#paste'), models: $('#models'), file: $('#file'), proxy: $('#proxy'), glossary: $('#glossary'), speakers: $('#speakers'),
+  form: $('#url-form'), url: $('#url'), go: $('#go'), paste: $('#paste'), models: $('#models'), file: $('#file'), proxy: $('#proxy'), glossary: $('#glossary'), speakers: $('#speakers'), namesBtn: $('#names-btn'), namesPanel: $('#names-panel'), namesList: $('#names-list'),
   deviceHint: $('#device-hint'), modelNote: $('#model-note'), refineBar: $('#refine-bar'), refineModel: $('#refine-model'), refineAll: $('#refine-all'), selPill: $('#sel-pill'), selModel: $('#sel-model'), stepTranscribe: $('#step-transcribe'),
   settings: $('#settings'), settingsToggle: $('#settings-toggle'), settingsSummary: $('#settings-summary'),
   episodesCard: $('#episodes-card'), feedTitle: $('#feed-title'), feedCount: $('#feed-count'), feedArt: $('#feed-art'),
@@ -1164,6 +1166,7 @@ function restoreTranscript(segments) {
 }
 
 const countWords = (t) => t.split(/\s+/).filter(Boolean).length;
+const markAd = (para) => para.el.classList.toggle('ad', isAd(para.p.textContent));
 
 function addSegment(seg, { fresh = true, into = null } = {}) {
   if (!seg.text || !seg.text.trim()) return;
@@ -1187,6 +1190,7 @@ function addSegment(seg, { fresh = true, into = null } = {}) {
     state.segEls[state.segEls.length - 1].textContent = tidy(prev.text, seg.text);
     state.lastPara.p.append(' ', span);
     state.lastPara.words += countWords(span.textContent);
+    markAd(state.lastPara);
   } else {
     const para = el('div', 'para');
     if (fresh) para.classList.add('fresh');
@@ -1206,6 +1210,7 @@ function addSegment(seg, { fresh = true, into = null } = {}) {
     }
     host.append(para);
     state.lastPara = { el: para, p, words: countWords(span.textContent), speaker: seg.speaker };
+    markAd(state.lastPara);
   }
   state.segEls.push(span);
   if (into) return;
@@ -1965,6 +1970,51 @@ function updateRefineBar() {
   const show = !state.busy && state.playable && state.segments.length > 0 && !els.progressCard.classList.contains('hidden');
   els.refineBar.classList.toggle('hidden', !show);
   if (show) fillRefineModels();
+  const canCheck = !state.busy && state.segments.length > 0 && !els.progressCard.classList.contains('hidden');
+  els.namesBtn.classList.toggle('hidden', !canCheck);
+  if (!canCheck) toggleNames(false);
+  else if (!els.namesPanel.classList.contains('hidden')) renderNames();
+}
+
+/* ---------- names spelled several ways ---------- */
+
+function toggleNames(open = els.namesPanel.classList.contains('hidden')) {
+  els.namesPanel.classList.toggle('hidden', !open);
+  els.namesBtn.setAttribute('aria-expanded', String(open));
+  if (open) renderNames();
+}
+
+function renderNames() {
+  const text = state.segments.map((x) => x.text).join(' ');
+  const known = [...userGlossary().terms, ...extractTerms(state.source?.notes || '')];
+  const groups = nameGroups(text, known).slice(0, 12);
+  if (!groups.length) {
+    els.namesList.replaceChildren(el('li', 'names-empty', 'Every name is spelled the same way throughout.'));
+    return;
+  }
+  els.namesList.replaceChildren(...groups.map((g) => {
+    const li = el('li');
+    for (const v of g.variants) {
+      const b = el('button', v.text === g.best ? 'best' : '', v.text);
+      b.type = 'button';
+      b.title = `Use “${v.text}” everywhere`;
+      b.append(el('small', '', `×${v.n}`));
+      b.addEventListener('click', () => pickName(g, v.text));
+      li.append(b);
+    }
+    return li;
+  }));
+}
+
+async function pickName(group, right) {
+  const lines = glossaryFor(group, right);
+  const lefts = new Set(group.variants.map((v) => v.text.toLowerCase()));
+  const keep = store.get('glossary', '').split('\n').map((l) => l.trim()).filter(Boolean)
+    .filter((l) => !lefts.has(l.split(/\s*(?:=|->|→)\s*/)[0].toLowerCase()));
+  els.glossary.value = [...new Set([...keep, ...lines])].join('\n');
+  await applyGlossary();
+  renderNames();
+  toast(`“${right}” everywhere`);
 }
 
 async function refineAudio() {
@@ -2228,6 +2278,7 @@ function wireEvents() {
   els.models.addEventListener('change', () => { store.set('model', selectedModel()); updateModelHint(); updateSettingsSummary(); });
   els.proxy.addEventListener('change', () => store.set('proxy', els.proxy.value.trim()));
   els.glossary.addEventListener('change', applyGlossary);
+  els.namesBtn.addEventListener('click', () => toggleNames());
   els.speakers.addEventListener('change', () => store.set('speakers', els.speakers.checked ? '1' : '0'));
   els.settingsToggle.addEventListener('click', () => {
     const open = els.settings.classList.toggle('open');
