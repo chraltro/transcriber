@@ -20,10 +20,19 @@ const MINUTES = Number(process.env.MINUTES || 40);
 
 async function findEpisode() {
   const s = await (await fetch('https://itunes.apple.com/search?term=Plain+English+Derek+Thompson&entity=podcast&limit=5')).json();
+  const hit = (t) => /normal technology/i.test(t) || (/Narayanan/i.test(t) && /Kapoor/i.test(t));
   for (const show of s.results) {
-    const l = await (await fetch(`https://itunes.apple.com/lookup?id=${show.collectionId}&entity=podcastEpisode&limit=300`)).json();
-    const ep = l.results.find((r) => r.wrapperType === 'podcastEpisode' && /normal technology/i.test(r.trackName));
-    if (ep) return { show: show.collectionName, title: ep.trackName, url: ep.episodeUrl, notes: plainText(ep.description || ep.shortDescription || '') };
+    // The iTunes lookup only lists recent episodes; the feed has them all.
+    if (!show.feedUrl) continue;
+    const xml = await (await fetch(show.feedUrl)).text();
+    for (const item of xml.split(/<item[\s>]/).slice(1)) {
+      const tag = (n) => (item.match(new RegExp(`<${n}[^>]*>([\\s\\S]*?)</${n}>`)) || [])[1] || '';
+      const cdata = (x) => x.replace(/^\s*<!\[CDATA\[|\]\]>\s*$/g, '');
+      const title = plainText(cdata(tag('title')));
+      const notes = plainText(cdata(tag('description') || tag('itunes:summary') || tag('content:encoded')));
+      const url = (item.match(/<enclosure[^>]*url="([^"]+)"/) || [])[1];
+      if (url && (hit(title) || hit(notes))) return { show: show.collectionName, title, url: url.replace(/&amp;/g, '&'), notes };
+    }
   }
   throw new Error('Episode not found');
 }
