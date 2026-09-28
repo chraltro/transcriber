@@ -2,7 +2,7 @@ name: Language lab
 on:
   push:
     branches: ['claude/**']
-    paths: ['tests/language-lab.mjs', '.github/workflows/language-lab.yml']
+    paths: ['tests/language-lab.mjs', '.github/workflows/language-lab.yml', 'lib/prompted.js']
   workflow_dispatch:
 jobs:
   search:
@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lang: [norwegian]
+        lang: [danish]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,6 +34,7 @@ jobs:
         env:
           MODE: ref
           LANG_NAME: ${{ matrix.lang }}
+          REF_MODEL: Xenova/whisper-medium
       - uses: actions/upload-artifact@v4
         with:
           name: ref-${{ matrix.lang }}
@@ -48,12 +49,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { lang: norwegian, model: 'Xenova/nb-whisper-tiny-beta' }
-          - { lang: norwegian, model: 'onnx-community/nb-whisper-base-ONNX' }
-          - { lang: norwegian, model: 'onnx-community/nb-whisper-small-ONNX' }
-          - { lang: norwegian, model: 'onnx-community/whisper-small' }
-          - { lang: norwegian, model: 'onnx-community/whisper-large-v3-turbo' }
-          - { lang: norwegian, model: 'onnx-community/nb-whisper-medium-ONNX' }
+          - { lang: danish, model: 'onnx-community/whisper-large-v3-turbo|dtype=q8|run=1' }
+          - { lang: danish, model: 'onnx-community/whisper-large-v3-turbo|dtype=q8|run=2' }
+          - { lang: danish, model: 'onnx-community/whisper-large-v3-turbo|dtype=q4|run=1' }
+          - { lang: danish, model: 'onnx-community/whisper-large-v3-turbo|dtype=q4|run=2' }
+          - { lang: danish, model: 'onnx-community/whisper-small|dtype=q8' }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

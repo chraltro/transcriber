@@ -73,9 +73,9 @@ function loadClip() {
   return new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
 }
 
-async function transcribe(modelId, audio, { timestamps = true, prompt = true } = {}) {
+async function transcribe(modelId, audio, { timestamps = true, prompt = true, dtypes = ['q8', 'fp32'] } = {}) {
   let asr;
-  for (const dtype of ['q8', 'fp32']) {
+  for (const dtype of dtypes) {
     try {
       asr = await tf.pipeline('automatic-speech-recognition', modelId, { dtype });
       console.log(`loaded ${modelId} (${dtype}, ${asr.model.config.model_type})`);
@@ -132,10 +132,14 @@ if (MODE === 'search') {
 } else {
   // MODEL may carry options: "id|ts=0|prompt=0"
   const [id, ...opts] = process.env.MODEL.split('|');
-  const flags = Object.fromEntries(opts.map((o) => o.split('=')).map(([k, v]) => [k, v !== '0']));
+  const flags = Object.fromEntries(opts.map((o) => o.split('=')).filter(([k]) => k !== 'dtype').map(([k, v]) => [k, v !== '0']));
   const audio = loadClip();
   const ref = existsSync('ref.json') ? JSON.parse(readFileSync('ref.json', 'utf8')) : null;
-  const { segments, secs } = await transcribe(id, audio, { timestamps: flags.ts ?? true, prompt: flags.prompt ?? true });
+  const cpu = execSync("lscpu | grep -E 'Model name|Flags' | sed 's/Flags:.*\\(avx512_vnni\\|avx_vnni\\|avx512f\\).*/Flags: has \\1/'", { encoding: 'utf8' });
+  const vnni = /avx512_vnni|avx_vnni/.test(execSync('grep -m1 flags /proc/cpuinfo', { encoding: 'utf8' }));
+  console.log(`CPU: ${cpu.split('\n')[0].replace(/\s+/g, ' ')} · VNNI: ${vnni}`);
+  const dtype = process.env.MODEL.match(/dtype=(\w+)/)?.[1];
+  const { segments, secs } = await transcribe(id, audio, { timestamps: flags.ts ?? true, prompt: flags.prompt ?? true, dtypes: dtype ? [dtype] : undefined });
   const text = segments.map((s) => s.text).join(' ');
   console.log(`\n=== ${process.env.MODEL}: ${(audio.length / 16000 / secs).toFixed(1)}x realtime`);
   if (ref) {

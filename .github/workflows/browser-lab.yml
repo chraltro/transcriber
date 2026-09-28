@@ -1,0 +1,29 @@
+name: Browser lab
+# Model comparisons inside the real app in Chromium (WebAssembly ONNX Runtime, as users get it).
+on:
+  push:
+    branches: ['claude/**']
+    paths: ['.github/workflows/browser-lab.yml']
+  workflow_dispatch:
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        case: ['Danish, Large', 'Danish, Small', 'Norwegian, Small']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: grep -m1 'model name' /proc/cpuinfo; grep -m1 -o 'avx512_vnni\|avx_vnni' /proc/cpuinfo || echo 'no VNNI'
+      - run: node tests/e2e.mjs
+        env:
+          LAB: '1'
+          ONLY: '^Lab: ${{ matrix.case }}$'
+          PRINT_ALL: '1'
+          CASE_TIMEOUT_MS: '2400000'

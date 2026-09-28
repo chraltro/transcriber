@@ -89,6 +89,13 @@ const CASES = [
   { name: 'Spotify episode', url: 'https://open.spotify.com/episode/2ebY3WNejLNbK47emgjd1E', lang: 'english', resolveOnly: true, titleIncludes: 'Alcohol' },
   { name: 'RSS feed', url: 'https://feeds.megaphone.fm/hubermanlab', lang: 'english', expectList: true },
   ...(process.env.EXTRA_CASES ? JSON.parse(process.env.EXTRA_CASES) : []),
+  // LAB=1: model comparisons in the real browser (tests/language-lab.mjs uses native ONNX Runtime,
+  // the app uses its WebAssembly build). Run by browser-lab.yml, which prints the full text.
+  ...(process.env.LAB === '1' ? [
+    { name: 'Lab: Danish, Large', url: omny.url, lang: 'danish', model: 'turbo', segments: 6, memoryLimitMB: 5000, title: omny.title },
+    { name: 'Lab: Danish, Small', url: omny.url, lang: 'danish', model: 'small', segments: 6, memoryLimitMB: 3000, title: omny.title },
+    { name: 'Lab: Norwegian, Small', url: nrk.url, lang: 'norwegian', model: 'small', segments: 6, memoryLimitMB: 3000, title: nrk.title },
+  ] : []),
 ];
 // Decoding is chunked so memory stays flat; a 90 minute episode used about 4 GB before.
 const MEMORY_LIMIT_MB = Number(process.env.MEMORY_LIMIT_MB || 1200);
@@ -223,7 +230,12 @@ for (const c of CASES) {
       if (c.speakers && !voices.size) { result = 'no speaker labels'; break; }
       result = 'ok';
       console.log(`  title: ${s.title}`);
-      s.segments.slice(0, 2).forEach((x) => console.log(`  > [${Math.round(x.start)}s] ${x.text.slice(0, 80)}`));
+      if (process.env.PRINT_ALL) {
+        // Whole windows, in order: the text a reader would get.
+        for (const w of s.segments) console.log(`  > [${Math.round(w.start)}s] ${s.parts.filter((x) => x.w === w.w).map((x) => x.text).join(' ')}`);
+      } else {
+        s.segments.slice(0, 2).forEach((x) => console.log(`  > [${Math.round(x.start)}s] ${x.text.slice(0, 80)}`));
+      }
       break;
     }
     await page.waitForTimeout(2000);
