@@ -5,7 +5,7 @@ import { fmtTime, normTitle, bestTitleMatch, sameShow } from './lib/text.js';
 import { indexWav, wavPiece } from './lib/wav.js';
 import { toSrt, toVtt } from './lib/subtitles.js';
 import { tidy, plainText, wordCount, startsParagraph } from './lib/paragraphs.js';
-import { guessNames, speakerName, labelParts } from './lib/speakers.js';
+import { guessNames, speakerName, labelParts, hostFromShow } from './lib/speakers.js';
 import { nameGroups, glossaryFor } from './lib/names.js';
 import { isAd } from './lib/ads.js';
 import { id3Length, parseId3 } from './lib/id3.js';
@@ -285,7 +285,7 @@ const speakersOn = () => store.get('speakers', '1') === '1';
 const names = () => ({ ...state.guessed, ...state.speakerNames });
 
 function refreshNames() {
-  state.guessed = guessNames(state.segments, state.vocab?.terms || []);
+  state.guessed = guessNames(state.segments, state.vocab?.terms || [], { host: hostFromShow(state.source?.show) });
   const n = names();
   for (const chip of els.transcript.querySelectorAll('.who')) chip.textContent = speakerName(chip.dataset.speaker, n);
   const voices = new Set(state.segments.map((x) => x.speaker).filter((x) => x != null)).size;

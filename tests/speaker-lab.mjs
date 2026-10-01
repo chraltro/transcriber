@@ -12,7 +12,7 @@ import { transcribeWindow } from '../lib/prompted.js';
 import { buildPrompt, extractTerms } from '../lib/context.js';
 import { dtypeFor } from '../lib/models.js';
 import { createDiarizer } from '../lib/diarize.js';
-import { guessNames, speakerName, clusterVoices } from '../lib/speakers.js';
+import { guessNames, speakerName, clusterVoices, hostFromShow, Voices, assignLocals, labelParts } from '../lib/speakers.js';
 
 const SHOW = process.env.SHOW || 'The Ezra Klein Show';
 const EPISODE = new RegExp(process.env.EPISODE || 'Gates', 'i');
@@ -99,7 +99,7 @@ function show(label, speakerOfPart, full) {
     if (s != null) last = s;
     return { ...p, speaker: s ?? last };
   });
-  const names = guessNames(parts, terms);
+  const names = guessNames(parts, terms, { host: hostFromShow(ep.show) });
   const talk = {};
   for (const p of parts) if (p.speaker != null) talk[p.speaker] = (talk[p.speaker] || 0) + (p.end - p.start);
   let turns = 0;
@@ -118,11 +118,46 @@ function show(label, speakerOfPart, full) {
   if (cur) console.log(`[${Math.round(cur.start)}] ${cur.speaker == null ? '?' : speakerName(cur.speaker, names)}: ${cur.text.join(' ')}`);
 }
 
-const FULL = (process.env.FULL || 'online,0.45').split(',');
-show('online (the app now)', (i) => allParts[i].speaker, FULL.includes('online'));
-for (const th of [0.35, 0.4, 0.45, 0.5, 0.55]) {
+// Replays every window's speaker output through a labelling method, as the app would.
+function replay({ minPrint, short, smooth }) {
+  const voices = new Voices();
+  let last = null;
+  const out = [];
+  for (const w of windows) {
+    const prints = Object.fromEntries(Object.entries(w.prints).filter(([, p]) => p.seconds >= minPrint));
+    let local;
+    if (short) local = assignLocals(voices, prints);
+    else {
+      local = {};
+      for (const [spk, { print, seconds }] of Object.entries(prints)) local[spk] = voices.match(print, seconds);
+    }
+    const rel = w.parts.map((p) => ({ ...p, start: p.start - w.start, end: p.end - w.start }));
+    const labelled = labelParts(rel, w.turns, local, last, smooth ? {} : { switchCost: null });
+    if (labelled.length && labelled[labelled.length - 1].speaker != null) last = labelled[labelled.length - 1].speaker;
+    out.push(...labelled.map((p) => p.speaker ?? null));
+  }
+  return out;
+}
+const METHODS = [
+  ['before (the app until now)', { minPrint: 1.2, short: false, smooth: false }],
+  ['short prints', { minPrint: 0.4, short: true, smooth: false }],
+  ['short prints + smoothing (the app now)', { minPrint: 0.4, short: true, smooth: true }],
+];
+const results = METHODS.map(([label, opts]) => [label, replay(opts)]);
+for (const [label, sp] of results) show(label, (i) => sp[i], false);
+// Every change of speaker, as each method has it, so the edges can be compared by reading.
+for (const [label, sp] of results) {
+  console.log(`\n--- edges: ${label}`);
+  for (let i = 1; i < allParts.length; i++) {
+    if (sp[i] === sp[i - 1] || sp[i] == null) continue;
+    console.log(`[${Math.round(allParts[i].start)}] ${sp[i - 1]}: …${allParts[i - 1].text.slice(-70)} || ${sp[i]}: ${allParts[i].text.slice(0, 90)}`);
+  }
+}
+const [, now] = results[results.length - 1];
+show('the app now, in full', (i) => now[i], true);
+for (const th of [0.4, 0.5]) {
   const ids = clusterVoices(items, { threshold: th });
-  show(`hindsight ${th}`, (i) => (partLocal[i] == null ? null : ids[partLocal[i]]), FULL.includes(String(th)));
+  show(`hindsight ${th}`, (i) => (partLocal[i] == null ? null : ids[partLocal[i]]), false);
 }
 // How alike the local prints of the biggest groups are, to see where a threshold should sit.
 const ids = clusterVoices(items, { threshold: 0.45 });

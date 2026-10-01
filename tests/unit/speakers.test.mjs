@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { framesToTurns, Voices, labelParts, guessNames, speakerName, cosine, sentenceParts, clusterVoices } from '../../lib/speakers.js';
+import { framesToTurns, Voices, labelParts, guessNames, speakerName, cosine, sentenceParts, clusterVoices, hostFromShow, assignLocals } from '../../lib/speakers.js';
 import { splitTimestamps, coveredUntil } from '../../lib/prompted.js';
 
 test('frame classes become single-speaker turns; overlap and blips drop out', () => {
@@ -167,4 +167,66 @@ test('clustering with hindsight undoes an early wrong split', () => {
   assert.equal(ids[1], ids[3]);
   assert.notEqual(ids[0], ids[1]);
   assert.equal(ids[1], 0); // the guest talks most
+});
+
+test('the host comes from the show name, and is whoever welcomes the guest', () => {
+  assert.equal(hostFromShow('The Ezra Klein Show'), 'Ezra Klein');
+  assert.equal(hostFromShow('Plain English with Derek Thompson'), 'Derek Thompson');
+  assert.equal(hostFromShow('The Joe Rogan Experience'), 'Joe Rogan');
+  assert.equal(hostFromShow('Lex Fridman Podcast'), 'Lex Fridman');
+  assert.equal(hostFromShow('The Daily'), null);
+  assert.equal(hostFromShow('Hard Fork'), null);
+  const segs = [
+    { start: 0, end: 50, speaker: 1, text: 'So really quite a call to arms. Bill Gates, welcome to the show.' },
+    { start: 50, end: 120, speaker: 0, text: 'Great to be here. Mostly what we are working on is the computer being a tool.' },
+    { start: 120, end: 140, speaker: 1, text: 'What changed your mind?' },
+    { start: 140, end: 220, speaker: 0, text: 'The pace of the models.' },
+  ];
+  assert.deepEqual(guessNames(segs, ['Bill Gates'], { host: 'Ezra Klein' }), { 0: 'Bill Gates', 1: 'Ezra Klein' });
+});
+
+test('a question at the end of a turn stays with the person asking it', () => {
+  // Ezra (voice 1) asks until 10.6 s, Gates (voice 0) answers. The question's estimated time
+  // spills a little into the answer.
+  const parts = [
+    { start: 0, end: 8, text: 'This is the role of individual CEOs.' },
+    { start: 8, end: 10, text: 'How do you see that question?' },
+    { start: 10, end: 30, text: "Well, there's never been a product that's less understood than AI." },
+  ];
+  const turns = [{ spk: 0, start: 0, end: 9.2 }, { spk: 1, start: 9.4, end: 30 }];
+  const out = labelParts(parts, turns, { 0: 1, 1: 0 });
+  assert.deepEqual(out.map((p) => p.speaker), [1, 1, 0]);
+});
+
+test('a short real reply between two turns is kept', () => {
+  const parts = [
+    { start: 0, end: 6, text: "Yeah, we don't want them to think, do we?" },
+    { start: 6, end: 8.5, text: "Not really, I don't think. It's a scary thought." },
+    { start: 8.5, end: 20, text: 'So that was 30 years ago. Narrate for me how we got here.' },
+  ];
+  const turns = [{ spk: 0, start: 0, end: 6 }, { spk: 1, start: 6.1, end: 8.4 }, { spk: 3, start: 8.6, end: 20 }];
+  assert.deepEqual(labelParts(parts, turns, { 0: 2, 1: 0, 3: 1 }).map((p) => p.speaker), [2, 0, 1]);
+});
+
+test('one sentence does not flip speaker against the evidence around it', () => {
+  const parts = [
+    { start: 0, end: 10, text: 'A long answer about thresholds.' },
+    { start: 10, end: 10.6, text: 'And so.' },
+    { start: 10.6, end: 20, text: 'The cyber capability was stunning.' },
+  ];
+  const turns = [{ spk: 0, start: 0, end: 10.1 }, { spk: 1, start: 10.1, end: 10.5 }, { spk: 0, start: 10.5, end: 20 }];
+  assert.deepEqual(labelParts(parts, turns, { 0: 0, 1: 1 }).map((p) => p.speaker), [0, 0, 0]);
+});
+
+test('a short snippet joins a voice already heard, never its own piece-mate', () => {
+  const v = (a, b) => { const x = new Float32Array(4); x[0] = a; x[1] = b; return x; };
+  const voices = new Voices();
+  voices.match(v(1, 0), 20); // voice 0: Gates
+  voices.match(v(0, 1), 20); // voice 1: Ezra
+  // Piece 0 (locals 0..2): Gates talks 9 s, Ezra 0.8 s with a shaky print that leans to Gates.
+  const local = assignLocals(voices, { 0: { print: v(1, 0.1), seconds: 9 }, 1: { print: v(0.7, 0.6), seconds: 0.8 } });
+  assert.deepEqual(local, { 0: 0, 1: 1 });
+  // A short snippet never starts a new voice.
+  const fresh = new Voices();
+  assert.equal(assignLocals(fresh, { 3: { print: v(1, 0), seconds: 1 } })[3], null);
 });
