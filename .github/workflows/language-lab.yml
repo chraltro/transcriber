@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 jobs:
   search:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lang: [danish]
+        lang: [french, german, spanish, italian]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -49,11 +50,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { lang: danish, model: 'onnx-community/whisper-large-v3-turbo|dtype=q8|run=1' }
-          - { lang: danish, model: 'onnx-community/whisper-large-v3-turbo|dtype=q8|run=2' }
-          - { lang: danish, model: 'onnx-community/whisper-large-v3-turbo|dtype=q4|run=1' }
-          - { lang: danish, model: 'onnx-community/whisper-large-v3-turbo|dtype=q4|run=2' }
-          - { lang: danish, model: 'onnx-community/whisper-small|dtype=q8' }
+          - { lang: french, model: 'onnx-community/whisper-small|dtype=q8' }
+          - { lang: french, model: 'onnx-community/whisper-base|dtype=q8' }
+          - { lang: german, model: 'onnx-community/whisper-small|dtype=q8' }
+          - { lang: german, model: 'onnx-community/whisper-base|dtype=q8' }
+          - { lang: spanish, model: 'onnx-community/whisper-small|dtype=q8' }
+          - { lang: spanish, model: 'onnx-community/whisper-base|dtype=q8' }
+          - { lang: italian, model: 'onnx-community/whisper-small|dtype=q8' }
+          - { lang: italian, model: 'onnx-community/whisper-base|dtype=q8' }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

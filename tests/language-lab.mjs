@@ -1,4 +1,4 @@
-// Language lab: which model to use for Danish and Norwegian (LANG). One real podcast clip in the
+// Language lab: which model to use for a language (LANG_NAME). One real podcast clip in the
 // language, transcribed through the app's own streaming and prompting code by each candidate,
 // compared with a reference by word error rate, and printed so the text can be read.
 //   MODE=search  list Hugging Face models that might do Danish in the browser (ONNX weights)
@@ -40,6 +40,10 @@ async function search() {
 const SHOWS = {
   danish: { country: 'dk', terms: ['Genstart', 'Tiden', 'Millionærklubben', 'Den sorte boks', 'Politiken', 'Information'] },
   norwegian: { country: 'no', terms: ['Abels tårn', 'Aftenpodden', 'Loven og livet', 'Giæver og Joffen', 'Nokon må seie det'] },
+  french: { country: 'fr', terms: ['Les Pieds sur terre', 'Transfert', 'Affaires sensibles', 'Le Code a changé', 'Les Couilles sur la table'] },
+  german: { country: 'de', terms: ['Lage der Nation', 'Was jetzt?', 'Hotel Matze', 'Zeit Verbrechen', 'Gemischtes Hack'] },
+  spanish: { country: 'es', terms: ['Nadie Sabe Nada', 'Hoy en EL PAÍS', 'La Escóbula de la Brújula', 'Radio Ambulante', 'Estirando el chicle'] },
+  italian: { country: 'it', terms: ['Morning Il Post', 'Indagini', 'Stories Cecilia Sala', 'Muschio Selvaggio', 'Tintoria'] },
 };
 async function episodes() {
   const out = [];
