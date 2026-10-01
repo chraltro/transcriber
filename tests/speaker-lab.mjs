@@ -1,8 +1,9 @@
 // Speaker lab: one real interview (The Ezra Klein Show with Bill Gates, by default) through the
 // app's own transcription and speaker code. Every window's raw speaker output (turns and voice
 // prints) is kept, so ways of turning voice prints into speakers can be compared on exactly the
-// same data: the app's on-the-fly matching (Voices) and clustering with hindsight
-// (clusterVoices) at a few thresholds. Each is printed as the reader would see it.
+// same data, each scored on edge sentences whose speaker is known and printed as a reader sees it.
+// (Clustering all prints with hindsight was tried too: on these episodes it found exactly the
+// voices the on-the-fly matching did. The errors were at the edges of turns.)
 //   SHOW, EPISODE (regex), MINUTES, MODEL
 import * as tf from '@huggingface/transformers';
 import { execSync } from 'node:child_process';
@@ -12,7 +13,7 @@ import { transcribeWindow } from '../lib/prompted.js';
 import { buildPrompt, extractTerms } from '../lib/context.js';
 import { dtypeFor } from '../lib/models.js';
 import { createDiarizer } from '../lib/diarize.js';
-import { guessNames, speakerName, clusterVoices, hostFromShow, Voices, assignLocals, labelParts, retimeParts } from '../lib/speakers.js';
+import { guessNames, speakerName, hostFromShow, Voices, assignLocals, labelParts, retimeParts } from '../lib/speakers.js';
 
 const SHOW = process.env.SHOW || 'The Ezra Klein Show';
 const EPISODE = new RegExp(process.env.EPISODE || 'Gates', 'i');
@@ -151,7 +152,7 @@ function replay({ minPrint, short, smooth, retime, debug, own, minSim = 0.3, mar
     }
     const rel = w.parts.map((p) => ({ ...p, start: p.start - w.start, end: p.end - w.start }));
     const labelled = labelParts(rel, w.turns, local, last, { switchCost: smooth ? 0.8 : null, retime: retime || false, ...(own ? { voices, spanPrints: w.spanPrints, minSim, margin } : {}) });
-    if (debug) debugWindows.push({ w, rel: retime ? retimeParts(rel, w.turns, retime) : rel, local, labelled, before: last });
+    if (debug) debugWindows.push({ w, rel: retime ? retimeParts(rel, w.turns) : rel, local, labelled, before: last });
     if (labelled.length && labelled[labelled.length - 1].speaker != null) last = labelled[labelled.length - 1].speaker;
     out.push(...labelled.map((p) => p.speaker ?? null));
   }
@@ -161,11 +162,8 @@ const METHODS = [
   ['before (the app until now)', { minPrint: 1.2, short: false, smooth: false }],
   ['short prints', { minPrint: 0.4, short: true, smooth: false }],
   ['short prints + smoothing', { minPrint: 0.4, short: true, smooth: true }],
-  ['+ sentences timed over speech, per Whisper part', { minPrint: 0.4, short: true, smooth: true, retime: 'part' }],
-  ['+ sentences timed over speech, whole window', { minPrint: 0.4, short: true, smooth: true, retime: 'window' }],
-  ['+ sentence prints (the app now)', { minPrint: 0.4, short: true, smooth: true, retime: 'part', own: true, debug: true }],
-  ['+ sentence prints, looser', { minPrint: 0.4, short: true, smooth: true, retime: 'part', own: true, minSim: 0.25, margin: 0.05 }],
-  ['+ sentence prints, stricter', { minPrint: 0.4, short: true, smooth: true, retime: 'part', own: true, minSim: 0.4, margin: 0.12 }],
+  ['+ sentences timed over speech', { minPrint: 0.4, short: true, smooth: true, retime: true }],
+  ['+ sentence prints (the app now)', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true, debug: true }],
 ];
 const results = METHODS.map(([label, opts]) => [label, replay(opts)]);
 // Sentences at turn edges whose speaker is certain from the conversation (read and checked by
@@ -216,7 +214,7 @@ for (const [label, sp] of results) {
 }
 for (const [label, sp] of results) show(label, (i) => sp[i], false);
 // Every change of speaker, as each method has it, so the edges can be compared by reading.
-for (const [label, sp] of CHECKS.length ? results.slice(5, 6) : [results[0], results[5]]) {
+for (const [label, sp] of CHECKS.length ? results.slice(4, 5) : [results[0], results[4]]) {
   console.log(`\n--- edges: ${label}`);
   for (let i = 1; i < allParts.length; i++) {
     if (sp[i] === sp[i - 1] || sp[i] == null) continue;
@@ -252,22 +250,3 @@ for (const { w, rel, local, labelled, before } of debugWindows) {
 }
 const [, now] = results.find(([label]) => label.includes('the app now'));
 show('the app now, in full', (i) => now[i], true);
-for (const th of [0.4, 0.5]) {
-  const ids = clusterVoices(items, { threshold: th });
-  show(`hindsight ${th}`, (i) => (partLocal[i] == null ? null : ids[partLocal[i]]), false);
-}
-// How alike the local prints of the biggest groups are, to see where a threshold should sit.
-const ids = clusterVoices(items, { threshold: 0.45 });
-const groups = {};
-ids.forEach((g, i) => { if (g != null && items[i].seconds >= 2.5) (groups[g] ||= []).push(i); });
-const unit = (v) => { const n = Math.hypot(...v) || 1; return v.map((x) => x / n); };
-const dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
-const gs = Object.keys(groups).slice(0, 6);
-console.log('\nmean similarity between groups (hindsight 0.45), diagonal = within:');
-for (const a of gs) {
-  console.log(`  ${a} (${groups[a].length} prints): ${gs.map((b) => {
-    let s = 0; let n = 0;
-    for (const i of groups[a]) for (const j of groups[b]) if (i !== j) { s += dot(unit(Array.from(items[i].print)), unit(Array.from(items[j].print))); n++; }
-    return (n ? s / n : 0).toFixed(2);
-  }).join(' ')}`);
-}
