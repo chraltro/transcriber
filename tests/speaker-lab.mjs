@@ -203,13 +203,29 @@ for (const [label, sp] of results.slice(3)) {
 }
 // The raw evidence at every change of speaker in the last method: sentence times, and the turns.
 console.log('\n--- timing at each edge (window-relative seconds)');
-for (const { w, rel, local, labelled } of debugWindows) {
+for (const { w, rel, local, labelled, before } of debugWindows) {
   for (let i = 0; i < labelled.length; i++) {
     if (labelled[i].speaker === (i ? labelled[i - 1].speaker : before)) continue;
     const near = (a, b) => a < rel[i].start + 4 && b > (i ? rel[i - 1].start : 0) - 4;
     console.log(`[${Math.round(w.start + rel[i].start)}] ${i ? labelled[i - 1].speaker : `(${before})`}->${labelled[i].speaker}`);
     for (let k = Math.max(0, i - 2); k < Math.min(rel.length, i + 2); k++) console.log(`   ${k === i ? '>' : ' '} ${rel[k].start.toFixed(1)}-${rel[k].end.toFixed(1)} v${labelled[k].speaker} ${rel[k].text.slice(0, 60)}`);
     console.log(`     turns: ${w.turns.filter((t) => near(t.start, t.end)).map((t) => `${t.start.toFixed(1)}-${t.end.toFixed(1)} v${local[t.spk] ?? '?'}`).join('  ')}`);
+  }
+}
+// For every edge sentence a method gets wrong: everything the speaker models said about its window.
+{
+  const [, sp] = results[results.length - 1];
+  console.log('\n--- evidence for wrong edge sentences');
+  for (const [re, who] of CHECKS) {
+    const i = allParts.findIndex((p) => re.test(p.text.trim()));
+    if (i < 0) continue;
+    const wi = windows.findIndex((w) => w.parts.includes(allParts[i]));
+    const w = windows[wi];
+    const d = debugWindows.find((x) => x.w === w);
+    console.log(`\n"${allParts[i].text.slice(0, 60)}" should be ${who}; window ${wi} at ${w.start.toFixed(1)} s (labelled v${sp[i]})`);
+    d.rel.forEach((p, k) => console.log(`   ${w.parts[k] === allParts[i] ? '>' : ' '} ${p.start.toFixed(1)}-${p.end.toFixed(1)} (whisper ${(w.parts[k].start - w.start).toFixed(1)}-${(w.parts[k].end - w.start).toFixed(1)}) v${d.labelled[k].speaker} ${p.text.slice(0, 70)}`));
+    console.log(`     turns: ${w.turns.map((t) => `${t.start.toFixed(1)}-${t.end.toFixed(1)} L${t.spk}=v${d.local[t.spk] ?? '?'}`).join('  ')}`);
+    console.log(`     prints: ${Object.entries(w.prints).map(([k, v]) => `L${k} ${v.seconds.toFixed(1)}s`).join('  ')}; before: v${d.before}`);
   }
 }
 const [, now] = results[results.length - 1];
