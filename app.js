@@ -5,7 +5,7 @@ import { fmtTime, normTitle, bestTitleMatch, sameShow } from './lib/text.js';
 import { indexWav, wavPiece } from './lib/wav.js';
 import { toSrt, toVtt } from './lib/subtitles.js';
 import { tidy, plainText, wordCount, startsParagraph } from './lib/paragraphs.js';
-import { guessNames, speakerName, labelParts, hostFromShow } from './lib/speakers.js';
+import { guessNames, speakerName, labelParts, hostFromShow, Voices } from './lib/speakers.js';
 import { nameGroups, glossaryFor } from './lib/names.js';
 import { isAd } from './lib/ads.js';
 import { id3Length, parseId3 } from './lib/id3.js';
@@ -1462,6 +1462,8 @@ async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), 
       previous: state.segments.filter((x) => x.start < fromSec && x.text).slice(-4).map((x) => x.text).join(' '),
       speakers: pass === 'speakers' || speakersInline(),
       diarizeOnly: pass === 'speakers',
+      // The sentences already transcribed, so the speaker pass can take a voice print of each.
+      ...(pass === 'speakers' ? { spans: state.segments.filter((x) => x.end > fromSec).map((x) => [x.start, x.end]) } : {}),
       voices: state.voices,
       lastSpeaker: [...state.segments].reverse().find((x) => x.start < fromSec && x.speaker != null)?.speaker ?? null,
       sessionOptions: SESSION_OVERRIDE,
@@ -2339,7 +2341,9 @@ function labelWindow(m) {
   if (!m.speakers) return;
   const inside = state.segments.filter((x) => x.start >= m.start - 0.05 && x.start < m.end - 0.05);
   const before = [...state.segments].reverse().find((x) => x.start < m.start - 0.05 && x.speaker != null);
-  const labelled = labelParts(inside, m.speakers.turns, m.speakers.local, before?.speaker ?? null);
+  const prints = new Map((m.speakers.spanPrints || []).map((x) => [Math.round(x.start * 100), x.print]));
+  const spanPrints = inside.map((x) => prints.get(Math.round(x.start * 100)) || null);
+  const labelled = labelParts(inside, m.speakers.turns, m.speakers.local, before?.speaker ?? null, { voices: new Voices(m.voices || []), spanPrints });
   inside.forEach((x, i) => { if (labelled[i].speaker != null) x.speaker = labelled[i].speaker; else delete x.speaker; });
 }
 

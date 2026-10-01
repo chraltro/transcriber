@@ -250,7 +250,7 @@ for (const { w, rel, local, labelled, before } of debugWindows) {
     console.log(`     prints: ${Object.entries(w.prints).map(([k, v]) => `L${k} ${v.seconds.toFixed(1)}s`).join('  ')}; before: v${d.before}`);
   }
 }
-const [, now] = results[results.length - 1];
+const [, now] = results.find(([label]) => label.includes('the app now'));
 show('the app now, in full', (i) => now[i], true);
 for (const th of [0.4, 0.5]) {
   const ids = clusterVoices(items, { threshold: th });
