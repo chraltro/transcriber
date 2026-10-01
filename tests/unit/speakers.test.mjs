@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { framesToTurns, Voices, labelParts, guessNames, speakerName, cosine, sentenceParts, clusterVoices, hostFromShow, assignLocals } from '../../lib/speakers.js';
+import { framesToTurns, Voices, labelParts, guessNames, speakerName, cosine, sentenceParts, clusterVoices, hostFromShow, assignLocals, retimeParts } from '../../lib/speakers.js';
 import { splitTimestamps, coveredUntil } from '../../lib/prompted.js';
 
 test('frame classes become single-speaker turns; overlap and blips drop out', () => {
@@ -229,4 +229,15 @@ test('a short snippet joins a voice already heard, never its own piece-mate', ()
   // A short snippet never starts a new voice.
   const fresh = new Voices();
   assert.equal(assignLocals(fresh, { 3: { print: v(1, 0), seconds: 1 } })[3], null);
+});
+
+test('sentence times skip the pause at a change of speaker', () => {
+  const parts = sentenceParts([{ start: 0, end: 20, text: 'This is the role of individual CEOs here. Well, never was a product less understood.' }]);
+  // By length alone the first sentence runs to about 10 s, well into the answer.
+  assert.ok(parts[0].end > 9);
+  // The first speaker talks 0 to 5 s, a pause, then the answer from 15 s.
+  const turns = [{ spk: 0, start: 0, end: 5 }, { spk: 1, start: 15, end: 20 }];
+  const timed = retimeParts(parts, turns);
+  assert.ok(Math.abs(timed[0].end - 5) < 0.6, JSON.stringify(timed));
+  assert.equal(labelParts(parts, turns, { 0: 1, 1: 0 }).map((p) => p.speaker).join(), '1,0');
 });

@@ -12,7 +12,7 @@ import { transcribeWindow } from '../lib/prompted.js';
 import { buildPrompt, extractTerms } from '../lib/context.js';
 import { dtypeFor } from '../lib/models.js';
 import { createDiarizer } from '../lib/diarize.js';
-import { guessNames, speakerName, clusterVoices, hostFromShow, Voices, assignLocals, labelParts } from '../lib/speakers.js';
+import { guessNames, speakerName, clusterVoices, hostFromShow, Voices, assignLocals, labelParts, retimeParts } from '../lib/speakers.js';
 
 const SHOW = process.env.SHOW || 'The Ezra Klein Show';
 const EPISODE = new RegExp(process.env.EPISODE || 'Gates', 'i');
@@ -119,7 +119,8 @@ function show(label, speakerOfPart, full) {
 }
 
 // Replays every window's speaker output through a labelling method, as the app would.
-function replay({ minPrint, short, smooth }) {
+const debugWindows = [];
+function replay({ minPrint, short, smooth, retime, debug }) {
   const voices = new Voices();
   let last = null;
   const out = [];
@@ -132,7 +133,8 @@ function replay({ minPrint, short, smooth }) {
       for (const [spk, { print, seconds }] of Object.entries(prints)) local[spk] = voices.match(print, seconds);
     }
     const rel = w.parts.map((p) => ({ ...p, start: p.start - w.start, end: p.end - w.start }));
-    const labelled = labelParts(rel, w.turns, local, last, smooth ? {} : { switchCost: null });
+    const labelled = labelParts(rel, w.turns, local, last, { switchCost: smooth ? 0.8 : null, retime: !!retime });
+    if (debug) debugWindows.push({ w, rel: retime ? retimeParts(rel, w.turns) : rel, local, labelled });
     if (labelled.length && labelled[labelled.length - 1].speaker != null) last = labelled[labelled.length - 1].speaker;
     out.push(...labelled.map((p) => p.speaker ?? null));
   }
@@ -141,7 +143,8 @@ function replay({ minPrint, short, smooth }) {
 const METHODS = [
   ['before (the app until now)', { minPrint: 1.2, short: false, smooth: false }],
   ['short prints', { minPrint: 0.4, short: true, smooth: false }],
-  ['short prints + smoothing (the app now)', { minPrint: 0.4, short: true, smooth: true }],
+  ['short prints + smoothing', { minPrint: 0.4, short: true, smooth: true }],
+  ['+ speech-timed sentences (the app now)', { minPrint: 0.4, short: true, smooth: true, retime: true, debug: true }],
 ];
 const results = METHODS.map(([label, opts]) => [label, replay(opts)]);
 for (const [label, sp] of results) show(label, (i) => sp[i], false);
@@ -151,6 +154,17 @@ for (const [label, sp] of results) {
   for (let i = 1; i < allParts.length; i++) {
     if (sp[i] === sp[i - 1] || sp[i] == null) continue;
     console.log(`[${Math.round(allParts[i].start)}] ${sp[i - 1]}: …${allParts[i - 1].text.slice(-70)} || ${sp[i]}: ${allParts[i].text.slice(0, 90)}`);
+  }
+}
+// The raw evidence at every change of speaker in the last method: sentence times, and the turns.
+console.log('\n--- timing at each edge (window-relative seconds)');
+for (const { w, rel, local, labelled } of debugWindows) {
+  for (let i = 1; i < labelled.length; i++) {
+    if (labelled[i].speaker === labelled[i - 1].speaker) continue;
+    const near = (a, b) => a < rel[i].start + 4 && b > rel[i - 1].start - 4;
+    console.log(`[${Math.round(w.start + rel[i].start)}] ${labelled[i - 1].speaker}->${labelled[i].speaker}`);
+    for (let k = Math.max(0, i - 2); k < Math.min(rel.length, i + 2); k++) console.log(`   ${k === i ? '>' : ' '} ${rel[k].start.toFixed(1)}-${rel[k].end.toFixed(1)} v${labelled[k].speaker} ${rel[k].text.slice(0, 60)}`);
+    console.log(`     turns: ${w.turns.filter((t) => near(t.start, t.end)).map((t) => `${t.start.toFixed(1)}-${t.end.toFixed(1)} v${local[t.spk] ?? '?'}`).join('  ')}`);
   }
 }
 const [, now] = results[results.length - 1];
