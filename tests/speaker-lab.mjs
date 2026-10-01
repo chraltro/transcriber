@@ -137,7 +137,7 @@ function show(label, speakerOfPart, full) {
 
 // Replays every window's speaker output through a labelling method, as the app would.
 const debugWindows = [];
-function replay({ minPrint, short, smooth, retime, debug, own, minSim = 0.4, margin = 0.12 }) {
+function replay({ minPrint, short, smooth, retime, debug, own, minSim = 0.3, margin = 0.08 }) {
   const voices = new Voices();
   let last = null;
   const out = [];
@@ -164,8 +164,8 @@ const METHODS = [
   ['+ sentences timed over speech, per Whisper part', { minPrint: 0.4, short: true, smooth: true, retime: 'part' }],
   ['+ sentences timed over speech, whole window', { minPrint: 0.4, short: true, smooth: true, retime: 'window' }],
   ['+ sentence prints (the app now)', { minPrint: 0.4, short: true, smooth: true, retime: 'part', own: true, debug: true }],
-  ['+ sentence prints, looser', { minPrint: 0.4, short: true, smooth: true, retime: 'part', own: true, minSim: 0.3, margin: 0.08 }],
-  ['+ sentence prints, stricter', { minPrint: 0.4, short: true, smooth: true, retime: 'part', own: true, minSim: 0.45, margin: 0.18 }],
+  ['+ sentence prints, looser', { minPrint: 0.4, short: true, smooth: true, retime: 'part', own: true, minSim: 0.25, margin: 0.05 }],
+  ['+ sentence prints, stricter', { minPrint: 0.4, short: true, smooth: true, retime: 'part', own: true, minSim: 0.4, margin: 0.12 }],
 ];
 const results = METHODS.map(([label, opts]) => [label, replay(opts)]);
 // Sentences at turn edges whose speaker is certain from the conversation (read and checked by
