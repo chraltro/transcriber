@@ -2,7 +2,7 @@ name: Probe
 on:
   push:
     branches: ['claude/**']
-    paths: ['tests/probe.mjs', 'tests/firefox-probe.mjs', 'tests/nb-probe.mjs', '.github/workflows/probe.yml']
+    paths: ['tests/link-probe.mjs', 'tests/probe.mjs', 'tests/firefox-probe.mjs', 'tests/nb-probe.mjs', '.github/workflows/probe.yml']
   workflow_dispatch:
 jobs:
   probe:
@@ -15,5 +15,5 @@ jobs:
           node-version: 22
       - run: |
           npm i --no-save playwright@1.56.1
-          npx playwright install --with-deps chromium firefox
-      - run: node tests/nb-probe.mjs
+          npx playwright install --with-deps chromium
+      - run: node tests/link-probe.mjs
