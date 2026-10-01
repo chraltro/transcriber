@@ -1,0 +1,22 @@
+name: Links
+# Real links from YouTube, podcast apps and sites, resolved in the real page (no transcription).
+on:
+  push:
+    branches: ['claude/**']
+    paths: ['app.js', 'lib/links.js', 'lib/text.js', 'tests/e2e.mjs', '.github/workflows/links.yml']
+  workflow_dispatch:
+jobs:
+  links:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: |
+          npm i --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - run: node tests/e2e.mjs
+        env:
+          ONLY: '^(Link:|Spotify|Pocket Casts short|RSS feed)'

@@ -29,3 +29,18 @@ test('sponsor reads are recognised, ordinary talk is not', () => {
   assert.equal(isAd('We went to acme.com to read their paper on bridges.'), false);
   assert.equal(isAd('The trial was free of drama.'), false);
 });
+
+test('German nouns and inflections are not offered as names', () => {
+  const de = 'Die Regierung hat entschieden. Die Regierungen in Europa streiten. Dann sprach Olaf Scholz mit Olaf Schulz über die Leute und die Laute.';
+  const groups = nameGroups(de, [], { language: 'german' });
+  assert.ok(!groups.some((g) => g.variants.some((v) => /Regierung|Leute|Laute/.test(v.text))), JSON.stringify(groups));
+  assert.ok(groups.some((g) => g.variants.some((v) => v.text === 'Olaf Schulz')), JSON.stringify(groups));
+});
+
+test('sponsor reads in other languages', () => {
+  assert.equal(isAd('Avec le code promo PODCAST, vous avez 20 % de réduction.'), true);
+  assert.equal(isAd('Diese Folge wird präsentiert von Acme.'), true);
+  assert.equal(isAd('Este episodio está patrocinado por Acme.'), true);
+  assert.equal(isAd('Usa il codice sconto PODCAST.'), true);
+  assert.equal(isAd('Il codice della strada è cambiato.'), false);
+});

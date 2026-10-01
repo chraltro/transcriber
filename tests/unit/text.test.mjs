@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fmtTime, normTitle, bestTitleMatch, sameShow, HALLUCINATIONS, dedupeRepeats, collapseLoops } from '../../lib/text.js';
+import { fmtTime, normTitle, bestTitleMatch, sameShow, HALLUCINATIONS, dedupeRepeats, collapseLoops, collapseStutter } from '../../lib/text.js';
 
 test('fmtTime', () => {
   assert.equal(fmtTime(0), '0:00');
@@ -76,4 +76,16 @@ test('doubled short words are stutters; "that that" and "had had" can be speech'
   assert.equal(collapseStutter('det det er'), 'det er');
   assert.equal(collapseStutter('he said that that was fine'), 'he said that that was fine');
   assert.equal(collapseStutter('there there'), 'there there');
+});
+
+test('subtitle credits in the new languages are dropped, real speech kept', () => {
+  for (const t of ["Sous-titres réalisés par la communauté d'Amara.org", 'Untertitel im Auftrag des ZDF, 2021', 'Subtítulos realizados por la comunidad de Amara.org', 'Sottotitoli creati dalla comunità Amara.org', 'Vielen Dank fürs Zuschauen!'])
+    assert.ok(HALLUCINATIONS.test(t), t);
+  assert.ok(!HALLUCINATIONS.test('Gracias por ver este episodio con nosotros, hoy hablamos de economía y de muchas cosas más que importan.'));
+});
+
+test('stutters in French, Spanish and Italian collapse; German articles do not', () => {
+  assert.equal(collapseStutter('je je pense que le le monde'), 'je pense que le monde');
+  assert.equal(collapseStutter('y y entonces el el perro'), 'y entonces el perro');
+  assert.equal(collapseStutter('Die Frau, die die Zeitung liest'), 'Die Frau, die die Zeitung liest');
 });

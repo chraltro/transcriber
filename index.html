@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Transcriber</title>
-  <meta name="description" content="Paste a podcast link and get the full transcript in English, Norwegian or Danish. Whisper runs right in your browser: no account, no API key, nothing uploaded.">
+  <meta name="description" content="Paste a podcast link and get the full transcript in English, Norwegian, Danish, French, German, Spanish or Italian. Whisper runs right in your browser: no account, no API key, nothing uploaded.">
   <meta name="theme-color" content="#e6edef" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0a1d24" media="(prefers-color-scheme: dark)">
   <meta name="color-scheme" content="light dark">
@@ -103,7 +103,7 @@
         <button type="submit" id="go" class="btn primary go">Transcribe</button>
       </form>
 
-      <p class="under">Apple Podcasts, Pocket Casts, Spotify or RSS. Or <label class="file-pick">open an audio file<input type="file" id="file" accept="audio/*,video/*,.mp3,.m4a,.aac,.ogg,.opus,.wav,.flac,.mp4"></label>.</p>
+      <p class="under">Apple Podcasts, Spotify, YouTube, Pocket Casts, RSS, most podcast pages, or a link to an audio file. Or <label class="file-pick">open an audio file<input type="file" id="file" accept="audio/*,video/*,.mp3,.m4a,.aac,.ogg,.opus,.wav,.flac,.mp4"></label>.</p>
 
 
       <div class="settings" id="settings">
@@ -116,6 +116,10 @@
             <label><input type="radio" name="lang" value="english" checked><span>English</span></label>
             <label><input type="radio" name="lang" value="norwegian"><span>Norsk</span></label>
             <label><input type="radio" name="lang" value="danish"><span>Dansk</span></label>
+            <label><input type="radio" name="lang" value="french"><span>Français</span></label>
+            <label><input type="radio" name="lang" value="german"><span>Deutsch</span></label>
+            <label><input type="radio" name="lang" value="spanish"><span>Español</span></label>
+            <label><input type="radio" name="lang" value="italian"><span>Italiano</span></label>
           </fieldset>
           <fieldset class="segmented models" id="models">
             <legend>Model</legend>
@@ -135,7 +139,7 @@
           <details class="advanced">
             <summary>CORS proxy</summary>
             <label class="field">
-              <span>For hosts that block browsers. Use <code>{url}</code> as the placeholder, or a prefix the link is appended to.</span>
+              <span>For hosts that block browsers. Use <code>{url}</code> as the placeholder, or a prefix the link is appended to. Without one, pages that block web apps are read through <a href="https://jina.ai/reader">r.jina.ai</a>; only the link is sent, never audio.</span>
               <input type="text" id="proxy" spellcheck="false" placeholder="https://my-proxy.example.workers.dev/?url={url}">
             </label>
           </details>

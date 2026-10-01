@@ -136,3 +136,20 @@ test('broken window text is recognised, ordinary text is not', async () => {
   assert.equal(speechSeconds(loud), 3);
   assert.equal(speechSeconds(new Float32Array(16000)), 0);
 });
+
+test('introductions and welcomes in French, German, Spanish and Italian name voices', () => {
+  const people = ['Marie Dubois', 'Jonas Weber', 'Lucía Pérez', 'Marco Rossi'];
+  const segs = [
+    { start: 0, end: 70, speaker: 0, text: 'Bonjour, je suis Marie Dubois et voici le podcast.' },
+    { start: 70, end: 140, speaker: 1, text: 'Hallo, ich bin Jonas Weber.' },
+    { start: 140, end: 141, speaker: 0, text: 'Bienvenida, Lucía Pérez.' },
+    { start: 141, end: 210, speaker: 2, text: 'Gracias por invitarme.' },
+    { start: 210, end: 211, speaker: 0, text: 'Benvenuto Marco Rossi.' },
+    { start: 211, end: 290, speaker: 3, text: 'Grazie mille.' },
+    { start: 290, end: 291, speaker: 0, text: 'Lucía, ¿qué opinas?' },
+    { start: 291, end: 300, speaker: 2, text: 'Creo que sí.' },
+    { start: 300, end: 301, speaker: 0, text: 'Herzlich willkommen, Marco.' },
+    { start: 301, end: 310, speaker: 3, text: 'Danke.' },
+  ];
+  assert.deepEqual(guessNames(segs, people), { 0: 'Marie Dubois', 1: 'Jonas Weber', 2: 'Lucía Pérez', 3: 'Marco Rossi' });
+});

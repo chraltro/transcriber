@@ -1,6 +1,6 @@
 import { indexMp3 } from './lib/mp3.js';
 import { MODELS, modelFor, recommendedModel } from './lib/models.js';
-import { AUDIO_EXT, audioCandidates, parseFeed, looksLikeFeed, findAudioInHtml, normalizeLink } from './lib/links.js';
+import { AUDIO_EXT, audioCandidates, parseFeed, looksLikeFeed, findAudioInHtml, normalizeLink, youtubeId, dropboxDirect, isChallengePage, pageHints, slugHints, matchEpisode } from './lib/links.js';
 import { fmtTime, normTitle, bestTitleMatch, sameShow } from './lib/text.js';
 import { indexWav, wavPiece } from './lib/wav.js';
 import { toSrt, toVtt } from './lib/subtitles.js';
@@ -108,7 +108,7 @@ function language() {
   return document.querySelector('input[name=lang]:checked').value;
 }
 
-const LANG_NAMES = { english: 'English', norwegian: 'Norsk', danish: 'Dansk' };
+const LANG_NAMES = { english: 'English', norwegian: 'Norsk', danish: 'Dansk', french: 'Français', german: 'Deutsch', spanish: 'Español', italian: 'Italiano' };
 
 class UserError extends Error {
   // retry: false for mistakes in what was pasted, where trying again can't help.
@@ -711,7 +711,7 @@ async function resolveFeed(url, preferTitle) {
 
 
 
-const ITUNES_COUNTRIES = ['us', 'no', 'dk', 'se', 'gb'];
+const ITUNES_COUNTRIES = ['us', 'no', 'dk', 'se', 'gb', 'fr', 'de', 'es', 'it'];
 
 async function itunesLookupEpisodes(showId) {
   for (const country of ITUNES_COUNTRIES) {
@@ -800,7 +800,7 @@ async function findByName(showName, episodeTitle) {
 
 async function oembed(endpoint, url) {
   try {
-    const res = await fetch(`${endpoint}?url=${encodeURIComponent(url)}`, { signal: state.abort?.signal });
+    const res = await fetch(`${endpoint}${endpoint.includes('?') ? '&' : '?'}url=${encodeURIComponent(url)}`, { signal: state.abort?.signal });
     return res.ok ? await res.json() : null;
   } catch (err) {
     if (err.name === 'AbortError') throw err;
@@ -882,6 +882,181 @@ async function resolvePocketCasts(u) {
   );
 }
 
+// A page that web apps aren't allowed to read is read through r.jina.ai instead, a free
+// service that fetches a page and hands back its HTML. Only the link is sent there.
+const READER = 'https://r.jina.ai/';
+async function readPage(url) {
+  try {
+    return { res: await smartFetch(url) };
+  } catch (err) {
+    if (err.name === 'AbortError') throw err;
+  }
+  progress('Reading link', null, `${new URL(url).host} blocks web apps, so reading it through r.jina.ai`);
+  try {
+    const res = await fetch(READER + url, { headers: { 'X-Return-Format': 'html' }, signal: state.abort?.signal });
+    const html = res.ok ? await res.text() : '';
+    return html && !isChallengePage(html) ? { html } : null;
+  } catch (err) {
+    if (err.name === 'AbortError') throw err;
+    return null;
+  }
+}
+
+// Episode by what the page or link says it is called, through Apple's directory.
+async function findByHints(hints) {
+  const seen = new Set();
+  for (const h of hints) {
+    if (!h || (!h.show && !h.episode)) continue;
+    const key = `${h.show}|${h.episode}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const found = await findByName(h.show, h.episode);
+    if (found) return found;
+  }
+  // The episode wasn't found, but the show may be: offer its episodes.
+  for (const h of hints) {
+    if (!h?.show || !h.episode) continue;
+    const show = await findByName(h.show, null);
+    if (show) return { ...show, note: show.note || `Couldn't tell which episode "${h.episode}" is, pick it from the list.` };
+  }
+  return null;
+}
+
+const asList = (title, image, episodes, note) => ({ kind: 'list', title, image, episodes, note });
+
+// YouTube doesn't let web pages download its audio (its player answers "Sign in to confirm
+// you're not a bot", and none of the public mirrors still work), but most podcasts on YouTube
+// also publish a feed. YouTube's oEmbed gives the title and channel, which find the show in
+// Apple's directory, and the episode is matched by number or by the words in its title.
+async function resolveYouTube(id) {
+  progress('Looking up the episode', null, 'YouTube audio is locked down, so finding the same episode in the podcast feed');
+  const info = await oembed('https://www.youtube.com/oembed?format=json', `https://www.youtube.com/watch?v=${id}`);
+  const title = info?.title?.trim();
+  const channel = info?.author_name?.trim() || '';
+  if (!title) throw new UserError("YouTube didn't recognise that link. Check it plays on YouTube, or paste the podcast's Apple Podcasts link instead.");
+
+  const exact = (await itunesSearch(title, 'podcastEpisode', (e) => e.episodeUrl)).find((e) => normTitle(e.trackName) === normTitle(title));
+  if (exact) return { kind: 'audio', url: exact.episodeUrl, title: exact.trackName, show: exact.collectionName, art: exact.artworkUrl600 || exact.artworkUrl160, notes: exact.description };
+
+  const words = (s) => new Set(normTitle(s).split(' ').filter((w) => w.length > 2));
+  const owner = words(channel);
+  const shows = channel ? (await itunesSearch(channel, 'podcast')).filter((s) => {
+    const w = words(`${s.collectionName} ${s.artistName}`);
+    return [...owner].some((x) => w.has(x)) || sameShow(s.collectionName, channel);
+  }).slice(0, 3) : [];
+  let pool = [];
+  let showName = '';
+  for (const show of shows) {
+    const { episodes, art } = await itunesLookupEpisodes(show.collectionId);
+    const eps = episodes.map((e) => ({ ...e, art: e.art || art, show: e.show || show.collectionName }));
+    const { best, ranked } = matchEpisode(eps, title, show.collectionName);
+    if (best) return { kind: 'audio', url: best.url, title: best.title, show: best.show, art: best.art, notes: best.notes };
+    if (!showName) showName = show.collectionName;
+    pool.push(...ranked.slice(0, 8));
+    if (!pool.length && show.feedUrl) {
+      try {
+        const feed = await resolveFeed(show.feedUrl);
+        const m = matchEpisode(feed.episodes || [], title, show.collectionName);
+        if (m.best) return { kind: 'audio', url: m.best.url, title: m.best.title, show: feed.title, art: m.best.art || feed.image, notes: m.best.notes };
+        pool.push(...m.ranked.slice(0, 8));
+      } catch (err) { if (err.name === 'AbortError') throw err; }
+    }
+  }
+  const note = `YouTube doesn't let web pages download its audio, so the app looks for the same episode in ${showName ? `the ${showName} podcast feed` : 'podcast feeds'}. Pick it below.`;
+  if (pool.length) return asList(`Which episode is "${title}"?`, info.thumbnail_url || '', pool, note);
+  if (shows.length) {
+    const { episodes, art } = await itunesLookupEpisodes(shows[0].collectionId);
+    if (episodes.length) return asList(`Which episode is "${title}"?`, art, episodes, `${note} Its title on YouTube doesn't match any episode title, so here is the newest.`);
+  }
+  throw new UserError(
+    `"${title}" is on YouTube, and YouTube doesn't let web pages download its audio. ` +
+    `The app looks for the same episode in podcast feeds, but ${channel ? `"${channel}"` : 'this channel'} doesn't seem to publish one. ` +
+    'If you have the audio as a file (for example from a download tool), open it with "open an audio file" below the link box.'
+  );
+}
+
+// SoundCloud's oEmbed gives "Title by Author"; podcasts on SoundCloud are in Apple's directory too.
+async function resolveSoundCloud(u) {
+  progress('Looking up the episode', null, 'SoundCloud');
+  const info = await oembed('https://soundcloud.com/oembed?format=json', u.href);
+  const author = info?.author_name?.trim() || '';
+  const title = (info?.title || '').replace(new RegExp(`\\s+by\\s+${author.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`), '').trim();
+  const found = title || author ? await findByHints([{ show: author, episode: title }, { show: author, episode: null }]) : null;
+  if (found) return found;
+  throw new UserError(
+    "SoundCloud doesn't let web pages download its audio, and this track wasn't found in Apple's podcast directory. " +
+    'If it is a podcast, paste its Apple Podcasts link or RSS feed instead.'
+  );
+}
+
+// archive.org items list their files in a metadata API that web pages may read.
+async function resolveArchive(u) {
+  const id = u.pathname.match(/^\/(?:details|download|embed)\/([^/]+)/)?.[1];
+  if (!id) return null;
+  progress('Looking up the recording', null, 'Internet Archive');
+  const meta = await (await smartFetch(`https://archive.org/metadata/${id}`)).json();
+  const title = meta?.metadata?.title || id;
+  const file = (f) => `https://archive.org/download/${id}/${f.name.split('/').map(encodeURIComponent).join('/')}`;
+  const audio = (meta?.files || []).filter((f) => /\.(mp3|m4a|ogg|opus|flac|wav)$/i.test(f.name));
+  // Prefer MP3s (often derived from the original), one per recording.
+  const mp3 = audio.filter((f) => /\.mp3$/i.test(f.name));
+  const pick = mp3.length ? mp3 : audio;
+  const art = `https://archive.org/services/img/${id}`;
+  const wanted = decodeURIComponent(u.pathname.split('/').slice(3).join('/'));
+  const exact = wanted && pick.find((f) => f.name === wanted);
+  if (exact || pick.length === 1) {
+    const f = exact || pick[0];
+    return { kind: 'audio', url: file(f), title: pick.length === 1 ? title : f.title || f.name, show: pick.length === 1 ? meta?.metadata?.creator || '' : title, art };
+  }
+  if (pick.length) return asList(title, art, pick.map((f) => ({ title: f.title || f.name.replace(/\.\w+$/, ''), url: file(f), duration: f.length ? fmtTime(Number(f.length)) : '' })));
+  throw new UserError('That Internet Archive item has no audio files.');
+}
+
+// Audioboom pages block web apps; its API doesn't.
+async function resolveAudioboom(u) {
+  const post = u.pathname.match(/\/posts\/(\d+)/)?.[1];
+  const channel = u.pathname.match(/\/channels?\/(\d+)/)?.[1];
+  const clip = (c) => ({ title: c.title, url: c.urls?.high_mp3 || c.urls?.mp3, date: c.uploaded_at, duration: c.duration ? fmtTime(c.duration) : '', art: c.urls?.image || c.channel?.urls?.logo_image?.original, show: c.channel?.title, notes: c.description || '' });
+  if (post) {
+    const data = await (await smartFetch(`https://api.audioboom.com/audio_clips/${post}`)).json();
+    const c = data?.body?.audio_clip;
+    if (c && clip(c).url) return { kind: 'audio', ...clip(c) };
+  } else if (channel) {
+    const data = await (await smartFetch(`https://api.audioboom.com/channels/${channel}/audio_clips?limit=100`)).json();
+    const eps = (data?.body?.audio_clips || []).map(clip).filter((e) => e.url);
+    if (eps.length) return asList(eps[0].show || 'Episodes', eps[0].art, eps);
+  }
+  return null;
+}
+
+// iHeart pages are readable, but its API is quicker and says exactly which file it is.
+async function resolveIHeart(u) {
+  const ep = u.pathname.match(/\/episode\/[^/]*?-(\d+)\/?$/)?.[1];
+  if (!ep) return null;
+  try {
+    const data = await (await smartFetch(`https://api.iheart.com/api/v3/podcast/episodes/${ep}`)).json();
+    const e = data?.episode || data;
+    if (e?.mediaUrl) return { kind: 'audio', url: e.mediaUrl, title: e.title, show: e.podcastTitle || data?.podcast?.title || '', art: e.imageUrl, notes: e.description || '' };
+  } catch (err) {
+    if (err.name === 'AbortError') throw err;
+  }
+  return null;
+}
+
+// Deezer's API answers web pages through JSONP; it names the episode and show, not the file.
+async function resolveDeezer(u) {
+  const id = u.pathname.match(/\/episode\/(\d+)/)?.[1];
+  const showId = u.pathname.match(/\/show\/(\d+)/)?.[1];
+  if (!id && !showId) return null;
+  try {
+    const data = await jsonp(`https://api.deezer.com/${id ? 'episode' : 'podcast'}/${id || showId}?output=jsonp`);
+    return await findByHints(id ? [{ show: data?.podcast?.title, episode: data?.title }] : [{ show: data?.title, episode: null }]);
+  } catch (err) {
+    if (err.name === 'AbortError') throw err;
+    return null;
+  }
+}
+
 async function resolveLink(raw) {
   let u;
   try { u = new URL(normalizeLink(raw)); } catch { throw new UserError("That doesn't look like a link. Copy the episode's link from your podcast app (Share, then Copy link) and paste it here.", { retry: false }); }
@@ -890,25 +1065,59 @@ async function resolveLink(raw) {
   if (host === 'podcasts.apple.com' || host === 'itunes.apple.com') return resolveApple(u);
   if (host === 'open.spotify.com') return resolveSpotify(u);
   if (host === 'pca.st' || host.endsWith('pocketcasts.com')) return resolvePocketCasts(u);
+  const yt = youtubeId(u.href);
+  if (yt) return resolveYouTube(yt);
+  if (/(^|\.)youtube\.com$/.test(host)) throw new UserError('That YouTube link is not a video. Paste the link of the episode itself (Share, then Copy link).');
+  if (host === 'soundcloud.com' || host === 'on.soundcloud.com' || host === 'm.soundcloud.com') return resolveSoundCloud(u);
+  if (host === 'drive.google.com' || host === 'docs.google.com') {
+    throw new UserError("Google Drive doesn't let web pages download files. Download the file and open it with \"open an audio file\" below the link box.");
+  }
+  // Overcast and Castro links to a show can carry its Apple id ("overcast.fm/itunes1200361736/the-daily").
+  const itunes = (host === 'overcast.fm' || host === 'castro.fm') && u.pathname.match(/^\/itunes\/?(\d+)/)?.[1];
+  if (itunes) return resolveApple(new URL(`https://podcasts.apple.com/podcast/id${itunes}`));
+  const special = host === 'archive.org' ? await resolveArchive(u)
+    : host === 'audioboom.com' ? await resolveAudioboom(u)
+    : host === 'iheart.com' ? await resolveIHeart(u)
+    : host === 'deezer.com' ? await resolveDeezer(u)
+    : null;
+  if (special) return special;
+  const dropbox = dropboxDirect(u.href);
+  if (dropbox) return { kind: 'audio', url: dropbox, title: decodeURIComponent(u.pathname.split('/').pop()) || 'Dropbox file' };
   if (AUDIO_EXT.test(u.pathname)) return { kind: 'audio', url: u.href, title: decodeURIComponent(u.pathname.split('/').pop()) };
 
   progress('Reading link', null, u.host);
-  const res = await smartFetch(u.href);
-  const type = res.headers.get('content-type') || '';
-  const size = Number(res.headers.get('content-length')) || 0;
-  if (/^(audio|video)\/|octet-stream/i.test(type) || size > 20e6) {
-    res.body?.cancel().catch(() => {});
-    return { kind: 'audio', url: u.href, title: decodeURIComponent(u.pathname.split('/').pop()) || u.host };
+  const page = await readPage(u.href);
+  let text = page?.html || '';
+  if (page?.res) {
+    const { res } = page;
+    const type = res.headers.get('content-type') || '';
+    const size = Number(res.headers.get('content-length')) || 0;
+    if (/^(audio|video)\/|octet-stream/i.test(type) || size > 20e6) {
+      res.body?.cancel().catch(() => {});
+      return { kind: 'audio', url: u.href, title: decodeURIComponent(u.pathname.split('/').pop()) || u.host };
+    }
+    text = await res.text();
   }
-  const text = await res.text();
-  if (looksLikeFeed(text)) {
+  if (text && looksLikeFeed(text)) {
     const feed = parseFeed(text);
     if (feed?.episodes.length) return { kind: 'list', ...feed };
   }
-  const found = findAudioInHtml(text, u.href);
+  const found = text ? findAudioInHtml(text, u.href) : null;
   if (found?.kind === 'audio') return found;
-  if (found?.kind === 'feed') return resolveFeed(found.url, found.title);
-  throw new UserError("Couldn't find any podcast audio on that page. Try the Apple Podcasts link, the RSS feed, or a direct .mp3 link.");
+  if (found?.kind === 'feed') {
+    try { return await resolveFeed(found.url, found.title); } catch (err) { if (err.name === 'AbortError') throw err; }
+  }
+  // No audio on the page (or no page): find the episode by name.
+  const hints = [...(text ? pageHints(text) : []), slugHints(u.href)].filter(Boolean);
+  if (hints.length) {
+    progress('Looking up the episode', null, 'Finding it in the podcast directory');
+    const byName = await findByHints(hints);
+    if (byName) return byName;
+  }
+  throw new UserError(
+    page ? "Couldn't find any podcast audio on that page. Try the episode's Apple Podcasts link, the RSS feed, or a direct .mp3 link."
+      : `${u.host} doesn't let web pages read it. Try the episode's Apple Podcasts or Pocket Casts link, or its RSS feed.`
+  );
 }
 
 /* ---------- episode picker ---------- */
@@ -1826,6 +2035,7 @@ async function openEntry(entry) {
   state.source = { title: entry.title, show: entry.show, art: entry.art, url: entry.source?.url, fileId: entry.source?.fileId, key: entry.key, notes: entry.notes || '' };
   state.vocab = vocabulary(state.source);
   state.entryId = entry.id;
+  state.lang = entry.lang;
   state.transcriptModel = entry.refinedWith || entry.model;
   state.voices = entry.voices || [];
   state.speakerNames = entry.speakerNames || {};
@@ -1990,6 +2200,7 @@ async function run(getSource, resume = null) {
     wave.setSeekable(false);
 
     const fromSec = resume?.doneSec || 0;
+    state.lang = language();
     const modelKey = resume?.model || selectedModel();
     const drafting = !!resume && resume.plan === 'draft'; // older saved jobs only; refining is now on request
     let phase = resume?.phase || (drafting ? 'draft' : 'single');
@@ -2195,7 +2406,7 @@ function toggleNames(open = els.namesPanel.classList.contains('hidden')) {
 function renderNames() {
   const text = state.segments.map((x) => x.text).join(' ');
   const known = [...userGlossary().terms, ...extractTerms(state.source?.notes || '')];
-  const groups = nameGroups(text, known).slice(0, 12);
+  const groups = nameGroups(text, known, { language: state.lang || language() }).slice(0, 12);
   if (!groups.length) {
     els.namesList.replaceChildren(el('li', 'names-empty', 'Every name is spelled the same way throughout.'));
     return;

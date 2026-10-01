@@ -41,7 +41,7 @@ async function appleEpisodeLink(term, country) {
   const id = s.results[0].collectionId;
   const l = await (await fetch(`https://itunes.apple.com/lookup?id=${id}&entity=podcastEpisode&limit=1&country=${country}`)).json();
   const ep = l.results.find((r) => r.wrapperType === 'podcastEpisode');
-  return { url: `https://podcasts.apple.com/${country}/podcast/x/id${id}?i=${ep.trackId}`, title: ep.trackName };
+  return { url: `https://podcasts.apple.com/${country}/podcast/x/id${id}?i=${ep.trackId}`, title: ep.trackName, audio: ep.episodeUrl };
 }
 
 // Output in the right language has plenty of that language's most common words. Catches a
@@ -50,6 +50,10 @@ const STOPWORDS = {
   english: ['the', 'and', 'to', 'of', 'a', 'is', 'that', 'in', 'it', 'you', 'i', 'we', 'this', 'so', 'but', 'for', 'was', 'on', 'with', 'what'],
   norwegian: ['og', 'det', 'er', 'som', 'jeg', 'på', 'å', 'en', 'til', 'vi', 'har', 'ikke', 'med', 'de', 'at', 'så', 'for', 'var', 'i', 'du'],
   danish: ['og', 'det', 'er', 'som', 'jeg', 'på', 'at', 'en', 'til', 'vi', 'har', 'ikke', 'med', 'de', 'så', 'for', 'var', 'i', 'du', 'der'],
+  french: ['le', 'la', 'les', 'de', 'et', 'un', 'une', 'est', 'que', 'je', 'il', 'pas', 'à', 'en', 'des', 'du', 'on', 'ce', 'qui', 'c'],
+  german: ['der', 'die', 'das', 'und', 'ist', 'ich', 'nicht', 'es', 'zu', 'ein', 'eine', 'den', 'wir', 'sie', 'auch', 'mit', 'auf', 'dass', 'so', 'in'],
+  spanish: ['el', 'la', 'de', 'que', 'y', 'en', 'los', 'es', 'un', 'una', 'no', 'lo', 'se', 'por', 'con', 'las', 'para', 'del', 'pero', 'a'],
+  italian: ['il', 'la', 'di', 'che', 'e', 'è', 'un', 'una', 'non', 'in', 'per', 'del', 'della', 'con', 'si', 'lo', 'le', 'i', 'ma', 'mi'],
 };
 function languageScore(text, lang) {
   const words = text.toLowerCase().replace(/\[\d:]+\]/g, ' ').match(/\p{L}+/gu) || [];
@@ -57,7 +61,60 @@ function languageScore(text, lang) {
   return words.length ? words.filter((w) => set.has(w)).length / words.length : 0;
 }
 
+// Links from other sites, found at test time. A site that is down or changed skips its case.
+const UA = { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36' };
+async function firstLink(page, re, base = '') {
+  try {
+    const html = await (await fetch(page, { headers: UA, signal: AbortSignal.timeout(20000) })).text();
+    const m = html.match(re);
+    return m ? base + m[1] : null;
+  } catch { return null; }
+}
+async function latestVideo(handle) {
+  try {
+    const page = await (await fetch(`https://www.youtube.com/${handle}/videos`, { headers: UA })).text();
+    const id = page.match(/"channelId":"(UC[\w-]{22})"/)?.[1];
+    const feed = await (await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${id}`)).text();
+    const v = feed.match(/<yt:videoId>([^<]+)</)?.[1];
+    return v ? `https://youtu.be/${v}` : null;
+  } catch { return null; }
+}
+const LINKS = [
+  { name: 'Link: YouTube (Huberman Lab)', url: await latestVideo('@hubermanlab') },
+  { name: 'Link: YouTube (Lex Fridman)', url: await latestVideo('@lexfridman') },
+  { name: 'Link: YouTube, not a podcast', url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw', expectError: /doesn't seem to publish one/ },
+  { name: 'Link: Buzzsprout episode page', url: await firstLink('https://www.buzzsprout.com/1', /href="(\/1\/episodes\/[^"?]+)"/, 'https://www.buzzsprout.com') },
+  { name: 'Link: iHeart episode', url: await firstLink('https://www.iheart.com/podcast/1119-stuff-you-should-know-26940277/', /href="(\/podcast\/1119-stuff-you-should-know-26940277\/episode\/[^"]+)"/, 'https://www.iheart.com') },
+  { name: 'Link: Substack post (page reader)', url: await firstLink('https://www.astralcodexten.com/podcast', /href="(https:\/\/www\.astralcodexten\.com\/p\/(?!open-thread)[^"/]+)"/) },
+  { name: 'Link: NRK page (page reader, then directory)', url: 'https://radio.nrk.no/podkast/abels_taarn', expectAny: true },
+  { name: 'Link: Internet Archive item', url: 'https://archive.org/details/OTRR_Dragnet_Singles', expectList: true },
+  { name: 'Link: Audioboom channel', url: 'https://audioboom.com/channels/4322549', expectList: true },
+  { name: 'Link: Castro show', url: 'https://castro.fm/itunes/1200361736', expectList: true },
+  { name: 'Link: Player FM (link words)', url: 'https://player.fm/series/the-daily-1408227', expectAny: true },
+].filter((c) => {
+  if (!c.url) console.log(`skipping ${c.name}: couldn't find a current link`);
+  return c.url;
+}).map((c) => ({ lang: 'english', resolveOnly: true, expectAny: !c.expectList && !c.expectError, ...c }));
+
 const nrk = await appleEpisodeLink('Abels tårn', 'no');
+// The newest episode of the first show in the list whose audio host lets web pages download it.
+async function languageLink(country, terms) {
+  for (const term of terms) {
+    try {
+      const ep = await appleEpisodeLink(term, country);
+      const res = ep.audio ? await fetch(ep.audio, { headers: { Origin: ORIGIN, Range: 'bytes=0-1' }, signal: AbortSignal.timeout(15000) }) : null;
+      if (res && !res.headers.get('access-control-allow-origin')) { console.log(`skipping ${term}: its audio host doesn't allow web pages`); continue; }
+      return { ...ep, show: term };
+    } catch (e) { console.log(`skipping ${term}: ${e.message}`); }
+  }
+  return null;
+}
+const LANGS = {
+  french: await languageLink('fr', ['Transfert', 'Les Couilles sur la table', 'Affaires sensibles', 'Le Code a changé', 'Les Pieds sur terre']),
+  german: await languageLink('de', ['Was jetzt?', 'Lage der Nation', 'Hotel Matze', 'Zeit Verbrechen', 'Gemischtes Hack']),
+  spanish: await languageLink('es', ['Nadie Sabe Nada', 'Hoy en EL PAÍS', 'La Escóbula de la Brújula', 'Radio Ambulante', 'Estirando el chicle']),
+  italian: await languageLink('it', ['Morning Il Post', 'Indagini', 'Stories Cecilia Sala', 'Muschio Selvaggio', 'Tintoria']),
+};
 const omny = await appleEpisodeLink('Millionærklubben', 'dk');
 
 const CASES = [
@@ -89,6 +146,9 @@ const CASES = [
   { name: 'Apple, Danish (Omny)', url: omny.url, lang: 'danish', segments: 3, title: omny.title },
   { name: 'Spotify episode', url: 'https://open.spotify.com/episode/2ebY3WNejLNbK47emgjd1E', lang: 'english', resolveOnly: true, titleIncludes: 'Alcohol' },
   { name: 'RSS feed', url: 'https://feeds.megaphone.fm/hubermanlab', lang: 'english', expectList: true },
+  ...LINKS,
+  // French, German, Spanish and Italian on Whisper Base: the transcript must be in the language.
+  ...Object.entries(LANGS).filter(([, ep]) => ep).map(([lang, ep]) => ({ name: `Apple, ${lang[0].toUpperCase()}${lang.slice(1)} (${ep.show})`, url: ep.url, lang, segments: 3, title: ep.title })),
   ...(process.env.EXTRA_CASES ? JSON.parse(process.env.EXTRA_CASES) : []),
   // LAB=1: model comparisons in the real browser (tests/language-lab.mjs uses native ONNX Runtime,
   // the app uses its WebAssembly build). Run by browser-lab.yml, which prints the full text.
@@ -171,15 +231,16 @@ for (const c of CASES) {
         speaker: s.dataset.speaker == null ? null : Number(s.dataset.speaker),
       })),
       title: document.querySelector('#episode-title').textContent,
+      listTitle: document.querySelector('#episodes-card').classList.contains('hidden') ? '' : document.querySelector('#feed-title')?.textContent,
     }));
     // Windows, as before parts existed: the case sizes count these.
     s.segments = [...new Map(s.parts.map((x) => [x.w, x])).values()];
     const line = `${s.stage} | ${s.detail}`;
     if (line !== last) { console.log(`  ${Math.round((Date.now() - start) / 1000)}s ${line}`); last = line; }
     if (s.error) { result = `error: ${s.error}`; break; }
-    if (s.episodes) { result = `episode list (${s.episodes})`; break; }
+    if (s.episodes) { result = `episode list (${s.episodes})`; console.log(`  list: ${s.listTitle}`); break; }
     if (c.resolveOnly && s.stage === 'Downloading episode') {
-      const right = c.titleIncludes ? s.title.includes(c.titleIncludes) : s.title === c.title;
+      const right = c.expectAny || (c.titleIncludes ? s.title.includes(c.titleIncludes) : s.title === c.title);
       result = right ? 'ok' : `wrong episode: "${s.title}"`;
       console.log(`  title: ${s.title}`);
       break;
@@ -245,7 +306,10 @@ for (const c of CASES) {
   if (navigations > 0 && result === 'ok') result = `page reloaded ${navigations}x during the run`;
   const limit = c.memoryLimitMB || MEMORY_LIMIT_MB;
   if (peakMB > limit && result === 'ok') result = `peak tab memory ${Math.round(peakMB)} MB is over ${limit} MB`;
-  const ok = c.expectList ? result.startsWith('episode list') : result === 'ok';
+  const ok = c.expectError ? c.expectError.test(result)
+    : c.expectList ? result.startsWith('episode list')
+    : c.expectAny ? result === 'ok' || result.startsWith('episode list')
+    : result === 'ok';
   console.log(`  RESULT: ${ok ? 'PASS' : 'FAIL'} (${result}) peak tab memory ${Math.round(peakMB)} MB`);
   if (!ok) failures++;
   await ctx.close();
