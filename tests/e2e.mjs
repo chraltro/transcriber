@@ -83,7 +83,7 @@ async function latestVideo(handle) {
 const LINKS = [
   { name: 'Link: YouTube (Huberman Lab)', url: await latestVideo('@hubermanlab') },
   { name: 'Link: YouTube (Lex Fridman)', url: await latestVideo('@lexfridman') },
-  { name: 'Link: YouTube, not a podcast', url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw', expectError: /doesn't seem to publish one/ },
+  { name: 'Link: YouTube, not a podcast', url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw', expectError: /doesn't let web pages download its audio/ },
   // Buzzsprout and Substack pages resolve, but their audio servers don't let web pages download:
   // the reader gets the app's explanation.
   { name: 'Link: Buzzsprout episode page', url: await firstLink('https://www.buzzsprout.com/1', /href="(\/1\/episodes\/[^"?]+)"/, 'https://www.buzzsprout.com'), expectError: /doesn't allow web pages to download/ },

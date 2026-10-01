@@ -975,12 +975,14 @@ async function resolveYouTube(id) {
   }
   const note = `YouTube doesn't let web pages download its audio, so the app looks for the same episode in ${showName ? `the ${showName} podcast feed` : 'podcast feeds'}. Pick it below.`;
   if (pool.length) return asList(`Which episode is "${title}"?`, info.thumbnail_url || '', pool, note);
-  // No title matched. Only a show named exactly like the channel is surely the channel's own,
-  // so only then are its newest episodes worth offering.
-  const own = shows.find((s) => normTitle(s.collectionName) === normTitle(channel));
-  if (own) {
-    const { episodes, art } = await itunesLookupEpisodes(own.collectionId);
-    if (episodes.length) return asList(`Which episode is "${title}"?`, art, episodes, `${note} Its title on YouTube doesn't match any episode title, so here is the newest.`);
+  // No episode title matched. A podcast that merely shares the channel's name may not be the
+  // channel's at all, so it is named rather than guessed from.
+  if (shows.length) {
+    throw new UserError(
+      `"${title}" is on YouTube, and YouTube doesn't let web pages download its audio. ` +
+      `No episode of ${shows.map((s) => `"${s.collectionName}"`).slice(0, 2).join(' or ')} has a matching title. ` +
+      "If it is the same show, paste the episode's Apple Podcasts link, or open the audio as a file with \"open an audio file\" below the link box."
+    );
   }
   throw new UserError(
     `"${title}" is on YouTube, and YouTube doesn't let web pages download its audio. ` +
