@@ -944,8 +944,11 @@ async function resolveYouTube(id) {
   const owner = words(channel);
   const owns = (show, artist) => {
     if (sameShow(show, channel)) return true;
+    // A one-word channel name must be the show's name: a podcast host named Jawed doesn't make
+    // every "jawed" video theirs.
+    if (owner.size < 2) return false;
     const w = words(`${show} ${artist}`);
-    return owner.size > 0 && [...owner].filter((x) => w.has(x)).length >= owner.size / 2;
+    return [...owner].filter((x) => w.has(x)).length >= owner.size / 2;
   };
   const exact = (await itunesSearch(title, 'podcastEpisode', (e) => e.episodeUrl))
     .find((e) => normTitle(e.trackName) === normTitle(title) && owns(e.collectionName, e.artistName));

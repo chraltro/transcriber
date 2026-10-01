@@ -69,4 +69,6 @@ test('YouTube titles find the same episode in the feed', () => {
   const m = matchEpisode([{ title: 'Disney and Marvel' }, { title: 'Disney+ and Ichiro' }], 'The connection between Ichiro Suzuki and Disney+', 'Acquired');
   assert.equal(m.best, null);
   assert.ok(m.ranked.length >= 1);
+  // Two common words in common is not a candidate.
+  assert.deepEqual(matchEpisode([{ title: 'Me and you at the beach, a long talk about summer holidays' }], 'Me at the zoo', 'Jawed').ranked, []);
 });
