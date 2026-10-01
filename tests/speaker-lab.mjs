@@ -149,6 +149,49 @@ const METHODS = [
   ['+ sentences timed over speech, blend', { minPrint: 0.4, short: true, smooth: true, retime: 'blend', debug: true }],
 ];
 const results = METHODS.map(([label, opts]) => [label, replay(opts)]);
+// Sentences at turn edges whose speaker is certain from the conversation (read and checked by
+// hand for the Gates episode): who said them.
+const CHECKS = process.env.EPISODE ? [] : [
+  [/How do you see that question/i, 'Ezra Klein'],
+  [/I'm curious where yours is/i, 'Ezra Klein'],
+  [/doesn't feel to me that we're so disengaged/i, 'Ezra Klein'],
+  [/you just wrote this essay on AI risk/i, 'Ezra Klein'],
+  [/Jensen Huang's view/i, 'Ezra Klein'],
+  [/this is not my view, but it is President Trump/i, 'Ezra Klein'],
+  [/welcome to the show/i, 'Ezra Klein'],
+  [/So that was 30 years ago/i, 'Ezra Klein'],
+  [/Do you think that's far from being a capability/i, 'Ezra Klein'],
+  [/What specifically was the threshold/i, 'Ezra Klein'],
+  [/is the governing view of the United States/i, 'Ezra Klein'],
+  [/So the two counter ?arguments/i, 'Ezra Klein'],
+  [/^Yeah, so\.?$/i, 'Bill Gates'],
+  [/^Great to see you/i, 'Bill Gates'],
+  [/^Does super powerful AI create/i, 'Bill Gates'],
+  [/almost can't believe you're asking that/i, 'Bill Gates'],
+  [/So they don't mind bioterrorism/i, 'Bill Gates'],
+  [/There's no doubt,? to date/i, 'Bill Gates'],
+  [/the notion that computation could provide thinking/i, 'Bill Gates'],
+  [/key thing is we always said when we cross/i, 'Bill Gates'],
+];
+function checkScore(sp) {
+  const parts = allParts.map((p, i) => ({ ...p, speaker: sp[i] }));
+  const names = guessNames(parts, terms, { host: hostFromShow(ep.show) });
+  let right = 0;
+  let seen = 0;
+  const wrong = [];
+  for (const [re, who] of CHECKS) {
+    const i = allParts.findIndex((p) => re.test(p.text.trim()));
+    if (i < 0) continue;
+    seen++;
+    if (speakerName(sp[i], names) === who) right++;
+    else wrong.push(`${allParts[i].text.slice(0, 50)} -> ${speakerName(sp[i], names)}`);
+  }
+  return { right, seen, wrong };
+}
+for (const [label, sp] of results) {
+  const { right, seen, wrong } = checkScore(sp);
+  console.log(`CHECK ${label}: ${right} of ${seen} edge sentences right${wrong.length ? `; wrong: ${wrong.join(' | ')}` : ''}`);
+}
 for (const [label, sp] of results) show(label, (i) => sp[i], false);
 // Every change of speaker, as each method has it, so the edges can be compared by reading.
 for (const [label, sp] of results.slice(3)) {
