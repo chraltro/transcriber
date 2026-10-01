@@ -50,7 +50,7 @@ async function loadDiarizer(id) {
 
 const stream = new StreamingTranscriber({
   post,
-  diarize: (samples) => diarizer(samples),
+  diarize: (samples, opts) => diarizer(samples, opts),
   transcribe: (samples, language, { previous } = {}) =>
     transcribeWindow(asr, samples, { language, prompt: buildPrompt(terms, previous), state: promptState }),
 });

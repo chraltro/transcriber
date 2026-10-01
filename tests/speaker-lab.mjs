@@ -44,7 +44,24 @@ console.log(`terms: ${terms.join(', ')}`);
 const asr = await tf.pipeline('automatic-speech-recognition', MODEL, { dtype: dtypeFor(MODEL, 'wasm') });
 const diarizer = await createDiarizer(tf);
 let lastDiarized = null;
-const diarize = async (samples) => (lastDiarized = await diarizer(samples));
+let diarizeSec = 0;
+let spanSec = 0;
+const diarize = async (samples, opts) => {
+  const t = Date.now();
+  const plain = await diarizer(samples);
+  diarizeSec += (Date.now() - t) / 1000;
+  const t2 = Date.now();
+  const spans = opts?.spans || [];
+  const prints = [];
+  for (const [a, b] of spans) {
+    const from = Math.floor(a * 16000);
+    const to = Math.min(samples.length, Math.floor(Math.min(b, a + 12) * 16000));
+    prints.push(to - from >= 16000 ? await diarizer.printOf(samples.subarray(from, to)) : null);
+  }
+  spanSec += (Date.now() - t2) / 1000;
+  lastDiarized = { ...plain, spanPrints: prints };
+  return lastDiarized;
+};
 
 const windows = []; // { start, end, parts: [{ start, end, text, speaker }], turns, prints }
 const t0 = Date.now();
@@ -65,7 +82,7 @@ await new Promise((resolve, reject) => {
   stream.start(1, { language: 'english', speakers: true });
   stream.push(1, audio, true).then(() => stream.ready(1)).catch(reject);
 });
-console.log(`${MODEL}: ${((audio.length / 16000) / ((Date.now() - t0) / 1000)).toFixed(1)}x realtime, ${windows.length} windows`);
+console.log(`${MODEL}: ${((audio.length / 16000) / ((Date.now() - t0) / 1000)).toFixed(1)}x realtime, ${windows.length} windows; speaker models ${(diarizeSec / (audio.length / 16000 / 60)).toFixed(1)} s per audio minute, sentence prints ${(spanSec / (audio.length / 16000 / 60)).toFixed(1)} s more`);
 
 // Every local speaker of every window, with the parts it speaks in.
 const items = [];
@@ -120,7 +137,7 @@ function show(label, speakerOfPart, full) {
 
 // Replays every window's speaker output through a labelling method, as the app would.
 const debugWindows = [];
-function replay({ minPrint, short, smooth, retime, debug }) {
+function replay({ minPrint, short, smooth, retime, debug, own, minSim = 0.4, margin = 0.12 }) {
   const voices = new Voices();
   let last = null;
   const out = [];
@@ -133,7 +150,7 @@ function replay({ minPrint, short, smooth, retime, debug }) {
       for (const [spk, { print, seconds }] of Object.entries(prints)) local[spk] = voices.match(print, seconds);
     }
     const rel = w.parts.map((p) => ({ ...p, start: p.start - w.start, end: p.end - w.start }));
-    const labelled = labelParts(rel, w.turns, local, last, { switchCost: smooth ? 0.8 : null, retime: retime || false });
+    const labelled = labelParts(rel, w.turns, local, last, { switchCost: smooth ? 0.8 : null, retime: retime || false, ...(own ? { voices, spanPrints: w.spanPrints, minSim, margin } : {}) });
     if (debug) debugWindows.push({ w, rel: retime ? retimeParts(rel, w.turns, retime) : rel, local, labelled, before: last });
     if (labelled.length && labelled[labelled.length - 1].speaker != null) last = labelled[labelled.length - 1].speaker;
     out.push(...labelled.map((p) => p.speaker ?? null));
@@ -146,7 +163,9 @@ const METHODS = [
   ['short prints + smoothing', { minPrint: 0.4, short: true, smooth: true }],
   ['+ sentences timed over speech, per Whisper part', { minPrint: 0.4, short: true, smooth: true, retime: 'part' }],
   ['+ sentences timed over speech, whole window', { minPrint: 0.4, short: true, smooth: true, retime: 'window' }],
-  ['+ sentences timed over speech, blend', { minPrint: 0.4, short: true, smooth: true, retime: 'blend', debug: true }],
+  ['+ sentence prints (the app now)', { minPrint: 0.4, short: true, smooth: true, retime: 'part', own: true, debug: true }],
+  ['+ sentence prints, looser', { minPrint: 0.4, short: true, smooth: true, retime: 'part', own: true, minSim: 0.3, margin: 0.08 }],
+  ['+ sentence prints, stricter', { minPrint: 0.4, short: true, smooth: true, retime: 'part', own: true, minSim: 0.45, margin: 0.18 }],
 ];
 const results = METHODS.map(([label, opts]) => [label, replay(opts)]);
 // Sentences at turn edges whose speaker is certain from the conversation (read and checked by
@@ -194,7 +213,7 @@ for (const [label, sp] of results) {
 }
 for (const [label, sp] of results) show(label, (i) => sp[i], false);
 // Every change of speaker, as each method has it, so the edges can be compared by reading.
-for (const [label, sp] of results.slice(3)) {
+for (const [label, sp] of results.slice(5, 6)) {
   console.log(`\n--- edges: ${label}`);
   for (let i = 1; i < allParts.length; i++) {
     if (sp[i] === sp[i - 1] || sp[i] == null) continue;

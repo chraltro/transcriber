@@ -241,3 +241,21 @@ test('sentence times skip the pause at a change of speaker', () => {
   assert.ok(Math.abs(timed[0].end - 5) < 0.6, JSON.stringify(timed));
   assert.equal(labelParts(parts, turns, { 0: 1, 1: 0 }).map((p) => p.speaker).join(), '1,0');
 });
+
+test("a sentence's own voice print outweighs a segmentation that missed the change", () => {
+  const v = (a, b) => { const x = new Float32Array(4); x[0] = a; x[1] = b; return x; };
+  const voices = new Voices();
+  voices.match(v(1, 0), 20); // 0: Gates
+  voices.match(v(0, 1), 20); // 1: Ezra
+  const parts = [
+    { start: 0, end: 2.1, text: 'How do you see that question?' },
+    { start: 2.1, end: 8.5, text: "Well, there's never been a product that's less understood." },
+  ];
+  // The segmentation heard one speaker throughout.
+  const turns = [{ spk: 1, start: 0.9, end: 8.5 }];
+  assert.deepEqual(labelParts(parts, turns, { 1: 0 }, 1).map((p) => p.speaker), [0, 0]);
+  const spanPrints = [v(0.1, 1), v(1, 0.05)];
+  assert.deepEqual(labelParts(parts, turns, { 1: 0 }, 1, { voices, spanPrints }).map((p) => p.speaker), [1, 0]);
+  // An unclear print (as close to both) changes nothing.
+  assert.deepEqual(labelParts(parts, turns, { 1: 0 }, 1, { voices, spanPrints: [v(1, 1), null] }).map((p) => p.speaker), [0, 0]);
+});
