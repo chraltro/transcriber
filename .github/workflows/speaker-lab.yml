@@ -8,6 +8,13 @@ jobs:
   lab:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: gates, show: '', episode: '' }
+          - { name: hardfork, show: 'Hard Fork', episode: '.' }
+          - { name: plainenglish, show: 'Plain English with Derek Thompson', episode: '.' }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -16,7 +23,10 @@ jobs:
       - run: sudo apt-get install -y ffmpeg >/dev/null
       - run: npm i --no-save @huggingface/transformers@4.3.0
       - run: node tests/speaker-lab.mjs
+        env:
+          SHOW: ${{ matrix.show }}
+          EPISODE: ${{ matrix.episode }}
       - uses: actions/upload-artifact@v4
         with:
-          name: speaker-lab
+          name: speaker-lab-${{ matrix.name }}
           path: speaker-lab.json

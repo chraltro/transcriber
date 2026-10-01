@@ -216,7 +216,7 @@ for (const [label, sp] of results) {
 }
 for (const [label, sp] of results) show(label, (i) => sp[i], false);
 // Every change of speaker, as each method has it, so the edges can be compared by reading.
-for (const [label, sp] of results.slice(5, 6)) {
+for (const [label, sp] of CHECKS.length ? results.slice(5, 6) : [results[0], results[5]]) {
   console.log(`\n--- edges: ${label}`);
   for (let i = 1; i < allParts.length; i++) {
     if (sp[i] === sp[i - 1] || sp[i] == null) continue;
