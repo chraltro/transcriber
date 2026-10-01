@@ -975,8 +975,11 @@ async function resolveYouTube(id) {
   }
   const note = `YouTube doesn't let web pages download its audio, so the app looks for the same episode in ${showName ? `the ${showName} podcast feed` : 'podcast feeds'}. Pick it below.`;
   if (pool.length) return asList(`Which episode is "${title}"?`, info.thumbnail_url || '', pool, note);
-  if (shows.length) {
-    const { episodes, art } = await itunesLookupEpisodes(shows[0].collectionId);
+  // No title matched. Only a show named exactly like the channel is surely the channel's own,
+  // so only then are its newest episodes worth offering.
+  const own = shows.find((s) => normTitle(s.collectionName) === normTitle(channel));
+  if (own) {
+    const { episodes, art } = await itunesLookupEpisodes(own.collectionId);
     if (episodes.length) return asList(`Which episode is "${title}"?`, art, episodes, `${note} Its title on YouTube doesn't match any episode title, so here is the newest.`);
   }
   throw new UserError(
