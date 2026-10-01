@@ -79,7 +79,7 @@ test('doubled short words are stutters; "that that" and "had had" can be speech'
 });
 
 test('subtitle credits in the new languages are dropped, real speech kept', () => {
-  for (const t of ["Sous-titres réalisés par la communauté d'Amara.org", 'Untertitel im Auftrag des ZDF, 2021', 'Subtítulos realizados por la comunidad de Amara.org', 'Sottotitoli creati dalla comunità Amara.org', 'Vielen Dank fürs Zuschauen!'])
+  for (const t of ["Sous-titres réalisés par la communauté d'Amara.org", 'Untertitel im Auftrag des ZDF, 2021', 'Subtítulos realizados por la comunidad de Amara.org', 'Sottotitoli creati dalla comunità Amara.org', 'Sottotitoli e a presto.', 'Vielen Dank fürs Zuschauen!'])
     assert.ok(HALLUCINATIONS.test(t), t);
   assert.ok(!HALLUCINATIONS.test('Gracias por ver este episodio con nosotros, hoy hablamos de economía y de muchas cosas más que importan.'));
 });

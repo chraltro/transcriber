@@ -914,10 +914,12 @@ async function findByHints(hints) {
     if (found) return found;
   }
   // The episode wasn't found, but the show may be: offer its episodes.
+  // A title that is only a name (a show's own page) may be the show's.
   for (const h of hints) {
-    if (!h?.show || !h.episode) continue;
-    const show = await findByName(h.show, null);
-    if (show) return { ...show, note: show.note || `Couldn't tell which episode "${h.episode}" is, pick it from the list.` };
+    const name = h?.show || h?.episode;
+    if (!name) continue;
+    const show = await findByName(name, null);
+    if (show) return h.show && h.episode ? { ...show, note: show.note || `Couldn't tell which episode "${h.episode}" is, pick it from the list.` } : show;
   }
   return null;
 }
@@ -935,15 +937,21 @@ async function resolveYouTube(id) {
   const channel = info?.author_name?.trim() || '';
   if (!title) throw new UserError("YouTube didn't recognise that link. Check it plays on YouTube, or paste the podcast's Apple Podcasts link instead.");
 
-  const exact = (await itunesSearch(title, 'podcastEpisode', (e) => e.episodeUrl)).find((e) => normTitle(e.trackName) === normTitle(title));
+  // A podcast is the channel's when at least half the channel's name is in the show's name or
+  // its author's ("Andrew Huberman" and "Huberman Lab"); otherwise any episode anywhere that
+  // happens to share the video's title would do.
+  const words = (s) => new Set(normTitle(s || '').split(' ').filter((w) => w.length > 2));
+  const owner = words(channel);
+  const owns = (show, artist) => {
+    if (sameShow(show, channel)) return true;
+    const w = words(`${show} ${artist}`);
+    return owner.size > 0 && [...owner].filter((x) => w.has(x)).length >= owner.size / 2;
+  };
+  const exact = (await itunesSearch(title, 'podcastEpisode', (e) => e.episodeUrl))
+    .find((e) => normTitle(e.trackName) === normTitle(title) && owns(e.collectionName, e.artistName));
   if (exact) return { kind: 'audio', url: exact.episodeUrl, title: exact.trackName, show: exact.collectionName, art: exact.artworkUrl600 || exact.artworkUrl160, notes: exact.description };
 
-  const words = (s) => new Set(normTitle(s).split(' ').filter((w) => w.length > 2));
-  const owner = words(channel);
-  const shows = channel ? (await itunesSearch(channel, 'podcast')).filter((s) => {
-    const w = words(`${s.collectionName} ${s.artistName}`);
-    return [...owner].some((x) => w.has(x)) || sameShow(s.collectionName, channel);
-  }).slice(0, 3) : [];
+  const shows = channel ? (await itunesSearch(channel, 'podcast')).filter((s) => owns(s.collectionName, s.artistName)).slice(0, 3) : [];
   let pool = [];
   let showName = '';
   for (const show of shows) {

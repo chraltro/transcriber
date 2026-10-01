@@ -72,8 +72,9 @@ async function firstLink(page, re, base = '') {
 }
 async function latestVideo(handle) {
   try {
-    const page = await (await fetch(`https://www.youtube.com/${handle}/videos`, { headers: UA })).text();
-    const id = page.match(/"channelId":"(UC[\w-]{22})"/)?.[1];
+    const page = await (await fetch(`https://www.youtube.com/${handle}/videos?hl=en`, { headers: UA, signal: AbortSignal.timeout(20000) })).text();
+    const id = page.match(/"channelId":"(UC[\w-]{22})"/)?.[1] || page.match(/channel\/(UC[\w-]{22})/)?.[1] || page.match(/"externalId":"(UC[\w-]{22})"/)?.[1];
+    if (!id) console.log(`no channel id for ${handle} (${page.length} chars: ${page.slice(0, 120).replace(/\s+/g, ' ')})`);
     const feed = await (await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${id}`)).text();
     const v = feed.match(/<yt:videoId>([^<]+)</)?.[1];
     return v ? `https://youtu.be/${v}` : null;
@@ -83,9 +84,11 @@ const LINKS = [
   { name: 'Link: YouTube (Huberman Lab)', url: await latestVideo('@hubermanlab') },
   { name: 'Link: YouTube (Lex Fridman)', url: await latestVideo('@lexfridman') },
   { name: 'Link: YouTube, not a podcast', url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw', expectError: /doesn't seem to publish one/ },
-  { name: 'Link: Buzzsprout episode page', url: await firstLink('https://www.buzzsprout.com/1', /href="(\/1\/episodes\/[^"?]+)"/, 'https://www.buzzsprout.com') },
+  // Buzzsprout and Substack pages resolve, but their audio servers don't let web pages download:
+  // the reader gets the app's explanation.
+  { name: 'Link: Buzzsprout episode page', url: await firstLink('https://www.buzzsprout.com/1', /href="(\/1\/episodes\/[^"?]+)"/, 'https://www.buzzsprout.com'), expectError: /doesn't allow web pages to download/ },
   { name: 'Link: iHeart episode', url: await firstLink('https://www.iheart.com/podcast/1119-stuff-you-should-know-26940277/', /href="(\/podcast\/1119-stuff-you-should-know-26940277\/episode\/[^"]+)"/, 'https://www.iheart.com') },
-  { name: 'Link: Substack post (page reader)', url: await firstLink('https://www.astralcodexten.com/podcast', /href="(https:\/\/www\.astralcodexten\.com\/p\/(?!open-thread)[^"/]+)"/) },
+  { name: 'Link: Substack post (page reader)', url: await firstLink('https://www.astralcodexten.com/podcast', /href="(https:\/\/www\.astralcodexten\.com\/p\/(?!open-thread)[^"/]+)"/), expectError: /doesn't allow web pages to download/ },
   { name: 'Link: NRK page (page reader, then directory)', url: 'https://radio.nrk.no/podkast/abels_taarn', expectAny: true },
   { name: 'Link: Internet Archive item', url: 'https://archive.org/details/OTRR_Dragnet_Singles', expectList: true },
   { name: 'Link: Audioboom channel', url: 'https://audioboom.com/channels/4322549', expectList: true },
@@ -97,13 +100,23 @@ const LINKS = [
 }).map((c) => ({ lang: 'english', resolveOnly: true, expectAny: !c.expectList && !c.expectError, ...c }));
 
 const nrk = await appleEpisodeLink('Abels tårn', 'no');
-// The newest episode of the first show in the list whose audio host lets web pages download it.
+// The newest episode of the first show in the list whose audio host lets web pages download it,
+// checked from a real page (redirect chains decide it, and only a browser follows them the same way).
+const probeBrowser = await chromium.launch();
+const probeCtx = await probeBrowser.newContext();
+await probeCtx.route(`${ORIGIN}/**`, (r) => r.fulfill({ body: '<!doctype html><title>probe</title>', contentType: 'text/html' }));
+const probePage = await probeCtx.newPage();
+await probePage.goto(`${ORIGIN}/probe`);
+const browserCanFetch = (url) => probePage.evaluate(async (u) => {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 20000);
+  try { const r = await fetch(u, { signal: ctl.signal }); ctl.abort(); return r.ok; } catch { return false; } finally { clearTimeout(t); }
+}, url);
 async function languageLink(country, terms) {
   for (const term of terms) {
     try {
       const ep = await appleEpisodeLink(term, country);
-      const res = ep.audio ? await fetch(ep.audio, { headers: { Origin: ORIGIN, Range: 'bytes=0-1' }, signal: AbortSignal.timeout(15000) }) : null;
-      if (res && !res.headers.get('access-control-allow-origin')) { console.log(`skipping ${term}: its audio host doesn't allow web pages`); continue; }
+      if (!ep.audio || !(await browserCanFetch(ep.audio))) { console.log(`skipping ${term}: its audio host doesn't allow web pages`); continue; }
       return { ...ep, show: term };
     } catch (e) { console.log(`skipping ${term}: ${e.message}`); }
   }
@@ -111,10 +124,11 @@ async function languageLink(country, terms) {
 }
 const LANGS = {
   french: await languageLink('fr', ['Transfert', 'Les Couilles sur la table', 'Affaires sensibles', 'Le Code a changé', 'Les Pieds sur terre']),
-  german: await languageLink('de', ['Was jetzt?', 'Lage der Nation', 'Hotel Matze', 'Zeit Verbrechen', 'Gemischtes Hack']),
-  spanish: await languageLink('es', ['Nadie Sabe Nada', 'Hoy en EL PAÍS', 'La Escóbula de la Brújula', 'Radio Ambulante', 'Estirando el chicle']),
+  german: await languageLink('de', ['Zeit Verbrechen', 'Hotel Matze', 'Alles gesagt?', 'Was jetzt?', 'Lage der Nation', 'Baywatch Berlin', 'Fest & Flauschig']),
+  spanish: await languageLink('es', ['Radio Ambulante', 'La Escóbula de la Brújula', 'Leyendas Legendarias', 'Estirando el chicle', 'Nadie Sabe Nada', 'Hoy en EL PAÍS', 'Se Regalan Dudas']),
   italian: await languageLink('it', ['Morning Il Post', 'Indagini', 'Stories Cecilia Sala', 'Muschio Selvaggio', 'Tintoria']),
 };
+await probeBrowser.close();
 const omny = await appleEpisodeLink('Millionærklubben', 'dk');
 
 const CASES = [
@@ -130,7 +144,8 @@ const CASES = [
   // code from run to run, so this case has its own ceiling.
   // One segment proves the GPU path end to end; a software GPU is far too slow to wait for more.
   { name: 'WebGPU (SwiftShader)', gpu: true, model: 'tiny', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 1, memoryLimitMB: 1500, title: 'Xi’s Just Not That Into You' },
-  { name: 'Firefox', engine: 'firefox', model: 'tiny', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 3, title: 'Xi’s Just Not That Into You' },
+  // Firefox's tab measures 1150 to 1200 MB from run to run on the same code.
+  { name: 'Firefox', engine: 'firefox', model: 'tiny', memoryLimitMB: 1400, url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 3, title: 'Xi’s Just Not That Into You' },
   { name: 'iPhone (WebKit)', engine: 'webkit', model: 'tiny', url: 'https://pca.st/episode/662e3967-b4b0-4d36-84d1-d0d8b49eb03b', lang: 'english', segments: 8, memoryLimitMB: 2000, title: 'Xi’s Just Not That Into You' },
   { name: 'Pocket Casts short link', url: 'https://pca.st/okm7xj7g', lang: 'english', resolveOnly: true, title: 'Xi’s Just Not That Into You' },
   // Norwegian runs NB-Whisper (base and tiny).
@@ -239,7 +254,7 @@ for (const c of CASES) {
     if (line !== last) { console.log(`  ${Math.round((Date.now() - start) / 1000)}s ${line}`); last = line; }
     if (s.error) { result = `error: ${s.error}`; break; }
     if (s.episodes) { result = `episode list (${s.episodes})`; console.log(`  list: ${s.listTitle}`); break; }
-    if (c.resolveOnly && s.stage === 'Downloading episode') {
+    if (c.resolveOnly && !c.expectError && s.stage === 'Downloading episode') {
       const right = c.expectAny || (c.titleIncludes ? s.title.includes(c.titleIncludes) : s.title === c.title);
       result = right ? 'ok' : `wrong episode: "${s.title}"`;
       console.log(`  title: ${s.title}`);
