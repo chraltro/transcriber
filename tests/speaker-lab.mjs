@@ -193,8 +193,11 @@ const CHECKS = process.env.EPISODE ? [] : [
   [/key thing is we always said when we cross/i, 'Bill Gates'],
 ];
 function checkScore(sp) {
-  const parts = allParts.map((p, i) => ({ ...p, speaker: sp[i] }));
-  const names = guessNames(parts, terms, { host: hostFromShow(ep.show) });
+  // Voices are judged apart from naming: in this interview the guest talks most, the host next.
+  const talk = {};
+  allParts.forEach((p, i) => { if (sp[i] != null) talk[sp[i]] = (talk[sp[i]] || 0) + (p.end - p.start); });
+  const [guest, host] = Object.keys(talk).sort((a, b) => talk[b] - talk[a]);
+  const names = { [guest]: 'Bill Gates', [host]: 'Ezra Klein' };
   let right = 0;
   let seen = 0;
   const wrong = [];

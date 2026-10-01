@@ -259,3 +259,12 @@ test("a sentence's own voice print outweighs a segmentation that missed the chan
   // An unclear print (as close to both) changes nothing.
   assert.deepEqual(labelParts(parts, turns, { 1: 0 }, 1, { voices, spanPrints: [v(1, 1), null] }).map((p) => p.speaker), [0, 0]);
 });
+
+test('organisations are never speaker names', () => {
+  const segs = [
+    { start: 0, end: 70, speaker: 0, text: 'Our work at the Gates Foundation, the Gates Foundation, matters.' },
+    { start: 70, end: 140, speaker: 1, text: 'So, Gates Foundation, welcome.' },
+  ];
+  const names = guessNames(segs, ['Gates Foundation', 'York Times']);
+  assert.ok(!Object.values(names).includes('Gates Foundation'), JSON.stringify(names));
+});
