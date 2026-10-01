@@ -1,0 +1,22 @@
+name: Speaker lab
+on:
+  push:
+    branches: ['claude/**']
+    paths: ['tests/speaker-lab.mjs', '.github/workflows/speaker-lab.yml', 'lib/speakers.js', 'lib/diarize.js']
+  workflow_dispatch:
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sudo apt-get install -y ffmpeg >/dev/null
+      - run: npm i --no-save @huggingface/transformers@4.3.0
+      - run: node tests/speaker-lab.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: speaker-lab
+          path: speaker-lab.json

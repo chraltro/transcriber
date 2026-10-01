@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { framesToTurns, Voices, labelParts, guessNames, speakerName, cosine, sentenceParts } from '../../lib/speakers.js';
+import { framesToTurns, Voices, labelParts, guessNames, speakerName, cosine, sentenceParts, clusterVoices } from '../../lib/speakers.js';
 import { splitTimestamps, coveredUntil } from '../../lib/prompted.js';
 
 test('frame classes become single-speaker turns; overlap and blips drop out', () => {
@@ -152,4 +152,19 @@ test('introductions and welcomes in French, German, Spanish and Italian name voi
     { start: 301, end: 310, speaker: 3, text: 'Danke.' },
   ];
   assert.deepEqual(guessNames(segs, people), { 0: 'Marie Dubois', 1: 'Jonas Weber', 2: 'Lucía Pérez', 3: 'Marco Rossi' });
+});
+
+test('clustering with hindsight undoes an early wrong split', () => {
+  const v = (a, b, noise) => { const x = new Float32Array(8); x[0] = a; x[1] = b; x[2 + (noise % 6)] = 0.3; return x; };
+  // Host (axis 0) and guest (axis 1); a few host prints lean a little towards the guest.
+  const items = [
+    { print: v(1, 0, 0), seconds: 20 }, { print: v(0, 1, 1), seconds: 25 }, { print: v(1, 0.5, 2), seconds: 6 },
+    { print: v(0.1, 1, 3), seconds: 30 }, { print: v(1, 0.1, 4), seconds: 15 }, { print: v(0.6, 0.5, 5), seconds: 1 },
+  ];
+  const ids = clusterVoices(items);
+  assert.equal(ids[0], ids[2]);
+  assert.equal(ids[0], ids[4]);
+  assert.equal(ids[1], ids[3]);
+  assert.notEqual(ids[0], ids[1]);
+  assert.equal(ids[1], 0); // the guest talks most
 });
