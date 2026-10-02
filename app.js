@@ -1140,7 +1140,8 @@ async function resolveLink(raw) {
     try { return await resolveFeed(found.url, found.title); } catch (err) { if (err.name === 'AbortError') throw err; }
   }
   // No audio on the page (or no page): find the episode by name.
-  const hints = [...(text ? pageHints(text) : []), slugHints(u.href)].filter(Boolean);
+  const slug = slugHints(u.href);
+  const hints = [...(text ? pageHints(text) : []), slug, slug?.alt].filter(Boolean);
   if (hints.length) {
     progress('Looking up the episode', null, 'Finding it in the podcast directory');
     const byName = await findByHints(hints);

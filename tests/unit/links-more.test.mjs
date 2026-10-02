@@ -43,6 +43,10 @@ test('slugs from podcast app links', () => {
   assert.deepEqual(slugHints('https://creators.spotify.com/pod/show/myshow/episodes/Talking-trees-e2abc12'), { show: 'myshow', episode: 'Talking trees' });
   assert.deepEqual(slugHints('https://shows.acast.com/the-rest-is-politics/episodes/trump-and-the-fed'), { show: 'the rest is politics', episode: 'trump and the fed' });
   assert.equal(slugHints('https://example.com/a/b'), null);
+  // NRK spells å as aa in links; both spellings are offered.
+  assert.deepEqual(slugHints('https://radio.nrk.no/podkast/abels_taarn'), { show: 'abels taarn', episode: null, alt: { show: 'abels tårn', episode: null } });
+  // Any other site: the words in the link.
+  assert.deepEqual(slugHints('https://example.com/shows/the-big-story/episodes/why-bridges-fall-12345'), { show: 'the big story', episode: 'why bridges fall' });
 });
 
 test('episode numbers in many languages', () => {

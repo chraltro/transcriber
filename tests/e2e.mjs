@@ -90,7 +90,7 @@ const LINKS = [
   { name: 'Link: iHeart episode', url: await firstLink('https://www.iheart.com/podcast/1119-stuff-you-should-know-26940277/', /href="(\/podcast\/1119-stuff-you-should-know-26940277\/episode\/[^"]+)"/, 'https://www.iheart.com') },
   // A post with audio: the newest feed item with an audio enclosure (most posts are text only, and
   // Substack also puts each post's cover image in an enclosure).
-  { name: 'Link: Substack post (page reader)', url: await firstLink('https://www.astralcodexten.com/feed', /<item>(?:(?!<\/item>)[\s\S])*?<link>(https:\/\/www\.astralcodexten\.com\/p\/[^<]+)<\/link>(?:(?!<\/item>)[\s\S])*?<enclosure[^>]*type="audio/), expectError: /doesn't allow web pages to download/ },
+  { name: 'Link: Substack post (page reader)', url: await firstLink('https://www.astralcodexten.com/feed', /<item>(?:(?!<\/item>)[\s\S])*?<link>(https:\/\/www\.astralcodexten\.com\/p\/[^<]+)<\/link>(?:(?!<\/item>)[\s\S])*?<enclosure[^>]*type="audio/) || 'https://www.astralcodexten.com/p/your-book-review-lee-kuan-yews-memoirs', expectError: /doesn't allow web pages to download/ },
   { name: 'Link: NRK page (page reader, then directory)', url: 'https://radio.nrk.no/podkast/abels_taarn', expectAny: true },
   { name: 'Link: Internet Archive item', url: 'https://archive.org/details/OTRR_Dragnet_Singles', expectList: true },
   { name: 'Link: Audioboom channel', url: 'https://audioboom.com/channels/4322549', expectList: true },
