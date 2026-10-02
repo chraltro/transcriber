@@ -5,7 +5,7 @@ import { fmtTime, normTitle, bestTitleMatch, sameShow } from './lib/text.js';
 import { indexWav, wavPiece } from './lib/wav.js';
 import { toSrt, toVtt } from './lib/subtitles.js';
 import { tidy, plainText, wordCount, startsParagraph } from './lib/paragraphs.js';
-import { guessNames, speakerName, labelParts, hostFromShow, Voices } from './lib/speakers.js';
+import { guessNames, speakerName, labelParts, hostFromShow, Voices, minorVoices, OTHER } from './lib/speakers.js';
 import { nameGroups, glossaryFor } from './lib/names.js';
 import { isAd } from './lib/ads.js';
 import { id3Length, parseId3 } from './lib/id3.js';
@@ -285,19 +285,28 @@ const speakersOn = () => store.get('speakers', '1') === '1';
 const names = () => ({ ...state.guessed, ...state.speakerNames });
 
 function refreshNames() {
-  state.guessed = guessNames(state.segments, state.vocab?.terms || [], { host: hostFromShow(state.source?.show) });
+  const guessed = guessNames(state.segments, state.vocab?.terms || [], { host: hostFromShow(state.source?.show) });
+  // Ads, clips and soundbites: one "Other voice" label instead of a numbered speaker each.
+  const minor = minorVoices(state.segments, { ...guessed, ...state.speakerNames });
+  state.minor = minor;
+  state.guessed = { ...Object.fromEntries([...minor].map((k) => [k, 'Other voice'])), [OTHER]: 'Other voices', ...guessed };
   const n = names();
-  for (const chip of els.transcript.querySelectorAll('.who')) chip.textContent = speakerName(chip.dataset.speaker, n);
+  for (const chip of els.transcript.querySelectorAll('.who')) {
+    chip.textContent = speakerName(chip.dataset.speaker, n);
+    chip.dataset.hue = hueOf(chip.dataset.speaker);
+  }
   const voices = new Set(state.segments.map((x) => x.speaker).filter((x) => x != null)).size;
   setNote('speakers', voices ? `${voices} ${voices === 1 ? 'voice' : 'voices'}` : '');
   updateMap();
 }
 
+const hueOf = (speaker) => (state.minor?.has(Number(speaker)) ? 'other' : Number(speaker) % 6);
+
 function whoChip(speaker) {
   const chip = el('button', 'who', speakerName(speaker, names()));
   chip.type = 'button';
   chip.dataset.speaker = speaker;
-  chip.dataset.hue = Number(speaker) % 6;
+  chip.dataset.hue = hueOf(speaker);
   chip.title = 'Rename this speaker';
   return chip;
 }
@@ -369,14 +378,21 @@ function drawMap() {
     return;
   }
   const narrow = window.matchMedia('(max-width: 640px)').matches;
-  const m = speakerMap(segs, wave.total || 0, { maxCols: narrow ? 20 : 44 });
+  const folded = foldMinor(segs);
+  const m = speakerMap(folded, wave.total || 0, { maxCols: narrow ? 20 : 44 });
   const n = names();
   map.render(m, (sp) => speakerName(sp, n));
   if (!audio.paused) map.setPlayhead(audio.currentTime);
   const cell = m.cell >= 60 ? `${m.cell / 60} min` : `${m.cell} s`;
   els.mapKicker.textContent = `Who speaks when · ${cell} cells · 0:00–${fmtTime(m.total)}`;
-  renderTalk(labelled ? talkTime(segs) : []);
+  renderTalk(labelled ? talkTime(folded) : []);
   if (state.mapSel) renderMapSelection();
+}
+
+// The minor voices as one, for the speaker map and talk times.
+function foldMinor(segs) {
+  const minor = state.minor;
+  return minor?.size ? segs.map((x) => (minor.has(x.speaker) ? { ...x, speaker: OTHER } : x)) : segs;
 }
 
 function renderTalk(list) {
@@ -405,7 +421,7 @@ function renderMapSelection() {
   els.mapScope.textContent = `Selected · ${fmtTime(sel.from)}–${fmtTime(sel.to)}`;
   els.mapRefine.classList.toggle('hidden', state.busy || !state.playable);
   const words = wordCount(sel.segments);
-  const talk = talkTime(sel.segments);
+  const talk = talkTime(foldMinor(sel.segments));
   const n = names();
   const cell = (label, value, hot = false) => {
     const d = el('div');

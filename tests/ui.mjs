@@ -84,13 +84,15 @@ async function run(name, contextOptions, audio) {
   const done = await page.evaluate(() => ({
     chips: [...new Set([...document.querySelectorAll('#transcript .who')].map((c) => c.textContent))],
     rows: document.querySelectorAll('#map-grid .map-row').length,
+    labels: [...document.querySelectorAll('#map-grid .map-label')].map((x) => x.textContent),
     talk: document.querySelectorAll('#talk-list li').length,
     ads: document.querySelectorAll('.para.ad').length,
     library: !!indexedDB,
   }));
   check(done.chips.includes('Derek Thompson') && done.chips.includes('Anna Berg'), `speakers named from introductions (${done.chips.join(', ')})`);
-  check(done.rows === 2, `speaker map has a row per voice (${done.rows})`);
-  check(done.talk === 2, `talk time lists both voices (${done.talk})`);
+  check(done.chips.includes('Other voice'), `a voice heard only in passing is an "Other voice" (${done.chips.join(', ')})`);
+  check(done.rows === 3 && done.labels.includes('Other voices'), `speaker map: host, guest and other voices (${done.labels.join(', ')})`);
+  check(done.talk === 3, `talk time lists both voices and the others (${done.talk})`);
   check(done.ads > 0, 'sponsor read marked as an ad');
   await page.evaluate(() => window.scrollTo(0, 0));
   await shot('3-done');

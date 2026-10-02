@@ -4,7 +4,7 @@
 // same data, each scored on edge sentences whose speaker is known and printed as a reader sees it.
 // (Clustering all prints with hindsight was tried too: on these episodes it found exactly the
 // voices the on-the-fly matching did. The errors were at the edges of turns.)
-//   SHOW, EPISODE (regex), MINUTES, MODEL
+//   EPISODE_KEY (gates, klosterman), MINUTES, MODEL
 import * as tf from '@huggingface/transformers';
 import { execSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
@@ -15,8 +15,43 @@ import { dtypeFor } from '../lib/models.js';
 import { createDiarizer } from '../lib/diarize.js';
 import { guessNames, speakerName, hostFromShow, Voices, assignLocals, labelParts, retimeParts } from '../lib/speakers.js';
 
-const SHOW = process.env.SHOW || 'The Ezra Klein Show';
-const EPISODE = new RegExp(process.env.EPISODE || 'Gates', 'i');
+// Episodes with an answer key: sentences at the edges of turns whose speaker is certain from the
+// conversation, read and checked by hand. In both, the guest talks most and the host next, which
+// is how voices are matched to the key (apart from the app's own naming).
+const EPISODES = {
+  gates: {
+    show: 'The Ezra Klein Show', episode: /Gates/i, guest: 'Bill Gates', host: 'Ezra Klein',
+    checks: [
+      [/How do you see that question/i, 'host'], [/I'm curious where yours is/i, 'host'],
+      [/doesn't feel to me that we're so disengaged/i, 'host'], [/you just wrote this essay on AI risk/i, 'host'],
+      [/Jensen Huang's view/i, 'host'], [/this is not my view, but it is President Trump/i, 'host'],
+      [/welcome to the show/i, 'host'], [/So that was 30 years ago/i, 'host'],
+      [/Do you think that's far from being a capability/i, 'host'], [/What specifically was the threshold/i, 'host'],
+      [/is the governing view of the United States/i, 'host'], [/So the two counter ?arguments/i, 'host'],
+      [/^Yeah, so\.?$/i, 'guest'], [/^Great to see you/i, 'guest'], [/^Does super powerful AI create/i, 'guest'],
+      [/almost can't believe you're asking that/i, 'guest'], [/So they don't mind bioterrorism/i, 'guest'],
+      [/There's no doubt,? to date/i, 'guest'], [/the notion that computation could provide thinking/i, 'guest'],
+      [/key thing is we always said when we cross/i, 'guest'], [/^Not really, I don't think/i, 'guest'],
+      [/^It's a scary thought/i, 'guest'],
+    ],
+  },
+  klosterman: {
+    show: 'Plain English with Derek Thompson', episode: /Klosterman/i, guest: 'Chuck Klosterman', host: 'Derek Thompson',
+    checks: [
+      [/I don't think there is any singular inception point/i, 'guest'], [/It was just the kind of thing for 25 years/i, 'guest'],
+      [/now it's just one big/i, 'host'], [/^Why did this happen\?/i, 'host'],
+      [/probably had to do sort of with the decline/i, 'guest'], [/^Well, yes\.?$/i, 'guest'],
+      [/So to go back to you, how do you feel about that/i, 'guest'], [/^I'm excited about it/i, 'host'],
+      [/^I try to remember it/i, 'guest'], [/^Super old-fashioned/i, 'host'], [/I had to learn somehow/i, 'guest'],
+      [/So like with this book, for example/i, 'host'], [/what is your feedback loop/i, 'host'], [/^Hmm\.?$/i, 'guest'],
+      [/when you're first starting out, all you care about/i, 'guest'],
+    ],
+  },
+};
+const KEY = process.env.EPISODE_KEY || 'gates';
+const CONF = EPISODES[KEY];
+const SHOW = CONF.show;
+const EPISODE = CONF.episode;
 const MINUTES = Number(process.env.MINUTES || 35);
 const MODEL = process.env.MODEL || 'onnx-community/whisper-base.en';
 
@@ -57,7 +92,7 @@ const diarize = async (samples, opts) => {
   for (const [a, b] of spans) {
     const from = Math.floor(a * 16000);
     const to = Math.min(samples.length, Math.floor(Math.min(b, a + 12) * 16000));
-    prints.push(to - from >= 16000 ? await diarizer.printOf(samples.subarray(from, to)) : null);
+    prints.push(to - from >= 8000 ? await diarizer.printOf(samples.subarray(from, to)) : null);
   }
   spanSec += (Date.now() - t2) / 1000;
   lastDiarized = { ...plain, spanPrints: prints };
@@ -138,7 +173,7 @@ function show(label, speakerOfPart, full) {
 
 // Replays every window's speaker output through a labelling method, as the app would.
 const debugWindows = [];
-function replay({ minPrint, short, smooth, retime, debug, own, minSim = 0.3, margin = 0.08 }) {
+function replay({ minPrint, short, smooth, retime, debug, own, minSim = 0.3, margin = 0.08, replies = false }) {
   const voices = new Voices();
   let last = null;
   const out = [];
@@ -151,7 +186,7 @@ function replay({ minPrint, short, smooth, retime, debug, own, minSim = 0.3, mar
       for (const [spk, { print, seconds }] of Object.entries(prints)) local[spk] = voices.match(print, seconds);
     }
     const rel = w.parts.map((p) => ({ ...p, start: p.start - w.start, end: p.end - w.start }));
-    const labelled = labelParts(rel, w.turns, local, last, { switchCost: smooth ? 0.8 : null, retime: retime || false, ...(own ? { voices, spanPrints: w.spanPrints, minSim, margin } : {}) });
+    const labelled = labelParts(rel, w.turns, local, last, { switchCost: smooth ? 0.8 : null, retime: retime || false, ...(own ? { voices, spanPrints: w.spanPrints, minSim, margin } : {}), replies });
     if (debug) debugWindows.push({ w, rel: retime ? retimeParts(rel, w.turns) : rel, local, labelled, before: last });
     if (labelled.length && labelled[labelled.length - 1].speaker != null) last = labelled[labelled.length - 1].speaker;
     out.push(...labelled.map((p) => p.speaker ?? null));
@@ -163,39 +198,17 @@ const METHODS = [
   ['short prints', { minPrint: 0.4, short: true, smooth: false }],
   ['short prints + smoothing', { minPrint: 0.4, short: true, smooth: true }],
   ['+ sentences timed over speech', { minPrint: 0.4, short: true, smooth: true, retime: true }],
-  ['+ sentence prints (the app now)', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true, debug: true }],
+  ['+ sentence prints (the app until today)', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true }],
+  ['+ replies, blended prints left out (the app now)', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true, replies: true, debug: true }],
 ];
 const results = METHODS.map(([label, opts]) => [label, replay(opts)]);
-// Sentences at turn edges whose speaker is certain from the conversation (read and checked by
-// hand for the Gates episode): who said them.
-const CHECKS = process.env.EPISODE ? [] : [
-  [/How do you see that question/i, 'Ezra Klein'],
-  [/I'm curious where yours is/i, 'Ezra Klein'],
-  [/doesn't feel to me that we're so disengaged/i, 'Ezra Klein'],
-  [/you just wrote this essay on AI risk/i, 'Ezra Klein'],
-  [/Jensen Huang's view/i, 'Ezra Klein'],
-  [/this is not my view, but it is President Trump/i, 'Ezra Klein'],
-  [/welcome to the show/i, 'Ezra Klein'],
-  [/So that was 30 years ago/i, 'Ezra Klein'],
-  [/Do you think that's far from being a capability/i, 'Ezra Klein'],
-  [/What specifically was the threshold/i, 'Ezra Klein'],
-  [/is the governing view of the United States/i, 'Ezra Klein'],
-  [/So the two counter ?arguments/i, 'Ezra Klein'],
-  [/^Yeah, so\.?$/i, 'Bill Gates'],
-  [/^Great to see you/i, 'Bill Gates'],
-  [/^Does super powerful AI create/i, 'Bill Gates'],
-  [/almost can't believe you're asking that/i, 'Bill Gates'],
-  [/So they don't mind bioterrorism/i, 'Bill Gates'],
-  [/There's no doubt,? to date/i, 'Bill Gates'],
-  [/the notion that computation could provide thinking/i, 'Bill Gates'],
-  [/key thing is we always said when we cross/i, 'Bill Gates'],
-];
+const CHECKS = CONF.checks.map(([re, who]) => [re, CONF[who]]);
 function checkScore(sp) {
-  // Voices are judged apart from naming: in this interview the guest talks most, the host next.
+  // Voices are judged apart from naming: the guest talks most, the host next.
   const talk = {};
   allParts.forEach((p, i) => { if (sp[i] != null) talk[sp[i]] = (talk[sp[i]] || 0) + (p.end - p.start); });
   const [guest, host] = Object.keys(talk).sort((a, b) => talk[b] - talk[a]);
-  const names = { [guest]: 'Bill Gates', [host]: 'Ezra Klein' };
+  const names = { [guest]: CONF.guest, [host]: CONF.host };
   let right = 0;
   let seen = 0;
   const wrong = [];
@@ -214,7 +227,7 @@ for (const [label, sp] of results) {
 }
 for (const [label, sp] of results) show(label, (i) => sp[i], false);
 // Every change of speaker, as each method has it, so the edges can be compared by reading.
-for (const [label, sp] of CHECKS.length ? results.slice(4, 5) : [results[0], results[4]]) {
+for (const [label, sp] of [results[0], results[results.length - 1]]) {
   console.log(`\n--- edges: ${label}`);
   for (let i = 1; i < allParts.length; i++) {
     if (sp[i] === sp[i - 1] || sp[i] == null) continue;

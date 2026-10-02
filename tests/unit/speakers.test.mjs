@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { framesToTurns, Voices, labelParts, guessNames, speakerName, cosine, sentenceParts, hostFromShow, assignLocals, retimeParts } from '../../lib/speakers.js';
+import { framesToTurns, Voices, labelParts, guessNames, speakerName, cosine, sentenceParts, hostFromShow, assignLocals, retimeParts, REPLY, minorVoices } from '../../lib/speakers.js';
 import { splitTimestamps, coveredUntil } from '../../lib/prompted.js';
 
 test('frame classes become single-speaker turns; overlap and blips drop out', () => {
@@ -257,4 +257,52 @@ test('organisations are never speaker names', () => {
   ];
   const names = guessNames(segs, ['Gates Foundation', 'York Times']);
   assert.ok(!Object.values(names).includes('Gates Foundation'), JSON.stringify(names));
+});
+
+test('a short reply inside another turn goes to whoever its voice says', () => {
+  const v = (a, b) => { const x = new Float32Array(4); x[0] = a; x[1] = b; return x; };
+  const voices = new Voices();
+  voices.match(v(1, 0), 40); // 0: host
+  voices.match(v(0, 1), 40); // 1: guest
+  const parts = [
+    { start: 0, end: 6, text: 'So we used to think the valley between critics and bands was wide.' },
+    { start: 6, end: 6.6, text: 'Hmm.' },
+    { start: 6.6, end: 14, text: 'And now it has shrunk to nothing at all.' },
+  ];
+  const turns = [{ spk: 0, start: 0, end: 14 }];
+  // A weak lean towards the guest is enough for a reply ...
+  const out = labelParts(parts, turns, { 0: 0 }, 0, { voices, spanPrints: [null, v(0.6, 0.8), null] });
+  assert.deepEqual(out.map((p) => p.speaker), [0, 1, 0]);
+  // ... but not for an ordinary sentence of the same length.
+  const plain = [parts[0], { ...parts[1], text: 'And then.' }, parts[2]];
+  assert.deepEqual(labelParts(plain, turns, { 0: 0 }, 0, { voices, spanPrints: [null, v(0.6, 0.8), null] }).map((p) => p.speaker), [0, 0, 0]);
+  assert.ok(REPLY.test('Great to see you.') && REPLY.test('Yeah, yeah.') && REPLY.test('Thanks for having me.') && !REPLY.test('Yeah, so the point is this.'));
+});
+
+test('a print taken across a change of speaker is left out', () => {
+  const v = (a, b) => { const x = new Float32Array(4); x[0] = a; x[1] = b; return x; };
+  const voices = new Voices();
+  voices.match(v(1, 0), 40); // 0: host
+  voices.match(v(0, 1), 40); // 1: guest
+  // Whisper timed the answer's first sentence early, over the end of the question, so its print
+  // sounds like the host. The segmentation heard the change inside that span.
+  const parts = [
+    { start: 0, end: 5, text: 'Where did this idea come from?' },
+    { start: 5, end: 8, text: "You know, I don't think there is any single starting point." },
+    { start: 8, end: 20, text: 'It was just something my friends and I joked about for years.' },
+  ];
+  const turns = [{ spk: 0, start: 0, end: 6.4 }, { spk: 1, start: 6.6, end: 20 }];
+  const out = labelParts(parts, turns, { 0: 0, 1: 1 }, 0, { voices, spanPrints: [null, v(1, 0.1), null] });
+  assert.deepEqual(out.map((p) => p.speaker), [0, 1, 1]);
+});
+
+test('voices heard only in passing become "other voices", named ones never do', () => {
+  const segs = [
+    { start: 0, end: 300, speaker: 0, text: 'a' }, { start: 300, end: 500, speaker: 1, text: 'b' },
+    { start: 500, end: 505, speaker: 2, text: 'ad' }, { start: 505, end: 512, speaker: 3, text: 'clip' },
+  ];
+  assert.deepEqual([...minorVoices(segs)].sort(), [2, 3]);
+  assert.deepEqual([...minorVoices(segs, { 3: 'Bill Gates' })], [2]);
+  // Too little talk yet to tell a minor voice from a host who hasn't spoken much.
+  assert.equal(minorVoices(segs.map((x) => ({ ...x, end: x.start + 5 }))).size, 0);
 });

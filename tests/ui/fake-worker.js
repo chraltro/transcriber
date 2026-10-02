@@ -1,5 +1,5 @@
 // A stand-in for worker.js in the fast UI test: no models, instant canned speech from two
-// voices (a host, "Derek Thompson", and a guest, "Anna Berg"), delivered as timed parts through
+// voices (a host, "Derek Thompson", and a guest, "Anna Berg") and a sponsor read's few seconds, delivered as timed parts through
 // the app's real StreamingTranscriber, including the phone speaker pass.
 import { StreamingTranscriber } from './lib/stream.js';
 const LINES = [
@@ -36,8 +36,11 @@ const stream = new StreamingTranscriber({ post,
   },
   diarize: async (samples) => {
     const dur = samples.length / 16000;
-    const host = HOST.includes(d++ % LINES.length);
+    const line = d++ % LINES.length;
+    const host = HOST.includes(line);
     const v = host ? [1, 0, 0, 0] : [0, 0, 1, 0];
+    // The sponsor read opens with a third voice for a few seconds: an "Other voice".
+    if (line === 9) return { turns: [{ spk: 1, start: 0, end: 4 }, { spk: 0, start: 4, end: dur }], prints: { 0: { print: v, seconds: dur - 4 }, 1: { print: [0, 0, 0, 1], seconds: 4 } } };
     return { turns: [{ spk: 0, start: 0, end: dur }], prints: { 0: { print: v, seconds: dur } } };
   },
 });
