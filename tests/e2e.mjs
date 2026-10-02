@@ -88,7 +88,8 @@ const LINKS = [
   // the reader gets the app's explanation.
   { name: 'Link: Buzzsprout episode page', url: await firstLink('https://www.buzzsprout.com/1', /href="(\/1\/episodes\/[^"?]+)"/, 'https://www.buzzsprout.com'), expectError: /doesn't allow web pages to download/ },
   { name: 'Link: iHeart episode', url: await firstLink('https://www.iheart.com/podcast/1119-stuff-you-should-know-26940277/', /href="(\/podcast\/1119-stuff-you-should-know-26940277\/episode\/[^"]+)"/, 'https://www.iheart.com') },
-  { name: 'Link: Substack post (page reader)', url: await firstLink('https://www.astralcodexten.com/podcast', /href="(https:\/\/www\.astralcodexten\.com\/p\/(?!open-thread)[^"/]+)"/), expectError: /doesn't allow web pages to download/ },
+  // A post with audio: the newest feed item that has an enclosure (most posts are text only).
+  { name: 'Link: Substack post (page reader)', url: await firstLink('https://www.astralcodexten.com/feed', /<item>(?:(?!<\/item>)[\s\S])*?<link>(https:\/\/www\.astralcodexten\.com\/p\/[^<]+)<\/link>(?:(?!<\/item>)[\s\S])*?<enclosure/), expectError: /doesn't allow web pages to download/ },
   { name: 'Link: NRK page (page reader, then directory)', url: 'https://radio.nrk.no/podkast/abels_taarn', expectAny: true },
   { name: 'Link: Internet Archive item', url: 'https://archive.org/details/OTRR_Dragnet_Singles', expectList: true },
   { name: 'Link: Audioboom channel', url: 'https://audioboom.com/channels/4322549', expectList: true },

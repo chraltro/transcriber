@@ -199,7 +199,7 @@ const METHODS = [
   ['short prints + smoothing', { minPrint: 0.4, short: true, smooth: true }],
   ['+ sentences timed over speech', { minPrint: 0.4, short: true, smooth: true, retime: true }],
   ['+ sentence prints (the app until today)', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true }],
-  ['+ replies, blended prints left out (the app now)', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true, replies: true, debug: true }],
+  ['+ short replies (the app now)', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true, replies: true, debug: true }],
 ];
 const results = METHODS.map(([label, opts]) => [label, replay(opts)]);
 const CHECKS = CONF.checks.map(([re, who]) => [re, CONF[who]]);

@@ -279,23 +279,6 @@ test('a short reply inside another turn goes to whoever its voice says', () => {
   assert.ok(REPLY.test('Great to see you.') && REPLY.test('Yeah, yeah.') && REPLY.test('Thanks for having me.') && !REPLY.test('Yeah, so the point is this.'));
 });
 
-test('a print taken across a change of speaker is left out', () => {
-  const v = (a, b) => { const x = new Float32Array(4); x[0] = a; x[1] = b; return x; };
-  const voices = new Voices();
-  voices.match(v(1, 0), 40); // 0: host
-  voices.match(v(0, 1), 40); // 1: guest
-  // Whisper timed the answer's first sentence early, over the end of the question, so its print
-  // sounds like the host. The segmentation heard the change inside that span.
-  const parts = [
-    { start: 0, end: 5, text: 'Where did this idea come from?' },
-    { start: 5, end: 8, text: "You know, I don't think there is any single starting point." },
-    { start: 8, end: 20, text: 'It was just something my friends and I joked about for years.' },
-  ];
-  const turns = [{ spk: 0, start: 0, end: 6.4 }, { spk: 1, start: 6.6, end: 20 }];
-  const out = labelParts(parts, turns, { 0: 0, 1: 1 }, 0, { voices, spanPrints: [null, v(1, 0.1), null] });
-  assert.deepEqual(out.map((p) => p.speaker), [0, 1, 1]);
-});
-
 test('voices heard only in passing become "other voices", named ones never do', () => {
   const segs = [
     { start: 0, end: 300, speaker: 0, text: 'a' }, { start: 300, end: 500, speaker: 1, text: 'b' },
