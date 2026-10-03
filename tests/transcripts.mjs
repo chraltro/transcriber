@@ -6,6 +6,9 @@ function blocks(html) {
   return decode(html.replace(/<(script|style|noscript|svg)[\s\S]*?<\/\1>/gi, ' ')
     .replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li|h\d|section|article|blockquote)>/gi, '\n')
     .replace(/<[^>]+>/g, ' '))
+    // NPR runs a whole transcript together: "ANNOUNCER: ... GREG ROSALSKY: ..."; each capitalised
+    // label starts a line of its own.
+    .replace(/(?<=[.?!\]"”)…])\s+(?=[A-Z][A-Z.'’ -]{2,40}(?:, [A-Z][A-Z ,.'’-]{1,40})?:\s)/g, '\n')
     .split(/\n/).map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
 }
 

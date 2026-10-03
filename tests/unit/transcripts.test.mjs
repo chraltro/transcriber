@@ -30,3 +30,11 @@ test('a label used once is text, not a speaker', () => {
   const html = '<p>Note: this is not a speaker.</p>' + [1, 2, 3, 4].map((i) => `<p>HOST: Line ${i} is here.</p><p>GUEST: Line ${i} back.</p>`).join('');
   assert.ok(!parseTranscript(html).some((t) => t.speaker === 'NOTE'));
 });
+
+test('NPR on one line: labels inside the text start new turns', () => {
+  const html = '<p>' + [1, 2, 3, 4].map((i) => `GREG ROSALSKY, BYLINE: Turn number ${i} here. SARAH GONZALEZ, BYLINE: Reply ${i} now.`).join(' ') + '</p>';
+  const t = parseTranscript(html);
+  assert.equal(t.length, 8);
+  assert.equal(t[1].speaker, 'SARAH GONZALEZ');
+  assert.match(t[1].text, /^Reply 1/);
+});

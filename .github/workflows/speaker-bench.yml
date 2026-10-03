@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        source: [freshair, upfirst, planetmoney, freakonomics, lex, dwarkesh, cwt, 80k]
+        source: [freshair, upfirst, planetmoney, freakonomics, lex, ferriss, cwt, 80k]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

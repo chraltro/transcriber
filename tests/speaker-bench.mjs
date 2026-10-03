@@ -2,7 +2,7 @@
 // episode per show (SOURCE), its first MINUTES through the app's real transcription and speaker
 // code; the app's words are aligned with the transcript's, and each labelling method is scored on
 // how many words get the right speaker, overall and at the edges of turns.
-//   SOURCE: freshair, upfirst, planetmoney, freakonomics, lex, dwarkesh, cwt, 80k
+//   SOURCE: freshair, upfirst, planetmoney, freakonomics, lex, ferriss, cwt, 80k
 import * as tf from '@huggingface/transformers';
 import { execSync } from 'node:child_process';
 import { StreamingTranscriber } from '../lib/stream.js';
@@ -22,7 +22,7 @@ const SOURCES = {
   planetmoney: { term: 'Planet Money NPR', kind: 'two hosts, guests, tape', transcript: npr },
   freakonomics: { term: 'Freakonomics Radio', kind: 'narrated, many short voices', transcript: ({ title }) => `https://freakonomics.com/podcast/${slug(title.replace(/^\d+\.\s*/, ''))}/` },
   lex: { term: 'Lex Fridman Podcast', kind: 'long two-person interview' },
-  dwarkesh: { term: 'Dwarkesh Podcast', kind: 'two-person interview' },
+  ferriss: { term: 'The Tim Ferriss Show', kind: 'long two-person interview, ads read by the host' },
   cwt: { term: 'Conversations with Tyler', kind: 'fast two-person interview', transcript: ({ title }) => `https://conversationswithtyler.com/episodes/${slug(title.split(/ on /)[0])}/` },
   '80k': { term: '80,000 Hours Podcast', kind: 'two-person interview' },
 };
@@ -215,11 +215,17 @@ function score(parts) {
   }
   const split = {};
   for (const [v, s] of Object.entries(map)) split[s] = (split[s] || 0) + 1;
-  return { right, n, eRight, eN, matched: pairs.length / Math.max(1, hyp.length), voices: Object.keys(map).length, split };
+  return { right, n, eRight, eN, matched: pairs.length / Math.max(1, hyp.length), voices: Object.keys(map).length, split, overlap };
 }
 
 console.log(`\ntranscript speakers in the first ${MINUTES} min: ${[...new Set(ref.slice(0, 6000).map((x) => x.speaker))].length}`);
 for (const [label, opts] of METHODS) {
   const s = score(replay(opts));
+  if (label === 'the app now') {
+    const refTalk = {};
+    for (const x of ref.slice(0, Math.round(s.n * 1.3))) refTalk[x.speaker] = (refTalk[x.speaker] || 0) + 1;
+    console.log(`transcript words by speaker (aligned stretch): ${JSON.stringify(refTalk)}`);
+    for (const [v, o] of Object.entries(s.overlap)) console.log(`  voice ${v}: ${Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, c]) => `${k} ${c}`).join(', ')}`);
+  }
   console.log(`SCORE ${KEY} | ${label.padEnd(20)} | words right ${(100 * s.right / s.n).toFixed(1)}% of ${s.n} | at turn edges ${(100 * s.eRight / Math.max(1, s.eN)).toFixed(1)}% of ${s.eN} | ${s.voices} voices | aligned ${(100 * s.matched).toFixed(0)}% | voices per person ${JSON.stringify(s.split)}`);
 }
