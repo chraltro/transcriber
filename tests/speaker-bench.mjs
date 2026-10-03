@@ -147,14 +147,123 @@ function replay({ minPrint, short, smooth, retime, own, replies, threshold = 0.5
   }
   return out;
 }
+const unit = (v) => { let n = 0; for (const x of v) n += x * x; n = Math.sqrt(n) || 1; return Float32Array.from(v, (x) => x / n); };
+const cosine = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
+// Voices with hindsight (tried for the app, kept here while it is measured): Matching voice prints as they arrive (Voices) has to decide on
+// every window from what it has heard so far; an early mistake (a guest's first answer taken
+// for the host, a laugh starting a new voice) then sticks for the whole episode. Once every
+// window's prints are in, they are clustered together instead: the two most alike groups merge
+// (average similarity, weighted by seconds of speech) until no two groups are alike enough, and
+// then each print moves to the group it is nearest a few times over. Prints from short snippets
+// don't form groups of their own; they join the nearest one if it is close enough.
+// items: [{ print, seconds }] -> a group id per item (null for a snippet that fits nowhere),
+// numbered by talk time, most first.
+function clusterVoices(items, { threshold = 0.45, minSeconds = 2.5, rounds = 3 } = {}) {
+  const prints = items.map((x) => unit(x.print));
+  const long = items.map((x, i) => i).filter((i) => items[i].seconds >= minSeconds);
+  // Average-linkage agglomerative clustering on the long prints.
+  let groups = long.map((i) => [i]);
+  const sim = new Map();
+  const key = (a, b) => (a < b ? `${a},${b}` : `${b},${a}`);
+  const pairSim = (i, j) => {
+    const k = key(i, j);
+    if (!sim.has(k)) sim.set(k, cosine(prints[i], prints[j]));
+    return sim.get(k);
+  };
+  const link = (g, h) => {
+    let s = 0;
+    let w = 0;
+    for (const i of g) for (const j of h) {
+      const wt = items[i].seconds * items[j].seconds;
+      s += pairSim(i, j) * wt;
+      w += wt;
+    }
+    return s / w;
+  };
+  for (;;) {
+    let best = -Infinity;
+    let bi = -1;
+    let bj = -1;
+    for (let a = 0; a < groups.length; a++) {
+      for (let b = a + 1; b < groups.length; b++) {
+        const s = link(groups[a], groups[b]);
+        if (s > best) { best = s; bi = a; bj = b; }
+      }
+    }
+    if (bi < 0 || best < threshold) break;
+    groups[bi] = groups[bi].concat(groups[bj]);
+    groups.splice(bj, 1);
+  }
+  const centroid = (members) => {
+    const c = new Float32Array(prints[0]?.length || 0);
+    for (const i of members) for (let d = 0; d < c.length; d++) c[d] += prints[i][d] * items[i].seconds;
+    return unit(c);
+  };
+  // Refine: each print to its nearest group centre, short ones only when close enough.
+  let assign = new Array(items.length).fill(null);
+  groups.forEach((g, gi) => { for (const i of g) assign[i] = gi; });
+  for (let r = 0; r < rounds && groups.length; r++) {
+    const centres = groups.map((g, gi) => centroid(assign.map((a, i) => (a === gi ? i : -1)).filter((i) => i >= 0)));
+    assign = prints.map((p, i) => {
+      let best = null;
+      let bestSim = -Infinity;
+      centres.forEach((c, gi) => {
+        const s = cosine(p, c);
+        if (s > bestSim) { bestSim = s; best = gi; }
+      });
+      const need = items[i].seconds >= minSeconds ? -Infinity : threshold * 0.7;
+      return bestSim >= need ? best : null;
+    });
+  }
+  // Number groups by talk time.
+  const talk = {};
+  assign.forEach((a, i) => { if (a != null) talk[a] = (talk[a] || 0) + items[i].seconds; });
+  const order = Object.keys(talk).map(Number).sort((a, b) => talk[b] - talk[a]);
+  const rename = Object.fromEntries(order.map((g, n) => [g, n]));
+  return assign.map((a) => (a == null ? null : rename[a]));
+}
+
+// The same labelling, but with every window's local speakers mapped to voices clustered over the
+// whole episode at once.
+function hindsight({ threshold }) {
+  const items = [];
+  const at = [];
+  windows.forEach((w, wi) => {
+    for (const [spk, p] of Object.entries(w.prints)) if (p.seconds >= 0.4) { at.push([wi, spk]); items.push(p); }
+  });
+  const ids = clusterVoices(items, { threshold });
+  const voices = new Voices();
+  const sums = {};
+  ids.forEach((g, k) => {
+    if (g == null) return;
+    const u = unit(items[k].print);
+    sums[g] ||= { c: new Float32Array(u.length), n: 0 };
+    for (let d = 0; d < u.length; d++) sums[g].c[d] += u[d] * items[k].seconds;
+    sums[g].n += items[k].seconds;
+  });
+  const n = Math.max(-1, ...Object.keys(sums).map(Number)) + 1;
+  voices.list = Array.from({ length: n }, (_, g) => ({ c: unit(sums[g]?.c || new Float32Array(256)), n: sums[g]?.n || 0 }));
+  const localOf = windows.map(() => ({}));
+  ids.forEach((g, k) => { const [wi, spk] = at[k]; localOf[wi][spk] = g; });
+  let last = null;
+  const out = [];
+  windows.forEach((w, wi) => {
+    const rel = w.parts.map((p) => ({ ...p, start: p.start - w.start, end: p.end - w.start }));
+    const labelled = labelParts(rel, w.turns, localOf[wi], last, { voices, spanPrints: w.spanPrints });
+    if (labelled.length && labelled[labelled.length - 1].speaker != null) last = labelled[labelled.length - 1].speaker;
+    out.push(...labelled.map((p) => ({ text: p.text, speaker: p.speaker ?? null })));
+  });
+  return out;
+}
+
 const METHODS = [
   ['before speaker work', { minPrint: 1.2 }],
   ['sentence prints', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true }],
   ['the app now', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true, replies: true }],
-  ['now, match at 0.6', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true, replies: true, threshold: 0.6 }],
-  ['now, match at 0.65', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true, replies: true, threshold: 0.65 }],
-  ['now, less drift', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true, replies: true, cap: 300 }],
-  ['now, 0.6 + less drift', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true, replies: true, threshold: 0.6, cap: 300 }],
+  ['hindsight 0.45', { hindsight: 0.45 }],
+  ['hindsight 0.5', { hindsight: 0.5 }],
+  ['hindsight 0.55', { hindsight: 0.55 }],
+  ['hindsight 0.6', { hindsight: 0.6 }],
 ];
 
 /* ---------- scoring ---------- */
@@ -224,7 +333,7 @@ function score(parts) {
 
 console.log(`\ntranscript speakers in the first ${MINUTES} min: ${[...new Set(ref.slice(0, 6000).map((x) => x.speaker))].length}`);
 for (const [label, opts] of METHODS) {
-  const s = score(replay(opts));
+  const s = score(opts.hindsight ? hindsight({ threshold: opts.hindsight }) : replay(opts));
   if (label === 'the app now') {
     const refTalk = {};
     for (const x of ref.slice(0, Math.round(s.n * 1.3))) refTalk[x.speaker] = (refTalk[x.speaker] || 0) + 1;
