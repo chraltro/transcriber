@@ -40,3 +40,8 @@ test("Tiny's split between neighbours still counts: Norwegian heard as half Swed
 test('a Danish window heard as German stays Danish', () => {
   assert.equal(foreignLanguage({ de: 0.86, da: 0.06, en: 0.02 }, 'danish'), null);
 });
+
+test("Norwegian half heard as Swedish is named Norwegian; plain Swedish stays Swedish", () => {
+  assert.equal(foreignLanguage({ en: 0.01, sv: 0.52, no: 0.4, da: 0.05 }, 'english').name, 'Norwegian');
+  assert.equal(foreignLanguage({ en: 0.01, sv: 0.85, no: 0.1 }, 'english').name, 'Swedish');
+});
