@@ -6,12 +6,15 @@ import * as tf from '@huggingface/transformers';
 import { execSync } from 'node:child_process';
 import { detectLanguage, foreignLanguage } from '../lib/langid.js';
 
-const MINUTES = Number(process.env.MINUTES || 15);
+const MINUTES = Number(process.env.MINUTES || 20);
 const CLIPS = [
   { term: 'Plain English Derek Thompson', country: 'us', lang: 'english' },
   { term: 'Lex Fridman Podcast', country: 'us', lang: 'english' },
   { term: 'Up First NPR', country: 'us', lang: 'english' },
   { term: 'Conversations with Tyler', country: 'us', lang: 'english' },
+  { term: 'Fresh Air NPR', country: 'us', lang: 'english' },
+  { term: 'Planet Money NPR', country: 'us', lang: 'english' },
+  { term: 'Freakonomics Radio', country: 'us', lang: 'english' },
   { term: 'Abels tårn', country: 'no', lang: 'norwegian' },
   { term: 'Millionærklubben', country: 'dk', lang: 'danish' },
   { term: 'Zeit Verbrechen', country: 'de', lang: 'german' },
@@ -29,9 +32,10 @@ function load(url, minutes) {
   return new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
 }
 
+// NB-Whisper was tried too: it hears plain English as Norwegian with full confidence, so the app
+// checks with Tiny whatever the main model.
 const MODELS = {
   tiny: await tf.pipeline('automatic-speech-recognition', 'onnx-community/whisper-tiny', { dtype: 'q8' }),
-  'nb-base': await tf.pipeline('automatic-speech-recognition', 'onnx-community/nb-whisper-base-ONNX', { dtype: 'q8' }),
 };
 
 for (const clip of CLIPS) {
