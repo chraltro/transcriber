@@ -52,7 +52,10 @@ export function parseTranscript(html) {
     const full = names.find((n) => n !== t.speaker && n.includes(' ') && last(n) === last(t.speaker));
     if (full && !t.speaker.includes(' ')) t.speaker = full;
   }
-  return turns.filter((t) => t.text.trim());
+  // Page furniture before the conversation ("About Lex Fridman", a bio) is not part of it: start
+  // at the first turn of some length.
+  const start = turns.findIndex((t) => t.text.split(/\s+/).length >= 25);
+  return turns.slice(Math.max(0, start)).filter((t) => t.text.trim() && !/^ABOUT /.test(t.speaker));
 }
 const key = (who) => who.toUpperCase().replace(/[.'’]/g, '').replace(/\s+/g, ' ').trim();
 

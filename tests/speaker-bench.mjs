@@ -13,14 +13,17 @@ import { createDiarizer } from '../lib/diarize.js';
 import { Voices, assignLocals, labelParts } from '../lib/speakers.js';
 import { parseTranscript } from './transcripts.mjs';
 
+// Where each show keeps its transcript, from the feed item's link and title.
+const npr = ({ link }) => { const id = link.match(/nx-s1-\d+|\/(\d{9,})\//)?.[0]?.replace(/\//g, ''); return id ? `https://www.npr.org/transcripts/${id}` : link; };
+const slug = (t) => t.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[’']/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 const SOURCES = {
-  freshair: { term: 'Fresh Air NPR', kind: 'two people, NPR studio and remote' },
-  upfirst: { term: 'Up First NPR', kind: 'news: hosts, reporters, many clips' },
-  planetmoney: { term: 'Planet Money NPR', kind: 'two hosts, guests, tape' },
-  freakonomics: { term: 'Freakonomics Radio', kind: 'narrated, many short voices' },
+  freshair: { term: 'Fresh Air NPR', kind: 'two people, NPR studio and remote', transcript: npr },
+  upfirst: { term: 'Up First NPR', kind: 'news: hosts, reporters, many clips', transcript: npr },
+  planetmoney: { term: 'Planet Money NPR', kind: 'two hosts, guests, tape', transcript: npr },
+  freakonomics: { term: 'Freakonomics Radio', kind: 'narrated, many short voices', transcript: ({ title }) => `https://freakonomics.com/podcast/${slug(title.replace(/^\d+\.\s*/, ''))}/` },
   lex: { term: 'Lex Fridman Podcast', kind: 'long two-person interview' },
   dwarkesh: { term: 'Dwarkesh Podcast', kind: 'two-person interview' },
-  cwt: { term: 'Conversations with Tyler', kind: 'fast two-person interview' },
+  cwt: { term: 'Conversations with Tyler', kind: 'fast two-person interview', transcript: ({ title }) => `https://conversationswithtyler.com/episodes/${slug(title.split(/ on /)[0])}/` },
   '80k': { term: '80,000 Hours Podcast', kind: 'two-person interview' },
 };
 const KEY = process.env.SOURCE || 'cwt';
@@ -55,17 +58,23 @@ async function findEpisode() {
     const link = tag('link');
     const audio = item.match(/<enclosure[^>]+url="([^"]+)"/)?.[1]?.replace(/&amp;/g, '&');
     if (!link || !audio) continue;
-    let html = await getPage(link);
+    const page = SRC.transcript ? SRC.transcript({ link, title }) : link;
+    let html = await getPage(page);
     // The transcript may be on a page of its own ("…-transcript", NPR's /transcripts/).
-    const own = html.match(/href="([^"]*(?:\/transcripts?\/[^"]+|-transcript\/?))"/i)?.[1];
+    const own = parseTranscript(html).length < 15 && html.match(/href="([^"]*(?:\/transcripts?\/[^"]+|-transcript\/?))"/i)?.[1];
     if (own) {
-      const more = await getPage(new URL(own.replace(/&amp;/g, '&'), link).href);
+      const more = await getPage(new URL(own.replace(/&amp;/g, '&'), page).href);
       if (more) html = more;
     }
     const turns = parseTranscript(html);
     const words = turns.reduce((n, t) => n + t.text.split(/\s+/).length, 0);
     const speakers = new Set(turns.map((t) => t.speaker));
-    console.log(`  ${title.slice(0, 70)}: ${turns.length} turns, ${speakers.size} speakers, ${words} words (${link})`);
+    console.log(`  ${title.slice(0, 70)}: ${turns.length} turns, ${speakers.size} speakers, ${words} words (${page})`);
+    if (words >= 2000 && turns.length < 15) {
+      // Lots of text but few speakers found: show what the lines look like.
+      const lines = html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<\/(p|div)>/gi, '\n').replace(/<[^>]+>/g, ' ').split('\n').map((x) => x.replace(/\s+/g, ' ').trim()).filter((x) => x.length > 40);
+      console.log(`    lines look like:\n${lines.slice(5, 17).map((x) => `      | ${x.slice(0, 140)}`).join('\n')}`);
+    }
     if (turns.length >= 15 && speakers.size >= 2 && words >= 2500) {
       return { show: show.collectionName, title, link, audio, turns, notes: tag('description') };
     }
@@ -79,7 +88,7 @@ const ep = await findEpisode();
 const refSpeakers = [...new Set(ep.turns.map((t) => t.speaker))];
 console.log(`\n${ep.show}: ${ep.title}\n${SRC.kind}; transcript: ${ep.turns.length} turns by ${refSpeakers.length} speakers (${refSpeakers.slice(0, 12).join(', ')})`);
 console.log(`sample: ${ep.turns.slice(0, 3).map((t) => `${t.speaker}: ${t.text.slice(0, 90)}`).join(' | ')}`);
-execSync(`curl -sSL --fail -A "Mozilla/5.0" -o ep.mp3 "${ep.audio}"`);
+execSync(`curl -sSL --fail -A "${UA['user-agent']}" -H "Accept: audio/*,*/*" -o ep.mp3 "${ep.audio}"`);
 const raw = execSync(`ffmpeg -loglevel error -t ${MINUTES * 60} -i ep.mp3 -ac 1 -ar 16000 -f f32le -`, { maxBuffer: 1 << 30 });
 const audio = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
 const terms = extractTerms(ep.notes, ep.title, ep.show);
