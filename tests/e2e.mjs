@@ -161,6 +161,9 @@ const CASES = [
   // leak check is "Memory over a long run"; this ceiling only catches a jump.
   { name: 'Norwegian, tiny on iPhone (WebKit)', engine: 'webkit', model: 'tiny', url: nrk.url, lang: 'norwegian', segments: 3, memoryLimitMB: 2600, title: nrk.title },
   { name: 'Apple, Danish (Omny)', url: omny.url, lang: 'danish', segments: 3, title: omny.title },
+  // Norwegian set to English: the language check (Whisper Tiny, computers only) marks the windows
+  // instead of letting the English model turn them into English-sounding nonsense.
+  { name: 'Language check: Norwegian episode set to English', url: nrk.url, lang: 'english', segments: 3, title: nrk.title, foreign: 'Norwegian', skipLanguageCheck: true },
   { name: 'Spotify episode', url: 'https://open.spotify.com/episode/2ebY3WNejLNbK47emgjd1E', lang: 'english', resolveOnly: true, titleIncludes: 'Alcohol' },
   { name: 'RSS feed', url: 'https://feeds.megaphone.fm/hubermanlab', lang: 'english', expectList: true },
   ...LINKS,
@@ -297,6 +300,11 @@ for (const c of CASES) {
       const score = languageScore(text, c.lang);
       console.log(`  ${c.lang} common-word share: ${(score * 100).toFixed(0)}% of ${text.split(/\s+/).length} words`);
       if (score < 0.12 && !c.skipLanguageCheck) { result = `transcript does not look ${c.lang} (${(score * 100).toFixed(0)}% common words)`; break; }
+      if (c.foreign) {
+        const marked = s.parts.filter((x) => x.text.trim() === `[Speech in ${c.foreign}]`).length;
+        console.log(`  windows marked as ${c.foreign}: ${marked} of ${s.segments.length}`);
+        if (marked < s.segments.length - 1) { result = `only ${marked} of ${s.segments.length} windows marked as ${c.foreign}`; break; }
+      }
       if (c.gpu) {
         const device = await page.evaluate(() => ({ detail: document.querySelector('#detail').textContent, gpu: document.body.dataset.gpu }));
         console.log(`  device: ${JSON.stringify(device)}`);
