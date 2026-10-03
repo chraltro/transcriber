@@ -1,0 +1,25 @@
+name: Speaker bench
+# Who said what, scored against podcasts' own published transcripts (tests/speaker-bench.mjs).
+on:
+  push:
+    branches: ['claude/**']
+    paths: ['tests/speaker-bench.mjs', 'tests/transcripts.mjs', '.github/workflows/speaker-bench.yml', 'lib/speakers.js', 'lib/diarize.js']
+  workflow_dispatch:
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [freshair, upfirst, planetmoney, freakonomics, lex, dwarkesh, cwt, 80k]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sudo apt-get install -y ffmpeg >/dev/null
+      - run: npm i --no-save @huggingface/transformers@4.3.0
+      - run: node tests/speaker-bench.mjs
+        env:
+          SOURCE: ${{ matrix.source }}
