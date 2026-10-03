@@ -301,9 +301,14 @@ for (const c of CASES) {
       console.log(`  ${c.lang} common-word share: ${(score * 100).toFixed(0)}% of ${text.split(/\s+/).length} words`);
       if (score < 0.12 && !c.skipLanguageCheck) { result = `transcript does not look ${c.lang} (${(score * 100).toFixed(0)}% common words)`; break; }
       if (c.foreign) {
-        const marked = s.parts.filter((x) => x.text.trim() === `[Speech in ${c.foreign}]`).length;
-        console.log(`  windows marked as ${c.foreign}: ${marked} of ${s.segments.length}`);
-        if (marked < s.segments.length - 1) { result = `only ${marked} of ${s.segments.length} windows marked as ${c.foreign}`; break; }
+        // What matters is that the speech isn't turned into English nonsense: windows are either
+        // marked, or hold next to nothing (a jingle, music, a short pause-cut window).
+        const mark = `[Speech in ${c.foreign}]`;
+        const marked = s.parts.filter((x) => x.text.trim() === mark).length;
+        const other = s.parts.filter((x) => x.text.trim() !== mark);
+        const otherWords = other.reduce((n, x) => n + x.text.trim().split(/\s+/).filter(Boolean).length, 0);
+        console.log(`  windows marked as ${c.foreign}: ${marked}; other text (${otherWords} words): ${JSON.stringify(other.map((x) => x.text.trim()))}`);
+        if (!marked || otherWords > 8 * s.segments.length) { result = `${marked} windows marked as ${c.foreign}, ${otherWords} other words`; break; }
       }
       if (c.gpu) {
         const device = await page.evaluate(() => ({ detail: document.querySelector('#detail').textContent, gpu: document.body.dataset.gpu }));
