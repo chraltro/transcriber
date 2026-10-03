@@ -289,3 +289,20 @@ test('voices heard only in passing become "other voices", named ones never do', 
   // Too little talk yet to tell a minor voice from a host who hasn't spoken much.
   assert.equal(minorVoices(segs.map((x) => ({ ...x, end: x.start + 5 }))).size, 0);
 });
+
+test('a window with no text labels nothing and does not throw', () => {
+  assert.deepEqual(labelParts([], [{ spk: 0, start: 0, end: 30 }], { 0: 1 }, 1), []);
+});
+
+test("a new guest's sentence is not pulled to a host just because the guest's voice is young", () => {
+  const v = (a, b, c) => { const x = new Float32Array(4); x[0] = a; x[1] = b; x[2] = c; return x; };
+  const voices = new Voices();
+  voices.match(v(1, 0, 0), 60); // 0: host A
+  voices.match(v(0, 1, 0), 60); // 1: host B
+  voices.match(v(0.2, 0.1, 1), 8); // 2: a guest heard for 8 s so far
+  const parts = [{ start: 0, end: 4, text: 'Social Security was never meant to cover everything.' }];
+  const turns = [{ spk: 0, start: 0, end: 4 }];
+  // The print leans a little to host A, but is closer still to the guest the turns say.
+  const out = labelParts(parts, turns, { 0: 2 }, 2, { voices, spanPrints: [v(0.5, 0.1, 0.9)] });
+  assert.equal(out[0].speaker, 2);
+});

@@ -128,8 +128,8 @@ await new Promise((resolve, reject) => {
 console.log(`${MODEL}: ${((audio.length / 16000) / ((Date.now() - t0) / 1000)).toFixed(1)}x realtime, ${windows.length} windows`);
 
 // Every labelling method, replayed on the same speaker-model output.
-function replay({ minPrint, short, smooth, retime, own, replies }) {
-  const voices = new Voices();
+function replay({ minPrint, short, smooth, retime, own, replies, threshold = 0.5, cap = 30 }) {
+  const voices = new Voices([], { threshold, cap });
   let last = null;
   const out = [];
   for (const w of windows) {
@@ -151,6 +151,10 @@ const METHODS = [
   ['before speaker work', { minPrint: 1.2 }],
   ['sentence prints', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true }],
   ['the app now', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true, replies: true }],
+  ['now, match at 0.6', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true, replies: true, threshold: 0.6 }],
+  ['now, match at 0.65', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true, replies: true, threshold: 0.65 }],
+  ['now, less drift', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true, replies: true, cap: 300 }],
+  ['now, 0.6 + less drift', { minPrint: 0.4, short: true, smooth: true, retime: true, own: true, replies: true, threshold: 0.6, cap: 300 }],
 ];
 
 /* ---------- scoring ---------- */
