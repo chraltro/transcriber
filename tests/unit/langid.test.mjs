@@ -36,3 +36,7 @@ test("Tiny's split between neighbours still counts: Norwegian heard as half Swed
   assert.equal(foreignLanguage({ en: 0.75, es: 0.05 }, 'english'), null); // the least English an English window got
   assert.equal(foreignLanguage({ da: 0.44, de: 0.38, en: 0.04, sv: 0.1 }, 'english').code, 'da');
 });
+
+test('a Danish window heard as German stays Danish', () => {
+  assert.equal(foreignLanguage({ de: 0.86, da: 0.06, en: 0.02 }, 'danish'), null);
+});
