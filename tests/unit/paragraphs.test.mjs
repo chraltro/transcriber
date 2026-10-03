@@ -66,3 +66,16 @@ test('timed parts: one paragraph per window unless the voice changes', () => {
   assert.deepEqual(p.map((x) => [x.speaker, x.segs.length]), [[0, 2], [1, 2], [1, 1]]);
   assert.equal(plainText(parts.slice(0, 3), { names: { 0: 'Derek' } }), 'Derek: Welcome to the show. Today we talk bridges.\n\nSpeaker 2: Thanks for having me.');
 });
+
+test('Markdown export: title, show, link, bold speakers with times, escaped text', async () => {
+  const { markdown } = await import('../../lib/paragraphs.js');
+  const segs = [
+    { start: 0, end: 5, w: 0, speaker: 0, text: 'Welcome to *the* show.' },
+    { start: 5, end: 9, w: 0, speaker: 0, text: 'Today: bridges.' },
+    { start: 65, end: 70, w: 60, speaker: 1, text: '# Not a heading, just a hash.' },
+  ];
+  const md = markdown(segs, { title: 'Bridges', show: 'Plain English', url: 'https://example.com/ep', names: { 0: 'Derek Thompson' } });
+  assert.match(md, /^# Bridges\n\n\*Plain English\*\n\n<https:\/\/example\.com\/ep>\n\n/);
+  assert.match(md, /\*\*Derek Thompson\*\* `0:00` Welcome to \\\*the\\\* show\. Today: bridges\./);
+  assert.match(md, /\*\*Speaker 2\*\* `1:05` \\# Not a heading/);
+});

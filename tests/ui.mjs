@@ -123,6 +123,14 @@ async function run(name, contextOptions, audio) {
   const renamed = await page.evaluate(() => [...document.querySelectorAll('#transcript .who')].filter((c) => c.textContent === 'Anna B.').length);
   check(renamed > 1, `renaming a speaker renames every paragraph (${renamed})`);
 
+  // Export as Markdown.
+  if (!mobile) {
+    await page.click('#export');
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#download-md')]);
+    const md = await readFile(await dl.path(), 'utf8');
+    check(dl.suggestedFilename().endsWith('.md') && /^# /.test(md) && /\*\*Anna B\.\*\* `\d+:\d\d`/.test(md), `Markdown export has a title and bold, timed speakers (${dl.suggestedFilename()})`);
+  }
+
   // Names spelled two ways.
   await page.click('#names-btn');
   const names = await page.locator('#names-list li').first().textContent();

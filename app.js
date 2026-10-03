@@ -4,7 +4,7 @@ import { AUDIO_EXT, audioCandidates, parseFeed, looksLikeFeed, findAudioInHtml, 
 import { fmtTime, normTitle, bestTitleMatch, sameShow } from './lib/text.js';
 import { indexWav, wavPiece } from './lib/wav.js';
 import { toSrt, toVtt } from './lib/subtitles.js';
-import { tidy, plainText, wordCount, startsParagraph } from './lib/paragraphs.js';
+import { tidy, plainText, wordCount, startsParagraph, markdown } from './lib/paragraphs.js';
 import { guessNames, speakerName, labelParts, hostFromShow, Voices, minorVoices, OTHER } from './lib/speakers.js';
 import { nameGroups, glossaryFor } from './lib/names.js';
 import { isAd } from './lib/ads.js';
@@ -35,7 +35,7 @@ const els = {
   resumeCard: $('#resume-card'), resumeArt: $('#resume-art'), resumeText: $('#resume-text'), resumeWhy: $('#resume-why'), resumeMeter: $('#resume-meter'),
   resultCard: $('#result-card'), transcript: $('#transcript'), tail: $('#tail'), tailText: $('#tail-text'), readerFoot: $('#reader-foot'),
   search: $('#search'), findWrap: $('#search').closest('.find'), findCount: $('#find-count'), findPrev: $('#find-prev'), findNext: $('#find-next'),
-  copy: $('#copy'), exportMenu: $('#export-menu'), exportBtn: $('#export'), download: $('#download'), downloadSrt: $('#download-srt'), downloadVtt: $('#download-vtt'), share: $('#share'),
+  copy: $('#copy'), exportMenu: $('#export-menu'), exportBtn: $('#export'), download: $('#download'), downloadSrt: $('#download-srt'), downloadMd: $('#download-md'), downloadVtt: $('#download-vtt'), share: $('#share'),
   timestamps: $('#timestamps'),
   library: $('#library'), libraryList: $('#library-list'),
   jump: $('#jump-live'), dock: $('#dock'), dockPlay: $('#dock-play'), dockCopy: $('#dock-copy'), dockSave: $('#dock-save'),
@@ -1575,6 +1575,8 @@ function addSegment(seg, { fresh = true, into = null } = {}) {
   if (seg.speaker != null) span.dataset.speaker = seg.speaker;
   if (seg.draft) span.classList.add('draft');
   if (fresh) span.classList.add('fresh');
+  // A window in another language than the episode's, which an English-only model can't write.
+  if (/^\[Speech in [^\]]+\]$/.test(seg.text.trim())) span.classList.add('foreign');
 
   if (prev && state.lastPara && !startsParagraph(prev, stored, state.lastPara.words)) {
     state.segEls[state.segEls.length - 1].textContent = tidy(prev.text, seg.text);
@@ -1763,6 +1765,7 @@ function saveFile(content, ext, type) {
 }
 
 const downloadTranscript = () => saveFile(textFile(), 'txt', 'text/plain');
+const downloadMd = () => saveFile(markdown(state.segments, { title: state.source?.title, show: state.source?.show, url: state.source?.url, names: names() }), 'md', 'text/markdown');
 const downloadSrt = () => saveFile(toSrt(state.segments, names()), 'srt', 'application/x-subrip');
 const downloadVtt = () => saveFile(toVtt(state.segments, names()), 'vtt', 'text/vtt');
 
@@ -2824,7 +2827,7 @@ function wireEvents() {
     const open = els.exportMenu.classList.toggle('open');
     els.exportBtn.setAttribute('aria-expanded', String(open));
   });
-  for (const [btn, fn] of [[els.download, downloadTranscript], [els.downloadSrt, downloadSrt], [els.downloadVtt, downloadVtt], [els.share, shareTranscript]]) {
+  for (const [btn, fn] of [[els.download, downloadTranscript], [els.downloadMd, downloadMd], [els.downloadSrt, downloadSrt], [els.downloadVtt, downloadVtt], [els.share, shareTranscript]]) {
     btn.addEventListener('click', () => { closeMenus(); fn(); });
   }
   document.addEventListener('click', (e) => { if (!els.exportMenu.contains(e.target)) closeMenus(); });
