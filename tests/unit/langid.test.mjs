@@ -20,3 +20,10 @@ test("both written forms of Norwegian are the episode's own language", () => {
   assert.equal(foreignLanguage({ en: 0.95, no: 0.03 }, 'norwegian').code, 'en');
   assert.equal(languageName('da'), 'Danish');
 });
+
+test('close neighbours are never foreign: a Norwegian window heard as Danish stays Norwegian', () => {
+  assert.equal(foreignLanguage({ da: 0.9, no: 0.04, en: 0.01 }, 'norwegian'), null);
+  assert.equal(foreignLanguage({ no: 0.9, da: 0.04 }, 'danish'), null);
+  // But English in a Norwegian show is.
+  assert.equal(foreignLanguage({ en: 0.92, no: 0.04 }, 'norwegian').code, 'en');
+});

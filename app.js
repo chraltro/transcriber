@@ -1479,6 +1479,9 @@ async function transcribeAudio(blob, fromSec = 0, { modelKey = selectedModel(), 
       previous: state.segments.filter((x) => x.start < fromSec && x.text).slice(-4).map((x) => x.text).join(' '),
       speakers: pass === 'speakers' || speakersInline(),
       diarizeOnly: pass === 'speakers',
+      // Computers check which language each window is in (a second small model; phones have no
+      // memory to spare): English-only models mark another language, multilingual ones switch to it.
+      detectLanguage: pass === 'speakers' || IS_MOBILE ? false : /\.en$/.test(model.id) ? 'mark' : 'transcribe',
       // The sentences already transcribed, so the speaker pass can take a voice print of each.
       ...(pass === 'speakers' ? { spans: state.segments.filter((x) => x.end > fromSec).map((x) => [x.start, x.end]) } : {}),
       voices: state.voices,

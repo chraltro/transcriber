@@ -129,3 +129,46 @@ test('speaker-only pass: windows cut as when transcribing, turns in episode time
   assert.deepEqual(segs[0].speakers.local, { 0: 0 });
   assert.ok(msgs.some((m) => m.type === 'done'));
 });
+
+test('a window in another language is marked (English-only model) or transcribed in its language', async () => {
+  for (const mode of ['mark', 'transcribe']) {
+    const posted = [];
+    const calls = [];
+    let n = 0;
+    const s = new StreamingTranscriber({
+      post: (m) => posted.push(m),
+      transcribe: async (samples, language, { previous }) => { calls.push({ language, previous }); return `words in ${language}`; },
+      // The second window is Norwegian.
+      detect: async () => (n++ === 1 ? { no: 0.94, en: 0.01, da: 0.05 } : { en: 0.97, de: 0.03 }),
+      now: () => 0,
+    });
+    s.start(1, { language: 'english', detectLanguage: mode });
+    await s.ready(1);
+    for (let k = 0; k < 3; k++) await s.push(1, speech(30));
+    await s.push(1, new Float32Array(0), true);
+    const texts = posted.filter((m) => m.type === 'segment').map((m) => m.text);
+    if (mode === 'mark') {
+      assert.equal(texts[1], '[Speech in Norwegian]');
+      assert.ok(!calls.some((c) => c.language !== 'english'));
+    } else {
+      assert.equal(texts[1], 'words in no');
+      assert.equal(calls[1].previous, ''); // no English context for the Norwegian window
+      assert.equal(calls[2].previous, 'words in english'); // and no Norwegian context after it
+    }
+    assert.equal(texts[0], 'words in english');
+  }
+});
+
+test('without a language check, or when it fails, windows transcribe as before', async () => {
+  const posted = [];
+  const s = new StreamingTranscriber({
+    post: (m) => posted.push(m),
+    transcribe: async (samples, language) => `words in ${language}`,
+    detect: async () => { throw new Error('model missing'); },
+    now: () => 0,
+  });
+  s.start(1, { language: 'english', detectLanguage: 'mark' });
+  await s.ready(1);
+  await s.push(1, speech(30), true);
+  assert.equal(posted.find((m) => m.type === 'segment').text, 'words in english');
+});

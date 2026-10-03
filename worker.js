@@ -5,6 +5,7 @@ import { StreamingTranscriber } from './lib/stream.js';
 import { transcribeWindow } from './lib/prompted.js';
 import { buildPrompt } from './lib/context.js';
 import { createDiarizer } from './lib/diarize.js';
+import { detectLanguage } from './lib/langid.js';
 
 const { pipeline, env } = tf;
 
@@ -48,9 +49,27 @@ async function loadDiarizer(id) {
   return !!diarizer;
 }
 
+// Whisper Tiny (multilingual, 41 MB), only to tell which language each window is in: a cheap
+// check next to any main model, loaded when the page asks for language checks.
+let checker = null;
+async function loadChecker(id) {
+  if (checker) return true;
+  try {
+    post({ type: 'status', id, text: 'Loading language check' });
+    checker = await pipeline('automatic-speech-recognition', 'onnx-community/whisper-tiny', {
+      device: 'wasm', dtype: 'q8', progress_callback: (p) => post({ type: 'model-progress', id, ...p }),
+    });
+    return true;
+  } catch (err) {
+    console.warn('Language check failed to load; carrying on without it', err);
+    return false;
+  }
+}
+
 const stream = new StreamingTranscriber({
   post,
   diarize: (samples, opts) => diarizer(samples, opts),
+  detect: (samples) => detectLanguage(checker, samples, tf.Tensor),
   transcribe: (samples, language, { previous } = {}) =>
     transcribeWindow(asr, samples, { language, prompt: buildPrompt(terms, previous), state: promptState }),
 });
@@ -110,6 +129,7 @@ self.onmessage = async ({ data }) => {
       await load(data.model, data.device, data.hasF16, data.dtype, data.sessionOptions);
       if (stream.job?.id !== id) return;
       if (data.speakers && !(await loadDiarizer(id))) stream.job && (stream.job.speakers = false);
+      if (data.detectLanguage && !(await loadChecker(id))) stream.job && (stream.job.detectLanguage = false);
       if (stream.job?.id !== id) return;
       post({ type: 'ready', id, device: data.device });
       await stream.ready(id);
