@@ -13,7 +13,10 @@ jobs:
       fail-fast: false
       matrix:
         source: [freshair, upfirst, planetmoney, freakonomics, lex, cwt, 80k]
-        voice: ['', Xenova/wavlm-base-plus-sv, Xenova/unispeech-sat-base-plus-sv, onnx-community/wespeaker-voxceleb-resnet293-LM]
+        # Other voice-print models are compared by adding them here (VOICE_MODEL). Tried: WavLM
+        # base-plus-sv separated people worse on 6 of 7 shows (AUC 66-95% vs 68-99%); UniSpeech-SAT
+        # isn't supported by transformers.js 4.3; WeSpeaker ResNet293 is gated on Hugging Face.
+        voice: ['']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
