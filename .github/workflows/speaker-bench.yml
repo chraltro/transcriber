@@ -13,6 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         source: [freshair, upfirst, planetmoney, freakonomics, lex, cwt, 80k]
+        voice: ['', Xenova/wavlm-base-plus-sv, Xenova/unispeech-sat-base-plus-sv, onnx-community/wespeaker-voxceleb-resnet293-LM]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -23,3 +24,4 @@ jobs:
       - run: node tests/speaker-bench.mjs
         env:
           SOURCE: ${{ matrix.source }}
+          VOICE_MODEL: ${{ matrix.voice }}

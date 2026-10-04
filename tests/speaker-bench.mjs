@@ -94,7 +94,8 @@ const audio = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
 const terms = extractTerms(ep.notes, ep.title, ep.show);
 
 const asr = await tf.pipeline('automatic-speech-recognition', MODEL, { dtype: dtypeFor(MODEL, 'wasm') });
-const diarizer = await createDiarizer(tf);
+const VOICE = process.env.VOICE_MODEL || undefined;
+const diarizer = await createDiarizer(tf, { voiceModel: VOICE });
 let lastDiarized = null;
 const diarize = async (samples, opts) => {
   const plain = await diarizer(samples);
@@ -329,6 +330,38 @@ function score(parts) {
   const split = {};
   for (const [v, s] of Object.entries(map)) split[s] = (split[s] || 0) + 1;
   return { right, n, eRight, eN, matched: pairs.length / Math.max(1, hyp.length), voices: Object.keys(map).length, split, overlap };
+}
+
+// How well the voice model tells people apart, whatever thresholds the app uses: every sentence
+// with a print of its own gets the transcript speaker most of its words align to, and all pairs
+// of sentence prints are compared. AUC: the chance a same-person pair is more alike than a
+// different-person pair. EER: the error rate where false matches equal false splits.
+{
+  const sentences = [];
+  const parts = [];
+  for (const w of windows) w.parts.forEach((p, j) => {
+    const print = w.spanPrints?.[j];
+    parts.push({ text: p.text, speaker: print ? sentences.length : null });
+    if (print) sentences.push({ print: unit(print), votes: {} });
+  });
+  const hyp = hypWordsOf(parts);
+  const { pairs, r } = align(hyp, ref);
+  for (const [h, x] of pairs) if (hyp[h].speaker != null) { const v = sentences[hyp[h].speaker].votes; v[r[x].speaker] = (v[r[x].speaker] || 0) + 1; }
+  const known = sentences.map((s) => ({ ...s, who: Object.entries(s.votes).sort((a, b) => b[1] - a[1])[0]?.[0] })).filter((s) => s.who);
+  const same = []; const diff = [];
+  for (let i = 0; i < known.length; i++) for (let j = i + 1; j < known.length; j++) (known[i].who === known[j].who ? same : diff).push(cosine(known[i].print, known[j].print));
+  same.sort((a, b) => a - b); diff.sort((a, b) => a - b);
+  let k = 0; let auc = 0;
+  for (const x of same) { while (k < diff.length && diff[k] < x) k++; auc += k; }
+  auc /= Math.max(1, same.length * diff.length);
+  let eer = 1; let at = 0;
+  for (let t = -1; t <= 1; t += 0.005) {
+    const miss = same.filter((x) => x < t).length / Math.max(1, same.length);
+    const fa = diff.filter((x) => x >= t).length / Math.max(1, diff.length);
+    if (Math.max(miss, fa) < eer) { eer = Math.max(miss, fa); at = t; }
+  }
+  const mean = (a) => a.reduce((x, y) => x + y, 0) / Math.max(1, a.length);
+  console.log(`SEPARATION ${KEY} | ${VOICE || 'default'} | AUC ${(100 * auc).toFixed(1)}% | EER ${(100 * eer).toFixed(1)}% at ${at.toFixed(2)} | same-person mean ${mean(same).toFixed(2)}, different ${mean(diff).toFixed(2)} | ${known.length} sentences, ${new Set(known.map((s) => s.who)).size} people`);
 }
 
 console.log(`\ntranscript speakers in the first ${MINUTES} min: ${[...new Set(ref.slice(0, 6000).map((x) => x.speaker))].length}`);
