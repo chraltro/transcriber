@@ -138,11 +138,16 @@ async function work() {
       try {
         const m = await loadModels();
         let lastWrite = 0;
+        let lastLog = Date.now();
         const entry = await transcribeEpisode(ep, m, {
           tmpFile: path.join(DATA, 'episode.audio'),
           onProgress: ({ position, elapsed }) => {
             Object.assign(current, { position, elapsed });
             if (Date.now() - lastWrite > 15000) { lastWrite = Date.now(); writeStatus(); }
+            if (Date.now() - lastLog > 300000) {
+              lastLog = Date.now();
+              log(`  at ${Math.round(position / 60)} of ${Math.round((ep.duration || 0) / 60)} min, ${(position / Math.max(1, elapsed)).toFixed(2)}x realtime, ${Math.round(process.memoryUsage().rss / 2 ** 20)} MB`);
+            }
           },
         });
         // The copy that was transcribed plays back in sync (a fresh download can carry other ads).
