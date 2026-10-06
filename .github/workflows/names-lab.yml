@@ -1,0 +1,16 @@
+name: Names lab
+# The name guessing on every transcript transcriber.demant.app has (tests/names-lab.mjs).
+on:
+  push:
+    branches: ['claude/**']
+    paths: ['tests/names-lab.mjs', '.github/workflows/names-lab.yml', 'lib/speakers.js', 'lib/context.js']
+  workflow_dispatch:
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node tests/names-lab.mjs
