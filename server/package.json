@@ -1,0 +1,9 @@
+{
+  "name": "transcriber-server",
+  "private": true,
+  "type": "module",
+  "description": "Serves the app and transcribes new episodes of followed shows (see main.mjs).",
+  "dependencies": {
+    "@huggingface/transformers": "4.3.0"
+  }
+}

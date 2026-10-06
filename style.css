@@ -761,6 +761,8 @@ body.busy #detail { color: var(--accent); }
 /* ---------- library, as a table ---------- */
 
 .library { padding: 0; }
+#shelf + #library { margin-top: 16px; }
+.shelf-now { margin: 0 22px 12px; font: 12px var(--font-mono); color: var(--muted); }
 .library-head { padding: 20px 22px 12px; }
 .lib-head { grid-template-columns: 40px minmax(0, 1fr) 88px 88px 34px; }
 .library-list { list-style: none; margin: 0; padding: 0; }

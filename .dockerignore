@@ -1,0 +1,9 @@
+.git
+.github
+node_modules
+server/node_modules
+tests
+tests-local
+ui-shots
+*.md
+!server/*.md

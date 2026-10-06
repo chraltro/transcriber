@@ -37,7 +37,7 @@ const els = {
   search: $('#search'), findWrap: $('#search').closest('.find'), findCount: $('#find-count'), findPrev: $('#find-prev'), findNext: $('#find-next'),
   copy: $('#copy'), exportMenu: $('#export-menu'), exportBtn: $('#export'), download: $('#download'), downloadSrt: $('#download-srt'), downloadMd: $('#download-md'), downloadVtt: $('#download-vtt'), share: $('#share'),
   timestamps: $('#timestamps'),
-  library: $('#library'), libraryList: $('#library-list'),
+  library: $('#library'), libraryList: $('#library-list'), shelf: $('#shelf'), shelfList: $('#shelf-list'), shelfNow: $('#shelf-now'),
   jump: $('#jump-live'), dock: $('#dock'), dockPlay: $('#dock-play'), dockCopy: $('#dock-copy'), dockSave: $('#dock-save'),
   topContext: $('#top-context'), topCrumb: $('#top-crumb'), topStatus: $('#top-status'), topDate: $('#top-date'), spineFoot: $('#spine-foot'),
   mapCard: $('#map-card'), mapGrid: $('#map-grid'), mapSel: $('#map-sel'), mapScope: $('#map-scope'), mapSummary: $('#map-summary'), mapKicker: $('#map-kicker'),
@@ -1809,6 +1809,8 @@ async function ensureAudio() {
   else {
     const blob = state.audioKey ? await cachedAudio(state.audioKey) : null;
     if (blob) src = URL.createObjectURL(blob);
+    // The server's copy of an episode it transcribed, else the original link.
+    else if (state.source?.audio) src = state.source.audio;
     else if (state.source?.url) src = state.source.url;
   }
   if (!src) return false;
@@ -1970,8 +1972,13 @@ function updateLayout() {
   document.body.classList.toggle('reading', reading);
   els.dock.classList.toggle('hidden', !reading);
   els.readerFoot.classList.toggle('hidden', state.busy || !reading || !els.resumeCard.classList.contains('hidden'));
-  if (session) els.library.classList.add('hidden');
-  else renderLibrary();
+  if (session) {
+    els.library.classList.add('hidden');
+    els.shelf.classList.add('hidden');
+  } else {
+    renderLibrary();
+    renderShelf();
+  }
   updateSettingsSummary();
 }
 
@@ -2069,11 +2076,64 @@ async function renderLibrary() {
   }));
 }
 
+// Transcripts the server makes of followed shows as they come out (server/main.mjs). Served
+// next to the app as library/index.json; elsewhere (GitHub Pages) there is none and this stays
+// hidden.
+let shelfVersion = 0;
+async function renderShelf() {
+  const v = ++shelfVersion;
+  let index;
+  let status = null;
+  try {
+    const res = await fetch('library/index.json', { cache: 'no-cache' });
+    index = res.ok && /json/.test(res.headers.get('content-type') || '') ? await res.json() : null;
+    // A copy of the app without the server (GitHub Pages) has an empty static index.
+    if (index && !index.static) status = await fetch('library/status.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  } catch {
+    index = null;
+  }
+  if (v !== shelfVersion || document.body.classList.contains('has-session')) return;
+  const entries = index?.entries || [];
+  els.shelf.classList.toggle('hidden', !index || (!entries.length && !status?.current));
+  const now = status?.current;
+  els.shelfNow.classList.toggle('hidden', !now);
+  if (now) {
+    const pct = now.total ? ` · ${Math.min(99, Math.round((100 * now.position) / now.total))}%` : '';
+    const waiting = status.queue?.length > 1 ? ` · ${status.queue.length - 1} more waiting` : '';
+    els.shelfNow.textContent = `Transcribing now: ${now.show}: ${now.title}${pct}${waiting}`;
+  }
+  els.shelfList.replaceChildren(...entries.slice(0, 60).map((e, i) => {
+    const li = el('li');
+    li.style.setProperty('--i', String(i));
+    const card = el('div', 'entry');
+    const art = el('div', 'art');
+    const text = el('div', 'entry-text');
+    text.append(el('span', 'entry-title', e.title));
+    text.append(el('span', 'entry-meta', [relativeDay(e.createdAt), e.show].filter(Boolean).join(' · ')));
+    const open = el('button', 'entry-open');
+    open.type = 'button';
+    open.setAttribute('aria-label', `Open the transcript of ${e.title}`);
+    open.addEventListener('click', async () => {
+      try {
+        const res = await fetch(`library/${encodeURIComponent(e.id)}.json`, { cache: 'no-cache' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await openEntry(await res.json());
+      } catch {
+        toast("Couldn't open this transcript. Try again in a moment.");
+      }
+    });
+    card.append(art, text, el('span', 'entry-num', fmtTime(e.total || 0)), el('span', 'entry-num', fmtNum(e.words)), open);
+    li.append(card);
+    requestAnimationFrame(() => artInto(art, e));
+    return li;
+  }));
+}
+
 async function openEntry(entry) {
   if (state.busy) return;
   clearError();
   releaseAudio();
-  state.source = { title: entry.title, show: entry.show, art: entry.art, url: entry.source?.url, fileId: entry.source?.fileId, key: entry.key, notes: entry.notes || '' };
+  state.source = { title: entry.title, show: entry.show, art: entry.art, url: entry.source?.url, fileId: entry.source?.fileId, key: entry.key, notes: entry.notes || '', audio: entry.audio || '' };
   state.vocab = vocabulary(state.source);
   state.entryId = entry.id;
   state.lang = entry.lang;
