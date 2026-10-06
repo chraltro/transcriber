@@ -1,0 +1,46 @@
+name: Transcribe shows
+# New episodes of the followed shows (server/shows.mjs), transcribed here with Large v3 Turbo
+# and uploaded to transcriber.demant.app, which only stores and serves them (server/ci.mjs).
+on:
+  schedule:
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Only list what would be transcribed'
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: ['server/**', '.github/workflows/shows.yml']
+concurrency:
+  group: shows
+  cancel-in-progress: false
+permissions:
+  contents: read
+  actions: write
+  id-token: write # uploads prove they come from this workflow (server/oidc.mjs)
+jobs:
+  transcribe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      # Scheduled workflows stop after 60 days without activity in the repository; this keeps it on.
+      - run: gh api -X PUT repos/${{ github.repository }}/actions/workflows/shows.yml/enable || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sudo apt-get install -y ffmpeg >/dev/null
+      - run: cd server && npm install --omit=dev --no-audit --no-fund
+      - uses: actions/cache@v4
+        with:
+          path: ~/models
+          key: models-${{ hashFiles('server/package.json', 'lib/models.js', 'lib/diarize.js') }}
+          restore-keys: models-
+      - run: node server/ci.mjs
+        env:
+          MODEL_CACHE: /home/runner/models
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}

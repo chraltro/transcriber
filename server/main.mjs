@@ -1,19 +1,21 @@
-// transcriber.demant.app: serves the app, and transcribes every new episode of a few shows as
-// it comes out, with the same code the app runs in the browser (here on the server's CPUs).
-// Transcripts land in DATA_DIR/library as the app's own library entries; the app lists them.
+// transcriber.demant.app: serves the app and the transcripts of followed shows (DATA_DIR/library,
+// in the shape of the app's own library entries; the app lists them under Shows).
+// The transcribing itself runs on GitHub's runners (server/ci.mjs, .github/workflows/shows.yml),
+// which upload here with GitHub's OIDC token (server/oidc.mjs): this server is small and shared. With TRANSCRIBE=1 it
+// can still do the work itself (main.mjs's own feed checks and queue).
 import http from 'node:http';
 import os from 'node:os';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, writeFile, rename, stat, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
+import { pipeline as pipe } from 'node:stream/promises';
 import { findFeed, readFeed } from './feeds.mjs';
 import { transcribeEpisode } from './transcribe.mjs';
 import { MODELS, dtypeFor } from '../lib/models.js';
-import { markdown } from '../lib/paragraphs.js';
-import { guessNames, hostFromShow, minorVoices, OTHER } from '../lib/speakers.js';
-import { extractTerms } from '../lib/context.js';
+import { SHOWS, idOf, metaOf, markdownOf } from './shows.mjs';
+import { verifyGithubToken } from './oidc.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = process.env.DATA_DIR || '/data';
@@ -27,16 +29,8 @@ const BACKFILL = Number(process.env.BACKFILL ?? 1); // episodes per show already
 const THREADS = Number(process.env.THREADS || 2);
 const AUDIO_DAYS = Number(process.env.AUDIO_DAYS || 60); // the server's copy of each episode, for playback in sync
 
-export const SHOWS = [
-  { name: 'Pod Save America', appleId: 1192761536 },
-  { name: 'Pod Save the World', appleId: 1200016351 },
-  { name: 'The Ezra Klein Show', appleId: 1548604447 },
-  { name: 'Making Sense with Sam Harris', appleId: 733163012 },
-  { name: 'Plain English with Derek Thompson', appleId: 1594471023 },
-];
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
-const idOf = (guid) => createHash('sha1').update(guid).digest('hex').slice(0, 16);
 
 async function readJson(file, fallback) {
   try { return JSON.parse(await readFile(file, 'utf8')); } catch { return fallback; }
@@ -62,7 +56,7 @@ async function readIndex() {
 
 async function addToIndex(entry) {
   const index = await readIndex();
-  const meta = (({ id, title, show, art, lang, model, total, words, createdAt, transcribedAt, audio }) => ({ id, title, show, art, lang, model, total, words, createdAt, transcribedAt, audio }))(entry);
+  const meta = metaOf(entry);
   index.entries = [meta, ...index.entries.filter((e) => e.id !== entry.id)].sort((a, b) => b.createdAt - a.createdAt);
   await writeJson(path.join(LIB, 'index.json'), index);
 }
@@ -196,13 +190,6 @@ async function pruneAudio() {
   if (changed) await writeJson(path.join(LIB, 'index.json'), index);
 }
 
-function markdownOf(entry) {
-  const terms = extractTerms(entry.notes || '', entry.title || '', entry.show || '');
-  const guessed = guessNames(entry.segments, terms, { host: hostFromShow(entry.show) });
-  const minor = minorVoices(entry.segments, guessed);
-  const names = { ...Object.fromEntries([...minor].map((k) => [k, 'Other voice'])), [OTHER]: 'Other voices', ...guessed };
-  return markdown(entry.segments, { title: entry.title, show: entry.show, url: entry.source?.url, names });
-}
 
 /* ---------- web ---------- */
 
@@ -246,6 +233,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const p = decodeURIComponent(url.pathname);
   if (p === '/healthz') { res.writeHead(200); res.end('ok'); return; }
+  if (p.startsWith('/api/library/')) { await upload(req, res, p.slice('/api/library/'.length)); return; }
   if (p.startsWith('/library/')) {
     const name = p.slice('/library/'.length);
     if (!/^[\w-]+\.(json|md|mp3|m4a)$/.test(name)) { res.writeHead(404); res.end(); return; }
@@ -265,18 +253,60 @@ const server = http.createServer(async (req, res) => {
   res.end('Not found');
 });
 
+/* ---------- uploads from the GitHub workflow ---------- */
+
+// Only this repository's shows workflow, running on main (server/oidc.mjs).
+const AUDIENCE = process.env.UPLOAD_AUDIENCE || 'transcriber.demant.app';
+const WORKFLOW = process.env.UPLOAD_WORKFLOW || 'chraltro/transcriber/.github/workflows/shows.yml';
+async function authorized(req) {
+  try {
+    await verifyGithubToken(req.headers.authorization?.replace(/^Bearer\s+/i, ''), { audience: AUDIENCE, workflow: WORKFLOW });
+    return true;
+  } catch (err) {
+    log(`upload refused: ${err.message}`);
+    return false;
+  }
+}
+
+// PUT /api/library/<id>.mp3|m4a|md, then <id>.json (which lists it), or status.json.
+async function upload(req, res, name) {
+  const done = (code, text) => { res.writeHead(code, { 'content-type': 'text/plain' }); res.end(text); };
+  if (req.method !== 'PUT') return done(405, 'PUT only');
+  if (!(await authorized(req))) return done(401, 'Unauthorized');
+  if (!/^[0-9a-f]{16}\.(json|md|mp3|m4a)$|^status\.json$/.test(name)) return done(400, 'Bad name');
+  const file = path.join(LIB, name);
+  const tmp = `${file}.part`;
+  try {
+    await pipe(req, createWriteStream(tmp));
+    if (name.endsWith('.json')) {
+      const value = JSON.parse(await readFile(tmp, 'utf8'));
+      if (name !== 'status.json') {
+        if (!Array.isArray(value.segments) || value.id !== name.slice(0, 16)) throw new Error('Not a transcript');
+        await rename(tmp, file);
+        await addToIndex(value);
+        log(`received ${value.show}: ${value.title} (${value.words} words)`);
+        return done(200, 'ok');
+      }
+    }
+    await rename(tmp, file);
+    done(200, 'ok');
+  } catch (err) {
+    await rm(tmp, { force: true });
+    done(400, err.message);
+  }
+}
+
 /* ---------- start ---------- */
 
 await mkdir(LIB, { recursive: true });
 state = { ...state, ...(await readJson(STATE_FILE, {})) };
 current = null;
 server.listen(PORT, () => log(`serving on :${PORT}; data in ${DATA}; model ${MODEL_KEY}; checking feeds every ${POLL_MIN} min`));
-// TRANSCRIBE=0: only serve the app and the transcripts already made.
-if (process.env.TRANSCRIBE !== '0') {
+if (process.env.TRANSCRIBE === '1') {
   const tick = async () => {
     await poll();
     work();
   };
   tick();
   setInterval(tick, POLL_MIN * 60000);
-} else log('transcribing is off (TRANSCRIBE=0)');
+} else log('transcripts come from the GitHub workflow (TRANSCRIBE=1 to transcribe here)');
