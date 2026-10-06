@@ -19,10 +19,12 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = process.env.DATA_DIR || '/data';
 const LIB = path.join(DATA, 'library');
 const PORT = Number(process.env.PORT || 3000);
-const MODEL_KEY = process.env.MODEL || 'turbo';
+// The server is small and shared (2 CPUs, 4 GB, other apps): Small (English) fits in about a
+// gigabyte and keeps up with the shows; Large v3 Turbo took the whole machine down.
+const MODEL_KEY = process.env.MODEL || 'small';
 const POLL_MIN = Number(process.env.POLL_MINUTES || 30);
 const BACKFILL = Number(process.env.BACKFILL ?? 1); // episodes per show already out at first start
-const THREADS = Number(process.env.THREADS || 0) || undefined;
+const THREADS = Number(process.env.THREADS || 2);
 const AUDIO_DAYS = Number(process.env.AUDIO_DAYS || 60); // the server's copy of each episode, for playback in sync
 
 export const SHOWS = [
@@ -110,9 +112,9 @@ async function loadModels() {
   if (models) return models;
   const tf = await import('@huggingface/transformers');
   tf.env.cacheDir = path.join(DATA, 'models');
-  const m = MODELS[MODEL_KEY] || MODELS.turbo;
+  const m = MODELS[MODEL_KEY] || MODELS.small;
   const id = m.en || m.id;
-  const opts = { device: 'cpu', ...(THREADS ? { session_options: { intraOpNumThreads: THREADS } } : {}) };
+  const opts = { device: 'cpu', session_options: { intraOpNumThreads: THREADS, interOpNumThreads: 1 } };
   log(`loading ${id} (${os.cpus().length} CPUs, ${Math.round(os.totalmem() / 2 ** 30)} GB memory)`);
   const asr = await tf.pipeline('automatic-speech-recognition', id, { ...opts, dtype: dtypeFor(id, 'wasm') });
   const { createDiarizer } = await import('../lib/diarize.js');

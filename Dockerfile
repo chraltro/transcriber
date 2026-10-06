@@ -11,4 +11,5 @@ VOLUME /data
 EXPOSE 3000
 # Coolify checks /healthz with curl from inside the container.
 WORKDIR /app/server
-CMD ["node", "main.mjs"]
+# Lowest CPU priority: the other apps on the server always come first.
+CMD ["nice", "-n", "19", "node", "main.mjs"]
