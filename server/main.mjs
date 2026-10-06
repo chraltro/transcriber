@@ -1,8 +1,9 @@
 // transcriber.demant.app: serves the app and the transcripts of followed shows (DATA_DIR/library,
 // in the shape of the app's own library entries; the app lists them under Shows).
 // The transcribing itself runs on GitHub's runners (server/ci.mjs, .github/workflows/shows.yml),
-// which upload here with GitHub's OIDC token (server/oidc.mjs): this server is small and shared. With TRANSCRIBE=1 it
-// can still do the work itself (main.mjs's own feed checks and queue).
+// which upload here with GitHub's OIDC token (server/oidc.mjs): this server is small and shared.
+// TRANSCRIBE=1 makes it do the work itself (its own feed checks and queue); that needs ffmpeg and
+// `npm install` in server/, which the Docker image leaves out, and a far bigger machine.
 import http from 'node:http';
 import os from 'node:os';
 import { createReadStream } from 'node:fs';
