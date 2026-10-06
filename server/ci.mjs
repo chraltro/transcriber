@@ -50,7 +50,12 @@ const status = (value) => (DRY ? null : put('status.json', JSON.stringify({ upda
 
 /* ---------- what's new ---------- */
 
-const index = await (await fetch(`${SITE}/library/index.json`, { cache: 'no-store' })).json();
+const indexRes = await fetch(`${SITE}/library/index.json`, { cache: 'no-store' });
+if (!indexRes.ok || !/json/.test(indexRes.headers.get('content-type') || '')) {
+  log(`${SITE} is not answering (HTTP ${indexRes.status}); trying again next run`);
+  process.exit(1);
+}
+const index = await indexRes.json();
 const have = new Set(index.entries.map((e) => e.id));
 const queue = [];
 for (const show of SHOWS) {
