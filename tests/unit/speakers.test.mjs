@@ -331,3 +331,13 @@ test('"I\'m" followed by a word that is no name names nobody', () => {
   const segs = [{ start: 0, end: 80, text: "I'm Not Sure about that. I'm Really tired.", speaker: 0 }];
   assert.deepEqual(guessNames(segs, ['Ben', 'Tommy']), {});
 });
+
+test('"I\'m here with Anne Applebaum" names the host and the guest who speaks next (Making Sense)', () => {
+  const segs = [
+    { start: 0, end: 25, text: "You're listening to Making Sense with Sam Harris.", speaker: 0 },
+    { start: 25, end: 26, text: "I'm here with Anne Applebaum.", speaker: 1 },
+    { start: 26, end: 228, text: 'Anne, it is great to see you again. So I want to use your cover story as a jumping off point.', speaker: 1 },
+    { start: 229, end: 900, text: 'Well, the picture is pretty overwhelming.', speaker: 2 },
+  ];
+  assert.deepEqual(guessNames(segs, ['Sam Harris', 'Anne Applebaum'], { host: 'Sam Harris' }), { 1: 'Sam Harris', 2: 'Anne Applebaum' });
+});

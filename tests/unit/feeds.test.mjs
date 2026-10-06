@@ -30,3 +30,15 @@ test('durations in any form', () => {
   assert.equal(durationSec('3723'), 3723);
   assert.equal(durationSec(''), 0);
 });
+
+test("a show's hosts go into its notes once, where the term extraction finds them", async () => {
+  const { notesWithHosts } = await import('../../server/shows.mjs');
+  const { extractTerms } = await import('../../lib/context.js');
+  const notes = notesWithHosts('Tommy and Ben close the loop on the summit.', 'Pod Save the World');
+  assert.equal(notesWithHosts(notes, 'Pod Save the World'), notes);
+  const terms = extractTerms(notes);
+  assert.ok(terms.includes('Tommy Vietor') && terms.includes('Ben Rhodes'), JSON.stringify(terms));
+  const psa = extractTerms(notesWithHosts('', 'Pod Save America'));
+  for (const h of ['Jon Favreau', 'Jon Lovett', 'Tommy Vietor', 'Dan Pfeiffer']) assert.ok(psa.includes(h), JSON.stringify(psa));
+  assert.equal(notesWithHosts('x', 'Some other show'), 'x');
+});

@@ -15,25 +15,12 @@ export const SHOWS = [
   { name: 'Plain English with Derek Thompson', appleId: 1594471023, hosts: ['Derek Thompson'] },
 ];
 
-// The notes with the show's hosts named up front (once).
+// The notes with the show's hosts named up front (once), as a sentence: a line of names alone
+// reads as a title, which the term extraction skips (lib/context.js).
+const HOSTED = 'This show is hosted by ';
 export function notesWithHosts(notes, show) {
-  const hosts = (SHOWS.find((s) => s.name === show || show?.startsWith(s.name))?.hosts || []).filter((h) => !(notes || '').startsWith(`Hosts: ${h}`));
-  const line = `Hosts: ${hosts.join(', ')}.`;
-  return hosts.length && !(notes || '').startsWith('Hosts: ') ? `${line} ${notes || ''}`.trim() : notes || '';
-}
-
-// An episode's id, from its feed guid: stable, and safe in a file name.
-export const idOf = (guid) => createHash('sha1').update(guid).digest('hex').slice(0, 16);
-
-// The index lists each transcript without its text.
-export const metaOf = ({ id, title, show, art, lang, model, total, words, createdAt, transcribedAt, audio, fixes }) =>
-  ({ id, title, show, art, lang, model, total, words, createdAt, transcribedAt, audio, fixes });
-
-// The transcript as Markdown, with speakers named the way the app names them.
-export function markdownOf(entry) {
-  const terms = extractTerms(entry.notes || '', entry.title || '', entry.show || '');
-  const guessed = guessNames(entry.segments, terms, { host: hostFromShow(entry.show) });
-  const minor = minorVoices(entry.segments, guessed);
-  const names = { ...Object.fromEntries([...minor].map((k) => [k, 'Other voice'])), [OTHER]: 'Other voices', ...guessed };
-  return markdown(entry.segments, { title: entry.title, show: entry.show, url: entry.source?.url, names });
+  const hosts = SHOWS.find((s) => s.name === show || show?.startsWith(s.name))?.hosts || [];
+  if (!hosts.length || (notes || '').startsWith(HOSTED)) return notes || '';
+  const list = hosts.length > 1 ? `${hosts.slice(0, -1).join(', ')} and ${hosts[hosts.length - 1]}` : hosts[0];
+  return `${HOSTED}${list}. ${notes || ''}`.trim();
 }
