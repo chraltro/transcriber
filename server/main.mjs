@@ -271,9 +271,12 @@ await mkdir(LIB, { recursive: true });
 state = { ...state, ...(await readJson(STATE_FILE, {})) };
 current = null;
 server.listen(PORT, () => log(`serving on :${PORT}; data in ${DATA}; model ${MODEL_KEY}; checking feeds every ${POLL_MIN} min`));
-const tick = async () => {
-  await poll();
-  work();
-};
-tick();
-setInterval(tick, POLL_MIN * 60000);
+// TRANSCRIBE=0: only serve the app and the transcripts already made.
+if (process.env.TRANSCRIBE !== '0') {
+  const tick = async () => {
+    await poll();
+    work();
+  };
+  tick();
+  setInterval(tick, POLL_MIN * 60000);
+} else log('transcribing is off (TRANSCRIBE=0)');
