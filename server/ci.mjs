@@ -9,7 +9,9 @@ import path from 'node:path';
 import { readFile, rm } from 'node:fs/promises';
 import { findFeed, readFeed } from './feeds.mjs';
 import { transcribeEpisode } from './transcribe.mjs';
-import { SHOWS, idOf, markdownOf } from './shows.mjs';
+import { SHOWS, idOf, markdownOf, notesWithHosts } from './shows.mjs';
+import { correctText } from '../lib/glossary.js';
+import { extractTerms } from '../lib/context.js';
 import { MODELS, dtypeFor } from '../lib/models.js';
 import { createDiarizer } from '../lib/diarize.js';
 
@@ -66,13 +68,34 @@ for (const show of SHOWS) {
     const newest = Math.max(0, ...mine.map((e) => e.createdAt || 0));
     const fresh = feed.episodes.filter((ep) => ep.published > Date.now() - MAX_AGE_DAYS * 864e5);
     const wanted = mine.length ? fresh.filter((ep) => ep.published > newest) : fresh.slice(0, 1);
-    for (const ep of wanted) if (!have.has(idOf(ep.guid))) queue.push({ ...ep, id: idOf(ep.guid), show: name });
+    for (const ep of wanted) if (!have.has(idOf(ep.guid))) queue.push({ ...ep, id: idOf(ep.guid), show: name, notes: notesWithHosts(ep.notes, name) });
     log(`${name}: ${feed.episodes.length} episodes, ${mine.length} on the site, ${wanted.length} to do`);
   } catch (err) {
     log(`${show.name}: feed check failed: ${err.message}`);
   }
 }
 queue.sort((a, b) => a.published - b.published);
+
+// Transcripts made before a fix to names (FIXES) get it without being transcribed again: the
+// hosts in their notes, and known names' spelling corrected in their text.
+const FIXES = 1;
+for (const meta of index.entries) {
+  if (DRY || (meta.fixes || 0) >= FIXES) continue;
+  try {
+    const entry = await (await fetch(`${SITE}/library/${meta.id}.json`, { cache: 'no-store' })).json();
+    if ((entry.fixes || 0) >= FIXES) continue;
+    entry.notes = notesWithHosts(entry.notes, entry.show);
+    const terms = extractTerms(entry.notes, entry.title || '', entry.show || '');
+    entry.segments = entry.segments.map((x) => ({ ...x, text: correctText(x.text, { terms, replace: [] }) }));
+    entry.fixes = FIXES;
+    await put(`${entry.id}.md`, markdownOf(entry), 'text/markdown');
+    await put(`${entry.id}.json`, JSON.stringify(entry), 'application/json');
+    log(`updated names in ${entry.show}: ${entry.title}`);
+  } catch (err) {
+    log(`couldn't update ${meta.id}: ${err.message}`);
+  }
+}
+
 if (!queue.length || DRY) {
   log(DRY ? `dry run: ${queue.map((q) => `${q.show}: ${q.title}`).join(' | ') || 'nothing'}` : 'nothing new');
   process.exit(0);
@@ -113,6 +136,7 @@ for (const [i, ep] of queue.entries()) {
     });
     const audioName = `${entry.id}.${entry.audioExt}`;
     delete entry.audioExt;
+    entry.fixes = FIXES;
     entry.audio = `library/${audioName}`;
     await put(audioName, await readFile(tmpFile), entry.audio.endsWith('m4a') ? 'audio/mp4' : 'audio/mpeg');
     await put(`${entry.id}.md`, markdownOf(entry), 'text/markdown');

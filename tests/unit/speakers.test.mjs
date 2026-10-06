@@ -306,3 +306,28 @@ test("a new guest's sentence is not pulled to a host just because the guest's vo
   const out = labelParts(parts, turns, { 0: 2 }, 2, { voices, spanPrints: [v(0.5, 0.1, 0.9)] });
   assert.equal(out[0].speaker, 2);
 });
+
+test('introductions name voices even when the notes only give first names (Pod Save the World)', () => {
+  const people = ['Trump', 'Ben', 'Tommy', 'Sam Vigersky', 'Jon Favreau'];
+  const segs = [
+    { start: 12, end: 14, text: 'Welcome back to Pod Save the World.', speaker: 0 },
+    { start: 14, end: 15, text: "I'm Tommy Petorn.", speaker: 0 },
+    { start: 15, end: 16, text: "I'm Ben Rhodes.", speaker: 0 }, // both openers heard as one voice
+    { start: 16, end: 20, text: 'Ben, the New England Patriots officially suck.', speaker: 0 },
+    { start: 21, end: 90, text: 'Well, we can actually cross the streams here.', speaker: 1 },
+    { start: 90, end: 160, text: 'Yeah, they know he is a lame duck.', speaker: 0 },
+    { start: 4600, end: 4612, text: 'So I am very grateful to you, Sam.', speaker: 0 },
+    { start: 4612, end: 4700, text: 'Thanks for having me.', speaker: 2 },
+  ];
+  const names = guessNames(segs, people);
+  assert.equal(names[0], 'Tommy Petorn');
+  assert.equal(names[1], 'Ben Rhodes');
+  assert.notEqual(names[0], 'Sam Vigersky');
+  // With the full name known, the misheard surname gives way to it.
+  assert.equal(guessNames(segs, [...people, 'Tommy Vietor', 'Ben Rhodes'])[0], 'Tommy Vietor');
+});
+
+test('"I\'m" followed by a word that is no name names nobody', () => {
+  const segs = [{ start: 0, end: 80, text: "I'm Not Sure about that. I'm Really tired.", speaker: 0 }];
+  assert.deepEqual(guessNames(segs, ['Ben', 'Tommy']), {});
+});

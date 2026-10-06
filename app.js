@@ -1599,6 +1599,8 @@ function addSegment(seg, { fresh = true, into = null } = {}) {
       para.append(ts, body);
     } else {
       para.append(ts, p);
+      // The same voice carrying on: one section, paragraph breaks inside it.
+      if (seg.speaker != null && seg.speaker === state.lastPara?.speaker) para.classList.add('cont');
     }
     host.append(para);
     state.lastPara = { el: para, p, words: countWords(span.textContent), speaker: seg.speaker };

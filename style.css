@@ -692,6 +692,8 @@ body.busy #detail { color: var(--accent); }
   border-bottom: 1px solid var(--line);
 }
 .reader:not(.speakers) .para { grid-template-columns: 72px 0 minmax(0, 1fr); }
+.para:has(+ .para.cont) { border-bottom: 0; padding-bottom: 2px; }
+.para.cont { padding-top: 8px; }
 .para-body { display: contents; }
 .para > p, .para-body > p { grid-column: 3; }
 .para.fresh { animation: rise 0.5s var(--ease) both; }
@@ -909,6 +911,8 @@ body.busy #detail { color: var(--accent); }
   .tool-actions { display: none; }
   .log-head { display: none; }
   .para, .reader:not(.speakers) .para { display: block; padding: 12px 16px; }
+  .para:has(+ .para.cont) { padding-bottom: 2px; }
+  .para.cont { padding-top: 8px; }
   .ts { display: none; margin: 0 0 2px; }
   .transcript.show-ts .ts { display: block; }
   .who { margin: 0 0 4px; }

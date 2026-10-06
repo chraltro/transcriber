@@ -89,3 +89,11 @@ test('stutters in French, Spanish and Italian collapse; German articles do not',
   assert.equal(collapseStutter('y y entonces el el perro'), 'y entonces el perro');
   assert.equal(collapseStutter('Die Frau, die die Zeitung liest'), 'Die Frau, die die Zeitung liest');
 });
+
+test('a known first name with a misheard surname is corrected; other people are left alone', async () => {
+  const { correctText } = await import('../../lib/glossary.js');
+  const terms = ['Tommy Vietor', 'Ben Rhodes'];
+  assert.equal(correctText("I'm Tommy Petorn. I'm Ben Rhodes.", { terms }), "I'm Tommy Vietor. I'm Ben Rhodes.");
+  assert.equal(correctText('Tommy Lee Jones and Ben Affleck', { terms }), 'Tommy Lee Jones and Ben Affleck');
+  assert.equal(correctText('Tommy The cat', { terms }), 'Tommy The cat');
+});

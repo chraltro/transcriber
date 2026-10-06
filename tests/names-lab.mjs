@@ -3,11 +3,13 @@
 // decided. Run by .github/workflows/names-lab.yml.
 import { extractTerms } from '../lib/context.js';
 import { guessNames, hostFromShow, minorVoices } from '../lib/speakers.js';
+import { notesWithHosts } from '../server/shows.mjs';
 
 const SITE = process.env.SITE || 'https://transcriber.demant.app';
 const index = await (await fetch(`${SITE}/library/index.json`)).json();
 for (const meta of index.entries) {
   const e = await (await fetch(`${SITE}/library/${meta.id}.json`)).json();
+  e.notes = notesWithHosts(e.notes, e.show); // as the shows workflow now stores them
   const terms = extractTerms(e.notes || '', e.title || '', e.show || '');
   const host = hostFromShow(e.show);
   const talk = {};
