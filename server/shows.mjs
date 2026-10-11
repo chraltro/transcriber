@@ -24,3 +24,19 @@ export function notesWithHosts(notes, show) {
   const list = hosts.length > 1 ? `${hosts.slice(0, -1).join(', ')} and ${hosts[hosts.length - 1]}` : hosts[0];
   return `${HOSTED}${list}. ${notes || ''}`.trim();
 }
+
+// An episode's id, from its feed guid: stable, and safe in a file name.
+export const idOf = (guid) => createHash('sha1').update(guid).digest('hex').slice(0, 16);
+
+// The index lists each transcript without its text.
+export const metaOf = ({ id, title, show, art, lang, model, total, words, createdAt, transcribedAt, audio, fixes }) =>
+  ({ id, title, show, art, lang, model, total, words, createdAt, transcribedAt, audio, fixes });
+
+// The transcript as Markdown, with speakers named the way the app names them.
+export function markdownOf(entry) {
+  const terms = extractTerms(entry.notes || '', entry.title || '', entry.show || '');
+  const guessed = guessNames(entry.segments, terms, { host: hostFromShow(entry.show) });
+  const minor = minorVoices(entry.segments, guessed);
+  const names = { ...Object.fromEntries([...minor].map((k) => [k, 'Other voice'])), [OTHER]: 'Other voices', ...guessed };
+  return markdown(entry.segments, { title: entry.title, show: entry.show, url: entry.source?.url, names });
+}
