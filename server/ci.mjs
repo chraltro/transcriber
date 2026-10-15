@@ -2,8 +2,8 @@
 // transcriber.demant.app doesn't have yet, transcribes them on GitHub's runner with the app's own
 // pipeline (Large v3 Turbo, speakers, language check), and uploads transcript and audio there.
 // Which episodes are wanted follows from the site's own index, so nothing is kept here:
-// a show with nothing yet gets its newest episode; after that, every episode newer than the
-// newest one the site has.
+// a show with nothing yet gets its newest episode; after that, every episode since the first one
+// the site has that it doesn't have yet (so one that had to wait is never passed over).
 import os from 'node:os';
 import path from 'node:path';
 import { readFile, rm } from 'node:fs/promises';
@@ -19,7 +19,11 @@ const SITE = (process.env.SITE || 'https://transcriber.demant.app').replace(/\/$
 const AUDIENCE = process.env.UPLOAD_AUDIENCE || 'transcriber.demant.app';
 const MODEL_KEY = process.env.MODEL || 'turbo';
 const MAX_AGE_DAYS = Number(process.env.MAX_AGE_DAYS || 14); // older episodes are never picked up
-const BUDGET_MIN = Number(process.env.BUDGET_MINUTES || 300); // no new episode starts after this
+// The job is stopped at 350 minutes (shows.yml): an episode only starts if it can finish by then.
+const LIMIT_MIN = Number(process.env.LIMIT_MINUTES || 335);
+// Minutes of audio per minute of work. Large v3 Turbo on GitHub's 4-CPU runners managed 0.58x
+// to 0.80x; this starts on the safe side and follows what each finished episode measured.
+let speed = 0.55;
 const DRY = process.env.DRY_RUN === '1';
 const t0 = Date.now();
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
@@ -65,10 +69,10 @@ for (const show of SHOWS) {
     const feed = await readFeed(await findFeed(show));
     const name = feed.show || show.name;
     const mine = index.entries.filter((e) => e.show === name);
-    const newest = Math.max(0, ...mine.map((e) => e.createdAt || 0));
+    const first = Math.min(...mine.map((e) => e.createdAt || 0));
     const fresh = feed.episodes.filter((ep) => ep.published > Date.now() - MAX_AGE_DAYS * 864e5);
-    const wanted = mine.length ? fresh.filter((ep) => ep.published > newest) : fresh.slice(0, 1);
-    for (const ep of wanted) if (!have.has(idOf(ep.guid))) queue.push({ ...ep, id: idOf(ep.guid), show: name, notes: notesWithHosts(ep.notes, name) });
+    const wanted = mine.length ? fresh.filter((ep) => ep.published >= first && !have.has(idOf(ep.guid))) : fresh.slice(0, 1);
+    for (const ep of wanted) queue.push({ ...ep, id: idOf(ep.guid), show: name, notes: notesWithHosts(ep.notes, name) });
     log(`${name}: ${feed.episodes.length} episodes, ${mine.length} on the site, ${wanted.length} to do`);
   } catch (err) {
     log(`${show.name}: feed check failed: ${err.message}`);
@@ -117,7 +121,12 @@ const models = { tf, asr, diarizer, checker, modelKey: MODEL_KEY };
 
 let failed = 0;
 for (const [i, ep] of queue.entries()) {
-  if ((Date.now() - t0) / 60000 > BUDGET_MIN) { log(`time is up; ${queue.length - i} left for the next run`); break; }
+  const left = LIMIT_MIN - (Date.now() - t0) / 60000;
+  const need = (ep.duration || 90 * 60) / 60 / speed + 5;
+  if (need > left) {
+    log(`${ep.show}: ${ep.title} needs about ${Math.round(need)} min, ${Math.round(left)} left: next run`);
+    continue;
+  }
   const waiting = queue.slice(i + 1).map(({ id, title, show, published }) => ({ id, title, show, published }));
   const current = { id: ep.id, title: ep.title, show: ep.show, position: 0, total: ep.duration || 0, startedAt: Date.now() };
   await status({ current, queue: waiting });
@@ -141,6 +150,7 @@ for (const [i, ep] of queue.entries()) {
     await put(audioName, await readFile(tmpFile), entry.audio.endsWith('m4a') ? 'audio/mp4' : 'audio/mpeg');
     await put(`${entry.id}.md`, markdownOf(entry), 'text/markdown');
     await put(`${entry.id}.json`, JSON.stringify(entry), 'application/json'); // last: this lists it
+    speed = Math.min(1.5, (entry.total / entry.took) * 0.9);
     log(`  done: ${entry.words} words, ${Math.round(entry.total / 60)} min in ${Math.round(entry.took / 60)} min (${(entry.total / entry.took).toFixed(2)}x realtime)`);
   } catch (err) {
     failed++;

@@ -13,9 +13,6 @@ on:
   push:
     branches: [main]
     paths: ['server/**', '.github/workflows/shows.yml']
-concurrency:
-  group: shows
-  cancel-in-progress: false
 permissions:
   contents: read
   actions: write
@@ -26,21 +23,40 @@ jobs:
     timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
-      # Scheduled workflows stop after 60 days without activity in the repository; this keeps it on.
-      - run: gh api -X PUT repos/${{ github.repository }}/actions/workflows/shows.yml/enable || true
+      # One run at a time. A run that starts while another is still transcribing stops here, as a
+      # success: waiting in GitHub's queue instead got runs cancelled (and emailed about).
+      - id: busy
+        run: |
+          n=$(gh api "repos/${{ github.repository }}/actions/workflows/shows.yml/runs?status=in_progress" --jq '[.workflow_runs[] | select(.id != ${{ github.run_id }})] | length') || n=0
+          echo "other runs in progress: $n"
+          echo "free=$([ "$n" = 0 ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
-      - uses: actions/setup-node@v4
+      # Scheduled workflows stop after 60 days without activity in the repository; this keeps it on.
+      - if: steps.busy.outputs.free == 'yes'
+        run: gh api -X PUT repos/${{ github.repository }}/actions/workflows/shows.yml/enable || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - if: steps.busy.outputs.free == 'yes'
+        uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: sudo apt-get install -y ffmpeg >/dev/null
-      - run: cd server && npm install --omit=dev --no-audit --no-fund
-      - uses: actions/cache@v4
+      - if: steps.busy.outputs.free == 'yes'
+        run: sudo apt-get install -y ffmpeg >/dev/null
+      # The CPU build of the model runtime ships in the package; its install script would also
+      # fetch a 1 GB GPU add-on from nuget.org, which timed out once and failed a run.
+      - if: steps.busy.outputs.free == 'yes'
+        run: cd server && for i in 1 2 3; do npm install --omit=dev --no-audit --no-fund && break; [ $i = 3 ] && exit 1; sleep 30; done
+        env:
+          ONNXRUNTIME_NODE_INSTALL: skip
+      - if: steps.busy.outputs.free == 'yes'
+        uses: actions/cache@v4
         with:
           path: ~/models
           key: models-${{ hashFiles('server/package.json', 'lib/models.js', 'lib/diarize.js') }}
           restore-keys: models-
-      - run: node server/ci.mjs
+      - if: steps.busy.outputs.free == 'yes'
+        run: node server/ci.mjs
         env:
           MODEL_CACHE: /home/runner/models
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
