@@ -1,10 +1,14 @@
 name: Names lab
 # The name guessing on every transcript transcriber.demant.app has (tests/names-lab.mjs).
+# Paused: runs only when started by hand (Actions tab, Run workflow). The automatic triggers it had
+# are kept below, commented out, to switch back on later.
 on:
-  push:
-    branches: ['claude/**']
-    paths: ['tests/names-lab.mjs', '.github/workflows/names-lab.yml', 'lib/speakers.js', 'lib/context.js']
   workflow_dispatch:
+# Automatic triggers (paused):
+# push:
+#   branches: ['claude/**']
+#   paths: ['tests/names-lab.mjs', '.github/workflows/names-lab.yml', 'lib/speakers.js', 'lib/context.js']
+
 jobs:
   lab:
     runs-on: ubuntu-latest

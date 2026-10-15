@@ -1,9 +1,13 @@
 name: Speaker lab
+# Paused: runs only when started by hand (Actions tab, Run workflow). The automatic triggers it had
+# are kept below, commented out, to switch back on later.
 on:
-  push:
-    branches: ['claude/**']
-    paths: ['tests/speaker-lab.mjs', '.github/workflows/speaker-lab.yml', 'lib/speakers.js', 'lib/diarize.js']
   workflow_dispatch:
+# Automatic triggers (paused):
+# push:
+#   branches: ['claude/**']
+#   paths: ['tests/speaker-lab.mjs', '.github/workflows/speaker-lab.yml', 'lib/speakers.js', 'lib/diarize.js']
+
 jobs:
   lab:
     runs-on: ubuntu-latest

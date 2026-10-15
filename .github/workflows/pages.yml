@@ -1,9 +1,12 @@
 name: Deploy to GitHub Pages
 
+# Paused: runs only when started by hand (Actions tab, Run workflow). The automatic triggers it had
+# are kept below, commented out, to switch back on later.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+# Automatic triggers (paused):
+# push:
+#   branches: [main]
 
 permissions:
   contents: read

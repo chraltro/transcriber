@@ -1,9 +1,13 @@
 name: Language check lab
+# Paused: runs only when started by hand (Actions tab, Run workflow). The automatic triggers it had
+# are kept below, commented out, to switch back on later.
 on:
-  push:
-    branches: ['claude/**']
-    paths: ['tests/langid-lab.mjs', 'lib/langid.js', '.github/workflows/langid-lab.yml']
   workflow_dispatch:
+# Automatic triggers (paused):
+# push:
+#   branches: ['claude/**']
+#   paths: ['tests/langid-lab.mjs', 'lib/langid.js', '.github/workflows/langid-lab.yml']
+
 jobs:
   lab:
     runs-on: ubuntu-latest

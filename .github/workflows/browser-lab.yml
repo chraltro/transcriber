@@ -1,10 +1,14 @@
 name: Browser lab
 # Model comparisons inside the real app in Chromium (WebAssembly ONNX Runtime, as users get it).
+# Paused: runs only when started by hand (Actions tab, Run workflow). The automatic triggers it had
+# are kept below, commented out, to switch back on later.
 on:
-  push:
-    branches: ['claude/**']
-    paths: ['.github/workflows/browser-lab.yml']
   workflow_dispatch:
+# Automatic triggers (paused):
+# push:
+#   branches: ['claude/**']
+#   paths: ['.github/workflows/browser-lab.yml']
+
 jobs:
   lab:
     runs-on: ubuntu-latest
