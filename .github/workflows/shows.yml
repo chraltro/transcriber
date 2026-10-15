@@ -1,22 +1,18 @@
 name: Transcribe shows
 # New episodes of the followed shows (server/shows.mjs), transcribed here with Large v3 Turbo
 # and uploaded to transcriber.demant.app, which only stores and serves them (server/ci.mjs).
-# Paused: runs only when started by hand (Actions tab, Run workflow). The automatic triggers it had
-# are kept below, commented out, to switch back on later.
 on:
+  schedule:
+    - cron: '7,37 * * * *'
   workflow_dispatch:
     inputs:
       dry_run:
         description: 'Only list what would be transcribed'
         type: boolean
         default: false
-# Automatic triggers (paused):
-# schedule:
-#   - cron: '7,37 * * * *'
-# push:
-#   branches: [main]
-#   paths: ['server/**', '.github/workflows/shows.yml']
-
+  push:
+    branches: [main]
+    paths: ['server/**', '.github/workflows/shows.yml']
 permissions:
   contents: read
   actions: write

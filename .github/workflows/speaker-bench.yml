@@ -1,14 +1,10 @@
 name: Speaker bench
 # Who said what, scored against podcasts' own published transcripts (tests/speaker-bench.mjs).
-# Paused: runs only when started by hand (Actions tab, Run workflow). The automatic triggers it had
-# are kept below, commented out, to switch back on later.
 on:
+  push:
+    branches: ['claude/**']
+    paths: ['tests/speaker-bench.mjs', 'tests/transcripts.mjs', '.github/workflows/speaker-bench.yml', 'lib/speakers.js', 'lib/diarize.js']
   workflow_dispatch:
-# Automatic triggers (paused):
-# push:
-#   branches: ['claude/**']
-#   paths: ['tests/speaker-bench.mjs', 'tests/transcripts.mjs', '.github/workflows/speaker-bench.yml', 'lib/speakers.js', 'lib/diarize.js']
-
 jobs:
   bench:
     runs-on: ubuntu-latest

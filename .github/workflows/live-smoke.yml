@@ -1,16 +1,12 @@
 name: Live site smoke test
-# Paused: runs only when started by hand (Actions tab, Run workflow). The automatic triggers it had
-# are kept below, commented out, to switch back on later.
 on:
+  workflow_run:
+    workflows: ['Deploy to GitHub Pages']
+    types: [completed]
+  push:
+    branches: ['claude/**']
+    paths: ['tests/live-smoke.mjs', '.github/workflows/live-smoke.yml']
   workflow_dispatch:
-# Automatic triggers (paused):
-# workflow_run:
-#   workflows: ['Deploy to GitHub Pages']
-#   types: [completed]
-# push:
-#   branches: ['claude/**']
-#   paths: ['tests/live-smoke.mjs', '.github/workflows/live-smoke.yml']
-
 jobs:
   smoke:
     runs-on: ubuntu-latest

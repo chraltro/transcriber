@@ -1,13 +1,9 @@
 name: Language lab
-# Paused: runs only when started by hand (Actions tab, Run workflow). The automatic triggers it had
-# are kept below, commented out, to switch back on later.
 on:
+  push:
+    branches: ['claude/**']
+    paths: ['tests/language-lab.mjs', '.github/workflows/language-lab.yml', 'lib/prompted.js']
   workflow_dispatch:
-# Automatic triggers (paused):
-# push:
-#   branches: ['claude/**']
-#   paths: ['tests/language-lab.mjs', '.github/workflows/language-lab.yml', 'lib/prompted.js']
-
 jobs:
   search:
     if: github.event_name == 'workflow_dispatch'

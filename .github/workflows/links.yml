@@ -1,14 +1,10 @@
 name: Links
 # Real links from YouTube, podcast apps and sites, resolved in the real page (no transcription).
-# Paused: runs only when started by hand (Actions tab, Run workflow). The automatic triggers it had
-# are kept below, commented out, to switch back on later.
 on:
+  push:
+    branches: ['claude/**']
+    paths: ['app.js', 'lib/links.js', 'lib/text.js', 'tests/e2e.mjs', '.github/workflows/links.yml']
   workflow_dispatch:
-# Automatic triggers (paused):
-# push:
-#   branches: ['claude/**']
-#   paths: ['app.js', 'lib/links.js', 'lib/text.js', 'tests/e2e.mjs', '.github/workflows/links.yml']
-
 jobs:
   links:
     runs-on: ubuntu-latest
