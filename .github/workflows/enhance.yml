@@ -1,0 +1,79 @@
+name: Regenerate voices
+# Voice regeneration asked for in the clean-up studio (server/enhance.mjs): every ten minutes,
+# or right away when the site has a token to start it, takes the oldest waiting job, rebuilds its
+# stretches of voice with Resemble Enhance on this runner's CPUs (server/regen.mjs) and uploads
+# the result to transcriber.demant.app, which checks GitHub's OIDC token.
+on:
+  schedule:
+    - cron: '3,13,23,33,43,53 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['server/regen.mjs', 'server/regen/**', '.github/workflows/enhance.yml']
+permissions:
+  contents: read
+  actions: write
+  id-token: write # uploads prove they come from this workflow (server/oidc.mjs)
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      # One run at a time; a run that finds another one working stops here, as a success.
+      - id: busy
+        run: |
+          n=$(gh api "repos/${{ github.repository }}/actions/workflows/enhance.yml/runs?status=in_progress" --jq '[.workflow_runs[] | select(.id != ${{ github.run_id }})] | length') || n=0
+          echo "other runs in progress: $n"
+          echo "free=$([ "$n" = 0 ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      # Scheduled workflows stop after 60 days without activity in the repository; this keeps it on.
+      - if: steps.busy.outputs.free == 'yes'
+        run: gh api -X PUT repos/${{ github.repository }}/actions/workflows/enhance.yml/enable || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - if: steps.busy.outputs.free == 'yes'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Most runs find nothing to do: they stop here, before installing anything.
+      - id: queue
+        if: steps.busy.outputs.free == 'yes'
+        run: node server/regen.mjs --check
+      - if: steps.queue.outputs.work == 'yes'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: .github/workflows/enhance.yml
+      - if: steps.queue.outputs.work == 'yes'
+        run: sudo apt-get install -y ffmpeg >/dev/null
+      - if: steps.queue.outputs.work == 'yes'
+        uses: actions/cache@v4
+        with:
+          path: ~/regen-model
+          key: resemble-enhance-stage2-v1
+      - if: steps.queue.outputs.work == 'yes'
+        name: Model (713 MB, from Hugging Face, kept in the cache)
+        run: |
+          d=~/regen-model/enhancer_stage2
+          if [ ! -s "$d/ds/G/default/mp_rank_00_model_states.pt" ]; then
+            mkdir -p "$d/ds/G/default"
+            b=https://huggingface.co/ResembleAI/resemble-enhance/resolve/main/enhancer_stage2
+            curl -sSfL --retry 3 -o "$d/hparams.yaml" "$b/hparams.yaml"
+            curl -sSfL --retry 3 -o "$d/ds/G/latest" "$b/ds/G/latest"
+            curl -sSfL --retry 3 -o "$d/ds/G/default/mp_rank_00_model_states.pt" "$b/ds/G/default/mp_rank_00_model_states.pt"
+          fi
+          ls -la "$d/ds/G/default"
+      # The versions server/regen/regen.py was tested with. resemble-enhance itself pins 2023
+      # versions of everything (and DeepSpeed, for training); it runs fine on these.
+      - if: steps.queue.outputs.work == 'yes'
+        run: |
+          pip install torch==2.11.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install --no-deps resemble-enhance==0.0.1
+          pip install numpy==2.5.3 scipy==1.18.1 librosa==1.0.0 soundfile==0.14.0 omegaconf==2.4.0 tqdm==4.70.1 resampy==0.4.3 rich==15.0.0 tabulate==0.10.0 celluloid==0.2.0 matplotlib==3.11.2
+      - if: steps.queue.outputs.work == 'yes'
+        run: node server/regen.mjs
+        env:
+          MODEL_DIR: /home/runner/regen-model/enhancer_stage2

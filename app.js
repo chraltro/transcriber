@@ -16,6 +16,9 @@ import { correctText, parseGlossary } from './lib/glossary.js';
 import { listEntries, getEntry, saveEntry, deleteEntry } from './ui/library.js';
 import { SpeakerMap } from './ui/speakermap.js';
 import { speakerMap, talkTime, selection } from './lib/speakermap.js';
+import { Studio } from './ui/studio.js';
+import { RATE as CLEAN_RATE } from './lib/enhance/chain.js';
+import { wavHeader, toInt16 } from './lib/enhance/encode.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -44,6 +47,7 @@ const els = {
   mapPlay: $('#map-play'), mapRefine: $('#map-refine'), mapCopy: $('#map-copy'), mapClear: $('#map-clear'), talkCard: $('#talk-card'), talkList: $('#talk-list'),
   mini: $('#mini'), miniArt: $('#mini-art'), miniTitle: $('#mini-title'), miniStatus: $('#mini-status'), miniPlay: $('#mini-play'), miniBar: $('#mini-bar'),
   dropzone: $('#dropzone'), toast: $('#toast'), announce: $('#announce'), audio: $('#audio'),
+  modes: $('#modes'), heroTitle: $('#hero-title'), heroKicker: $('#hero-kicker'), studio: $('#studio'), cleanBtn: $('#clean-btn'), stepsClean: $('#steps-clean'),
 };
 
 const state = {
@@ -236,6 +240,13 @@ function renderStats(items) {
 }
 
 function progress(stage, fraction, detail = '', stats = null) {
+  if (state.cleaning) {
+    studio.status(stage, detail, fraction);
+    if (/^(Looking up|Reading link|Finding)/.test(stage)) studio.setStep('find');
+    if (/^Downloading/.test(stage)) studio.setStep('download');
+    els.topStatus.textContent = state.busy ? stage : DEFAULT_STATUS;
+    return;
+  }
   els.stage.textContent = stage;
   els.detail.textContent = detail;
   const step = STEP_OF.find(([re]) => re.test(stage))?.[1];
@@ -529,6 +540,7 @@ function setBusy(busy) {
   els.file.disabled = busy;
   els.cancel.classList.toggle('hidden', !busy);
   els.sessionClose.classList.toggle('hidden', busy);
+  els.cleanBtn.classList.toggle('hidden', busy || !state.playable || !state.segments.length);
   els.tail.classList.toggle('hidden', !busy);
   els.readerFoot.classList.toggle('hidden', busy || !state.segments.length);
   if (!busy) els.jump.classList.add('hidden');
@@ -1191,7 +1203,7 @@ function renderEpisodes() {
     btn.addEventListener('click', () => {
       if (state.busy) return;
       els.episodesCard.classList.add('hidden');
-      run(() => Promise.resolve({ kind: 'audio', url: ep.url, title: ep.title, show: ep.show || feed.title, art: ep.art || feed.image, notes: ep.notes }));
+      start(() => Promise.resolve({ kind: 'audio', url: ep.url, title: ep.title, show: ep.show || feed.title, art: ep.art || feed.image, notes: ep.notes }));
     });
     li.append(btn);
     items.push(li);
@@ -1232,11 +1244,14 @@ const MAX_AHEAD_SECONDS = 90; // decoded audio allowed to wait for the worker
 
 
 
-async function decodeMono16k(arrayBuffer) {
+const decodeMono16k = (arrayBuffer) => decodeMono(arrayBuffer, SAMPLE_RATE);
+
+// Mono at `rate` (the browser resamples). The clean-up works at 44.1 kHz, transcription at 16.
+async function decodeMono(arrayBuffer, rate) {
   const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
   let audio;
   try {
-    audio = await new Ctx(1, 1, SAMPLE_RATE).decodeAudioData(arrayBuffer);
+    audio = await new Ctx(1, 1, rate).decodeAudioData(arrayBuffer);
   } catch {
     throw new UserError("Your browser couldn't decode this audio file. Try another episode or a different browser.");
   }
@@ -1254,17 +1269,18 @@ async function decodeMono16k(arrayBuffer) {
 // size in memory. Phones kill tabs long before that for a full episode.
 const WHOLE_DECODE_LIMIT = IS_MOBILE ? 40e6 : 400e6;
 
-// Yields 16 kHz mono audio a piece at a time, starting at fromSec. Calls onTotal(seconds) first.
-async function* decodePieces(blob, onTotal, fromSec = 0) {
-  const skip = Math.round(fromSec * SAMPLE_RATE);
+// Yields mono audio (16 kHz unless asked otherwise) a piece at a time, starting at fromSec.
+// Calls onTotal(seconds) first.
+async function* decodePieces(blob, onTotal, fromSec = 0, rate = SAMPLE_RATE) {
+  const skip = Math.round(fromSec * rate);
   const mp3 = await indexMp3(blob);
   if (mp3) {
-    yield* mp3Pieces(blob, mp3, onTotal, skip);
+    yield* mp3Pieces(blob, mp3, onTotal, skip, rate);
     return;
   }
   const wav = await indexWav(blob);
   if (wav && wav.format !== 0xfffe) {
-    yield* wavPieces(blob, wav, onTotal, skip);
+    yield* wavPieces(blob, wav, onTotal, skip, rate);
     return;
   }
   if (blob.size > WHOLE_DECODE_LIMIT) {
@@ -1273,17 +1289,17 @@ async function* decodePieces(blob, onTotal, fromSec = 0) {
       `than ${IS_MOBILE ? 'a phone' : 'this browser'} allows. Try it on a computer, or find an MP3 version of the episode.`
     );
   }
-  const whole = await decodeMono16k(await blob.arrayBuffer());
-  onTotal(whole.length / SAMPLE_RATE);
-  const step = PIECE_SECONDS * SAMPLE_RATE;
+  const whole = await decodeMono(await blob.arrayBuffer(), rate);
+  onTotal(whole.length / rate);
+  const step = PIECE_SECONDS * rate;
   for (let s = skip; s < whole.length; s += step) yield whole.slice(s, s + step);
 }
 
-async function* mp3Pieces(blob, { offsets, spf, sr }, onTotal, skip) {
+async function* mp3Pieces(blob, { offsets, spf, sr }, onTotal, skip, rate = SAMPLE_RATE) {
   const n = offsets.length;
   onTotal((n * spf) / sr);
   const per = Math.ceil((PIECE_SECONDS * sr) / spf);
-  const toSamples = (frames) => Math.round((frames * spf * SAMPLE_RATE) / sr);
+  const toSamples = (frames) => Math.round((frames * spf * rate) / sr);
   // MP3 frames can borrow bits from the frames before them, so decode two extra and drop their audio.
   const WARMUP = 2;
   for (let k = 0; k < n; k += per) {
@@ -1291,7 +1307,7 @@ async function* mp3Pieces(blob, { offsets, spf, sr }, onTotal, skip) {
     const pieceStart = toSamples(k);
     if (toSamples(Math.min(k + per, n)) <= skip) continue;
     const from = Math.max(0, k - WARMUP);
-    const pcm = await decodeMono16k(await blob.slice(offsets[from], last ? blob.size : offsets[k + per]).arrayBuffer());
+    const pcm = await decodeMono(await blob.slice(offsets[from], last ? blob.size : offsets[k + per]).arrayBuffer(), rate);
     // Line pieces up from their end: decoders differ in how much they emit for the first
     // frames of a slice, but every one of them produces the piece's own frames at the end.
     const expected = toSamples(Math.min(k + per, n) - k);
@@ -1301,19 +1317,79 @@ async function* mp3Pieces(blob, { offsets, spf, sr }, onTotal, skip) {
   }
 }
 
-async function* wavPieces(blob, info, onTotal, skip) {
+async function* wavPieces(blob, info, onTotal, skip, rate = SAMPLE_RATE) {
   const frames = info.dataSize / info.blockAlign;
   onTotal(frames / info.sampleRate);
   const per = PIECE_SECONDS * info.sampleRate;
   for (let f = 0; f < frames; f += per) {
-    const pieceEnd = Math.round(((f + per) * SAMPLE_RATE) / info.sampleRate);
+    const pieceEnd = Math.round(((f + per) * rate) / info.sampleRate);
     if (pieceEnd <= skip) continue;
     const a = info.dataStart + f * info.blockAlign;
     const b = info.dataStart + Math.min(frames, f + per) * info.blockAlign;
-    const pcm = await decodeMono16k(wavPiece(info, new Uint8Array(await blob.slice(a, b).arrayBuffer())).buffer);
-    const drop = Math.max(0, skip - Math.round((f * SAMPLE_RATE) / info.sampleRate));
+    const pcm = await decodeMono(wavPiece(info, new Uint8Array(await blob.slice(a, b).arrayBuffer())).buffer, rate);
+    const drop = Math.max(0, skip - Math.round((f * rate) / info.sampleRate));
     yield drop ? pcm.slice(drop) : pcm;
   }
+}
+
+// Exactly [fromSec, toSec) of the episode, mono at `rate` (silence before 0 and past the end).
+// MP3 and WAV are cut to what's needed; the clean-up makes sure it gets one of those
+// (cleanableAudio).
+async function decodeRange(blob, fromSec, toSec, rate) {
+  const n = Math.max(0, Math.round((toSec - fromSec) * rate));
+  const out = new Float32Array(n);
+  const start = Math.max(0, fromSec);
+  const lead = Math.round((start - fromSec) * rate); // samples of silence before 0
+  const mp3 = await indexMp3(blob);
+  let pcm;
+  let pcmStart; // sample (at rate) where pcm begins
+  if (mp3) {
+    const { offsets, spf, sr } = mp3;
+    const toSamples = (frames) => Math.round((frames * spf * rate) / sr);
+    const k0 = Math.max(0, Math.floor((start * sr) / spf) - 1);
+    const k1 = Math.min(offsets.length, Math.ceil((toSec * sr) / spf) + 2);
+    if (k0 >= k1) return out;
+    const WARMUP = 2;
+    const from = Math.max(0, k0 - WARMUP);
+    const last = k1 >= offsets.length;
+    const raw = await decodeMono(await blob.slice(offsets[from], last ? blob.size : offsets[k1]).arrayBuffer(), rate);
+    // As in mp3Pieces: line up from the end, where every decoder agrees.
+    const expected = toSamples(k1 - k0);
+    const drop = !last && raw.length >= expected ? raw.length - expected : toSamples(k0 - from);
+    pcm = raw.subarray(drop);
+    pcmStart = toSamples(k0);
+  } else {
+    const wav = await indexWav(blob);
+    if (!wav || wav.format === 0xfffe) throw new UserError("This audio format can't be cut into pieces for the clean-up.");
+    const frames = wav.dataSize / wav.blockAlign;
+    const f0 = Math.max(0, Math.floor(start * wav.sampleRate) - 64);
+    const f1 = Math.min(frames, Math.ceil(toSec * wav.sampleRate) + 64);
+    if (f0 >= f1) return out;
+    const a = wav.dataStart + f0 * wav.blockAlign;
+    const b = wav.dataStart + f1 * wav.blockAlign;
+    pcm = await decodeMono(wavPiece(wav, new Uint8Array(await blob.slice(a, b).arrayBuffer())).buffer, rate);
+    pcmStart = Math.round((f0 * rate) / wav.sampleRate);
+  }
+  const want = Math.round(start * rate);
+  const off = want - pcmStart;
+  for (let i = lead; i < n; i++) {
+    const j = off + (i - lead);
+    if (j >= 0 && j < pcm.length) out[i] = pcm[j];
+  }
+  return out;
+}
+
+// The clean-up reads the episode a piece at a time, which works for MP3 and WAV. Anything else
+// (AAC, Opus) is decoded once and kept as a 16-bit WAV for the session.
+async function cleanableAudio(blob) {
+  if (await indexMp3(blob)) return blob;
+  const wav = await indexWav(blob);
+  if (wav && wav.format !== 0xfffe) return blob;
+  if (blob.size > (IS_MOBILE ? 30e6 : 150e6)) {
+    throw new UserError(`This episode's audio format (${blob.type || 'not MP3'}) has to be decoded in one go for the clean-up, and at ${fmtBytes(blob.size)} that needs more memory than ${IS_MOBILE ? 'a phone' : 'this browser'} allows. Find an MP3 version of the episode.`);
+  }
+  const pcm = await decodeMono(await blob.arrayBuffer(), CLEAN_RATE);
+  return new Blob([wavHeader(pcm.length, CLEAN_RATE), toInt16(pcm)], { type: 'audio/wav' });
 }
 
 /* ---------- transcription ---------- */
@@ -1834,6 +1910,7 @@ async function refreshPlayable() {
 
 function setPlayable(on) {
   state.playable = on;
+  els.cleanBtn.classList.toggle('hidden', !on || state.busy || !state.segments.length);
   updateRefineBar();
   els.play.disabled = !on;
   els.dockPlay.classList.toggle('hidden', !on);
@@ -1969,7 +2046,7 @@ function hideSession() {
 
 function updateLayout() {
   const reading = !els.resultCard.classList.contains('hidden') && state.segments.length > 0;
-  const session = !els.progressCard.classList.contains('hidden') || !els.resultCard.classList.contains('hidden') || !els.resumeCard.classList.contains('hidden');
+  const session = !els.progressCard.classList.contains('hidden') || !els.resultCard.classList.contains('hidden') || !els.resumeCard.classList.contains('hidden') || !els.studio.classList.contains('hidden');
   document.body.classList.toggle('has-session', session);
   document.body.classList.toggle('reading', reading);
   els.dock.classList.toggle('hidden', !reading);
@@ -2009,6 +2086,7 @@ new IntersectionObserver(([e]) => {
 // Back to the start page (keeps the library). Not while a transcript is being made.
 function closeSession() {
   if (state.busy) return;
+  if (state.cleaning) { studio.close(); state.cleaning = false; document.body.classList.remove('cleaning'); }
   releaseAudio();
   setPlayable(false);
   state.source = null;
@@ -2704,8 +2782,203 @@ function offerResume(job, afterReload = true) {
 function startFile(file) {
   if (!file || state.busy) return;
   const fileId = `file:${file.name}:${file.size}:${file.lastModified}`;
-  run(async () => ({ kind: 'audio', title: file.name.replace(/\.[a-z0-9]{2,5}$/i, ''), file, fileId }));
+  start(async () => ({ kind: 'audio', title: file.name.replace(/\.[a-z0-9]{2,5}$/i, ''), file, fileId }));
 }
+
+/* ---------- clean-up mode ----------
+ * Same links and files as transcribing, but the episode goes to the clean-up studio
+ * (ui/studio.js) instead of the speech model. */
+
+const mode = () => els.modes.querySelector('input:checked')?.value || 'transcribe';
+
+function applyMode() {
+  const clean = mode() === 'clean';
+  els.go.textContent = clean ? 'Clean up' : 'Transcribe';
+  els.heroTitle.textContent = clean ? 'Fix how it sounds.' : 'Podcast to text.';
+  els.heroKicker.textContent = clean ? 'Clean up audio · runs in this browser' : 'New transcript · runs in this browser';
+  document.body.classList.toggle('mode-clean', clean);
+  updateSettingsSummary();
+}
+
+// Every way of starting (the link, the episode picker, a file) goes through here.
+function start(getSource) {
+  if (mode() === 'clean') runClean(getSource);
+  else run(getSource);
+}
+
+// A lighter "busy" than transcribing's: no cancel button or transcript tail, but the page is
+// kept awake and the command bar is locked.
+function setCleanBusy(on) {
+  state.busy = on;
+  window.__transcriberBusy = on;
+  document.body.classList.toggle('busy', on);
+  els.go.disabled = on;
+  els.file.disabled = on;
+  if (on) { startKeepAlive(); acquireWakeLock(); } else { stopKeepAlive(); releaseWakeLock(); }
+  els.cleanBtn.classList.toggle('hidden', on || !state.playable || !state.segments.length);
+}
+
+function saveBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
+function showStudioHeader(meta, { loading = false } = {}) {
+  els.studio.querySelector('#studio-title').textContent = meta?.title || 'Episode';
+  els.studio.querySelector('#studio-show').textContent = meta?.show ? `${meta.show} · clean up` : 'Clean up';
+  artInto(els.studio.querySelector('#studio-art'), meta, { loading });
+  els.topContext.textContent = [meta?.show, meta?.title].filter(Boolean).join(' · ') || 'Clean up';
+}
+
+function enterCleaning() {
+  state.cleaning = true;
+  document.body.classList.add('cleaning');
+  els.studio.classList.remove('hidden');
+  els.studio.querySelector('#studio-body').classList.add('hidden');
+  updateLayout();
+}
+
+function leaveCleaning() {
+  studio.close();
+  state.cleaning = false;
+  document.body.classList.remove('cleaning');
+  updateLayout();
+}
+
+async function runClean(getSource) {
+  if (state.busy) return;
+  clearError();
+  els.resumeCard.classList.add('hidden');
+  els.episodesCard.classList.add('hidden');
+  if (!els.progressCard.classList.contains('hidden') || !els.resultCard.classList.contains('hidden')) closeSession();
+  releaseAudio();
+  setPlayable(false);
+  const ctl = new AbortController();
+  state.abort = ctl;
+  const current = () => state.abort === ctl && !ctl.signal.aborted;
+  state.lastAttempt = () => runClean(getSource);
+  enterCleaning();
+  setCleanBusy(true);
+  showStudioHeader({ title: 'Finding the episode…' }, { loading: true });
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  progress('Looking up the episode', null, '');
+  try {
+    const source = await getSource();
+    if (!current()) return;
+    if (source.kind === 'list') {
+      setCleanBusy(false);
+      leaveCleaning();
+      showEpisodes(source);
+      return;
+    }
+    const key = audioKey(source.url || source.fileId);
+    state.source = { ...source, key };
+    state.audioKey = key;
+    state.sourceFile = source.file || null;
+    showStudioHeader(state.source);
+    let blob;
+    if (source.url) blob = await downloadAudio(source.url, key);
+    else blob = await storeAudio(key, new Response(source.file), () => source.file);
+    if (!current()) return;
+    await applyTags(blob, state.source);
+    showStudioHeader(state.source);
+    progress('Preparing the audio', null, '');
+    const audioBlob = await cleanableAudio(blob);
+    if (!current()) return;
+    await studio.open({ key, title: state.source.title, show: state.source.show, art: state.source.art, blob: audioBlob, url: source.url || '' });
+    if (!current()) return;
+    setCleanBusy(false);
+  } catch (err) {
+    if (!current()) return;
+    setCleanBusy(false);
+    if (err.name === 'AbortError') return;
+    if (err instanceof UserError) console.warn(err.message); else console.error(err);
+    if (!state.source) leaveCleaning();
+    showError(err instanceof UserError ? err.message : `Something went wrong: ${err.message || err}`,
+      err instanceof UserError ? "That didn't work" : 'Something went wrong', { retry: err.retry !== false });
+    els.errorCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+// From an open transcript: the same episode, its voices named after the transcript's speakers.
+async function cleanFromTranscript() {
+  if (state.busy || !state.playable) return;
+  const ctl = new AbortController();
+  state.abort = ctl;
+  enterCleaning();
+  setCleanBusy(true);
+  showStudioHeader(state.source);
+  els.studio.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  try {
+    let blob = state.sourceFile || (state.audioKey ? await cachedAudio(state.audioKey) : null);
+    if (!blob && state.source?.audio) {
+      progress('Downloading episode', null, 'From the server');
+      const res = await fetch(state.source.audio);
+      if (!res.ok) throw new UserError("Couldn't fetch this episode's audio from the server.");
+      blob = await res.blob();
+    }
+    if (!blob && state.source?.url) blob = await downloadAudio(state.source.url, state.audioKey);
+    if (!blob) throw new UserError('The audio for this transcript is no longer stored in this browser.');
+    if (state.abort !== ctl) return;
+    progress('Preparing the audio', null, '');
+    const audioBlob = await cleanableAudio(blob);
+    const speakers = state.segments.filter((x) => x.speaker != null && !state.minor?.has(Number(x.speaker)));
+    await studio.open({
+      key: state.audioKey || state.entryId, title: state.source?.title, show: state.source?.show, art: state.source?.art,
+      blob: audioBlob, url: state.source?.url || '', serverAudio: state.source?.audio || '', speakers, names: names(),
+    });
+    if (state.abort === ctl) setCleanBusy(false);
+  } catch (err) {
+    if (state.abort !== ctl) return;
+    setCleanBusy(false);
+    if (err.name === 'AbortError') return;
+    console.error(err);
+    leaveCleaning();
+    toast(err instanceof UserError ? err.message : "Couldn't open the clean-up for this episode.");
+  }
+}
+
+// The regenerated episode from the server, kept on disk (only the latest one).
+async function fetchCached(url) {
+  const abs = new URL(url, location.href).href;
+  let cache = null;
+  try { cache = await caches.open('transcriber-regen'); } catch {}
+  const hit = await cache?.match(abs).catch(() => null);
+  if (hit) return hit.blob();
+  const res = await fetch(abs);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (cache) {
+    try {
+      for (const k of await cache.keys()) if (k.url !== abs) await cache.delete(k);
+      await cache.put(abs, res.clone());
+      const stored = await cache.match(abs);
+      if (stored) return stored.blob();
+    } catch {}
+  }
+  return res.blob();
+}
+
+const studio = new Studio({
+  server: { available: false, base: '' },
+  fetchCached,
+  decodePieces,
+  decodeRange,
+  artInto,
+  toast,
+  saveBlob,
+  setBusy: setCleanBusy,
+  onStatus: (stage) => { els.topStatus.textContent = state.busy ? stage : DEFAULT_STATUS; },
+  onClose: () => {
+    if (state.busy) return;
+    // With a transcript open, only the studio goes; on its own, back to the start.
+    if (!els.resultCard.classList.contains('hidden') && state.segments.length) { leaveCleaning(); els.progressCard.scrollIntoView({ behavior: 'smooth', block: 'start' }); } else closeSession();
+  },
+});
 
 /* ---------- setup ---------- */
 
@@ -2784,6 +3057,11 @@ function foldSettings(fold) {
 }
 
 function updateSettingsSummary() {
+  if (document.body.classList.contains('cleaning') || document.body.classList.contains('mode-clean')) {
+    els.topCrumb.textContent = 'Clean up / 44.1 kHz / in this browser';
+    els.spineFoot.textContent = 'Clean up\nEvery voice its own chain\nNothing uploaded';
+    return;
+  }
   const m = MODELS[selectedModel()];
   els.settingsSummary.textContent = `${LANG_NAMES[language()]} · ${m?.name || ''} model`;
   els.spineFoot.textContent = `${LANG_NAMES[language()]} / ${m?.name || ''}\n${state.gpu.available ? 'GPU' : 'CPU'} / speakers ${speakersOn() ? 'on' : 'off'}\nNothing uploaded`;
@@ -2837,7 +3115,7 @@ function wireEvents() {
     }
     els.url.blur();
     els.settings.classList.remove('open');
-    run(() => resolveLink(value));
+    start(() => resolveLink(value));
   });
 
   if (navigator.clipboard?.readText) {
@@ -2867,6 +3145,8 @@ function wireEvents() {
   }
 
   els.cancel.addEventListener('click', cancel);
+  els.modes.addEventListener('change', () => { store.set('mode', mode()); applyMode(); });
+  els.cleanBtn.addEventListener('click', cleanFromTranscript);
   els.refineAll.addEventListener('click', () => refine());
   $('#refine-sel').addEventListener('click', () => { const w = selectedWindows() || state.lastSel; if (w) refine(w); });
   els.refineModel.addEventListener('change', () => { els.selModel.textContent = `with ${els.refineModel.selectedOptions[0]?.textContent || ''}`; });
@@ -2966,6 +3246,10 @@ async function init() {
   }
   els.proxy.value = store.get('proxy', '');
   els.glossary.value = store.get('glossary', '');
+  const savedMode = new URLSearchParams(location.search).get('mode') || store.get('mode', 'transcribe');
+  const modeRadio = els.modes.querySelector(`input[value="${CSS.escape(savedMode)}"]`);
+  if (modeRadio) modeRadio.checked = true;
+  applyMode();
   els.speakers.checked = speakersOn();
   try {
     state.canShareFiles = !!navigator.canShare?.({ files: [new File(['x'], 'x.txt', { type: 'text/plain' })] });
@@ -2997,6 +3281,14 @@ async function init() {
   if (job?.source && job.doneSec >= 0) offerResume(job);
   updateLayout();
 
+  // Regeneration needs this app's own server (transcriber.demant.app); a static copy (GitHub
+  // Pages) has none, and says so in its library index.
+  fetch('library/index.json', { cache: 'no-cache' })
+    .then((r) => (r.ok && /json/.test(r.headers.get('content-type') || '') ? r.json() : null))
+    .then((index) => (index && !index.static ? fetch('api/enhance/queue', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)) : null))
+    .then((q) => { if (q?.jobs) studio.deps.server.available = true; })
+    .catch(() => {});
+
   const shared = new URLSearchParams(location.search).get('url');
   if (shared) els.url.value = shared;
 }
@@ -3004,4 +3296,4 @@ async function init() {
 init();
 
 // For tests.
-export { decodePieces, decodeMono16k, toSrt };
+export { decodePieces, decodeMono16k, decodeRange, toSrt };

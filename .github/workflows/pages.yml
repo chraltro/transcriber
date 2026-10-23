@@ -25,7 +25,7 @@ jobs:
       - name: Collect site files
         run: |
           mkdir _site
-          cp index.html style.css app.js worker.js coi-sw.js .nojekyll _site/
+          cp index.html style.css app.js worker.js enhance-worker.js coi-sw.js .nojekyll _site/
           cp -r lib ui fonts _site/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

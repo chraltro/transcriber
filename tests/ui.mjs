@@ -146,12 +146,52 @@ async function run(name, contextOptions, audio) {
   await page.waitForSelector('#transcript .who');
   const reopened = await page.evaluate(() => document.querySelector('#transcript .who')?.textContent);
   check(!!reopened, `library reopens the transcript with speakers (${reopened})`);
-
-  check(!errors.length, `no page errors${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
   if (mobile) {
     const dock = await page.locator('#dock').isVisible();
     check(dock, 'phone dock is shown');
   }
+
+  // Clean up the same episode: the studio's voices are the transcript's speakers.
+  await page.waitForSelector('#clean-btn:not(.hidden)', { timeout: 10000 });
+  await page.click('#clean-btn');
+  await page.waitForSelector('#studio-body:not(.hidden)', { timeout: 120000 });
+  await page.waitForFunction(() => document.querySelector('#pv-loud').textContent && !document.querySelector('#pv-state').textContent, null, { timeout: 60000 });
+  const studio = await page.evaluate(() => ({
+    voices: [...document.querySelectorAll('.finding b')].map((b) => b.textContent),
+    tabs: document.querySelectorAll('.tab').length,
+    mods: document.querySelectorAll('.mod').length,
+    loud: document.querySelector('#pv-loud').textContent,
+  }));
+  check(studio.voices.length >= 2 && studio.voices.some((v) => /Derek|Anna/.test(v)), `studio voices are the speakers (${studio.voices.join(', ')})`);
+  check(studio.mods === 10 && studio.tabs === studio.voices.length + 1, `a card per module and a tab per voice (${studio.mods} cards, ${studio.tabs} tabs)`);
+  check(/LUFS/.test(studio.loud), `preview rendered (${studio.loud})`);
+  await page.locator('.mod:not(.on) .mod-switch').first().click();
+  await page.waitForFunction(() => !document.querySelector('#pv-state').textContent, null, { timeout: 60000 });
+  await page.locator('#studio').evaluate((e) => e.scrollIntoView({ block: 'start' }));
+  await shot('7-studio');
+  await noSideScroll('studio');
+  if (!mobile) {
+    await page.locator('#export-format label', { hasText: 'WAV' }).click();
+    const [wav] = await Promise.all([page.waitForEvent('download', { timeout: 120000 }), page.click('#export-go')]);
+    const bytes = (await readFile(await wav.path())).length;
+    const secs = (bytes - 44) / 2 / 44100;
+    check(wav.suggestedFilename().endsWith('(cleaned).wav') && Math.abs(secs - 420) < 1, `export is the whole episode (${wav.suggestedFilename()}, ${secs.toFixed(1)} s)`);
+  }
+  await page.click('#studio-close');
+  const back = await page.evaluate(() => document.querySelector('#studio').classList.contains('hidden') && !document.querySelector('#result-card').classList.contains('hidden'));
+  check(back, 'closing the studio leaves the transcript');
+
+  // Clean-up mode from the start page with a file.
+  await page.goto(BASE + '?mode=clean');
+  await page.waitForSelector('#go');
+  check((await page.locator('#go').textContent()) === 'Clean up', 'clean-up mode changes the button');
+  await page.setInputFiles('#file', audio);
+  await page.waitForSelector('#studio-body:not(.hidden)', { timeout: 120000 });
+  await page.waitForFunction(() => !document.querySelector('#pv-state').textContent, null, { timeout: 60000 });
+  await shot('8-studio-file');
+  await noSideScroll('studio from a file');
+
+  check(!errors.length, `no page errors${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
   await browser.close();
 }
 

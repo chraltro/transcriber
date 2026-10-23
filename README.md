@@ -31,6 +31,16 @@ Defaults: Large v3 Turbo with a GPU on desktop, Small on CPU, Base on phones. Wi
 
 Audio is decoded a minute at a time while earlier parts are transcribed, so memory use stays flat however long the episode is. Phones kill tabs that use too much memory and reload the page, so on a phone stick to Base or Tiny.
 
+## Clean up audio
+
+Switch the start page to **Clean up audio** (or press **Clean up audio** on an open transcript) to fix how an episode sounds instead of transcribing it. Everything runs in the browser at 44.1 kHz; `?mode=clean` opens the page in that mode.
+
+- **It listens first.** One pass over the episode (`lib/enhance/analyze.js`) finds the voices, by the transcript's speakers when there is one, otherwise by how they sound (mostly where a call or codec cuts the treble off), and measures what is wrong with each: the cut-off, dropouts (holes of near silence inside speech), how often a noise gate shuts, the background level, mains hum. That gives each voice suggested settings and finds its worst 20 seconds to preview first.
+- **Every voice gets its own chain** (`lib/enhance/chain.js`, `modules.js`), crossfaded where the voice changes: rumble filter, hum removal, mouth-click repair, dropout repair (holes filled from both sides, which a recording allows and a live call can't), noise reduction (from a noise profile of that voice's pauses), room-echo reduction, restored highs (spectral band replication above the cut-off), de-esser, tone, compressor. Then the whole episode goes through a leveler (to a loudness target in LUFS, measured as BS.1770 does), room tone under dead silence, and a limiter.
+- **A/B preview**: any 20 seconds, original against cleaned, re-rendered as a control moves, level-matched so the louder one doesn't win for being louder. **B** switches.
+- **Export** renders the whole episode with the same code as the preview (they match sample for sample: `tests/unit/enhance-modules.test.mjs`) to MP3 (lamejs, LGPL, in `lib/vendor/`) or WAV.
+- **Regenerate on the server** (only on transcriber.demant.app): stretches of a voice are rebuilt with [Resemble Enhance](https://huggingface.co/ResembleAI/resemble-enhance), a speech model too heavy for a browser, on GitHub's runners (`.github/workflows/enhance.yml`, `server/regen.mjs`, `server/regen/regen.py`). The result is the whole episode with those voices rebuilt and everything else untouched; switching **Use the regenerated voice** on makes it that voice's input to its chain. Jobs are queued on the server (`server/enhance.mjs`); the workflow looks every ten minutes, or at once if the server has a GitHub token in `GH_DISPATCH_TOKEN` (actions: write on this repository). Up to 80 minutes of voice per job, which takes about 3.5 times as long on a runner.
+
 ## Deploying to GitHub Pages
 
 It's plain static files, no build step.
@@ -71,6 +81,8 @@ Both run in GitHub Actions on every push to a `claude/**` branch that touches th
 - `index.html`, `style.css`: the page. Fonts (Newsreader, Geist, Geist Mono; SIL Open Font License) are self-hosted in `fonts/`
 - `app.js`: link resolution, downloading, decoding, UI
 - `worker.js`: runs Whisper off the main thread on audio streamed in from the page
+- `enhance-worker.js`: the clean-up's analysis, previews and export, off the main thread
+- `lib/enhance/`: the clean-up itself (DSP, modules, analysis, encoding); `ui/studio.js` is its page
 - `lib/`: the logic both use, kept free of the DOM so it can be unit tested (MP3/WAV indexing, ID3 tags, link parsing, text cleanup, paragraphs, waveform levels, splitting audio at pauses into 30 second windows, model choices, subtitles)
 - `ui/`: the waveform canvas and the library of recent transcripts
 - `coi-sw.js`: service worker that enables multi-threaded WASM on GitHub Pages

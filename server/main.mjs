@@ -17,6 +17,7 @@ import { transcribeEpisode } from './transcribe.mjs';
 import { MODELS, dtypeFor } from '../lib/models.js';
 import { SHOWS, idOf, metaOf, markdownOf } from './shows.mjs';
 import { verifyGithubToken } from './oidc.mjs';
+import { createEnhance } from './enhance.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = process.env.DATA_DIR || '/data';
@@ -200,7 +201,7 @@ const TYPES = {
   '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json',
   '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.txt': 'text/plain; charset=utf-8',
 };
-const PUBLIC = /^\/(index\.html|app\.js|worker\.js|coi-sw\.js|style\.css|(lib|ui|fonts)\/[\w./-]+|[\w-]+\.(png|svg|ico|webmanifest|txt))$/;
+const PUBLIC = /^\/(index\.html|app\.js|worker\.js|enhance-worker\.js|coi-sw\.js|style\.css|(lib|ui|fonts)\/[\w./-]+|[\w-]+\.(png|svg|ico|webmanifest|txt))$/;
 
 // With byte ranges: the audio element seeks with them.
 async function serveFile(req, res, file, { cache = 'no-cache' } = {}) {
@@ -230,10 +231,29 @@ async function serveFile(req, res, file, { cache = 'no-cache' } = {}) {
   }
 }
 
+// Regeneration jobs (server/enhance.mjs). The workflow polls for them every few minutes; with a
+// GitHub token in GH_DISPATCH_TOKEN (actions: write on this repository) a new job starts it at once.
+const SITE_URL = (process.env.PUBLIC_URL || 'https://transcriber.demant.app').replace(/\/$/, '');
+const dispatch = process.env.GH_DISPATCH_TOKEN ? async () => {
+  const repo = ENHANCE_WORKFLOW.split('/.github/')[0];
+  const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/enhance.yml/dispatches`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${process.env.GH_DISPATCH_TOKEN}`, accept: 'application/vnd.github+json', 'content-type': 'application/json' },
+    body: JSON.stringify({ ref: 'main' }),
+  });
+  if (!res.ok) throw new Error(`GitHub: HTTP ${res.status}`);
+} : null;
+const enhance = createEnhance({ dataDir: DATA, authorized: (req) => authorized(req, ENHANCE_WORKFLOW), log, site: SITE_URL, dispatch });
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const p = decodeURIComponent(url.pathname);
   if (p === '/healthz') { res.writeHead(200); res.end('ok'); return; }
+  if (p.startsWith('/api/enhance') && await enhance.handle(req, res, p)) return;
+  if (/^\/enhance\/[0-9a-f]{16}\.mp3$/.test(p)) {
+    await serveFile(req, res, path.join(enhance.dir, path.basename(p)), { cache: 'max-age=31536000, immutable' });
+    return;
+  }
   if (p.startsWith('/api/library/')) { await upload(req, res, p.slice('/api/library/'.length)); return; }
   if (p.startsWith('/library/')) {
     const name = p.slice('/library/'.length);
@@ -259,9 +279,12 @@ const server = http.createServer(async (req, res) => {
 // Only this repository's shows workflow, running on main (server/oidc.mjs).
 const AUDIENCE = process.env.UPLOAD_AUDIENCE || 'transcriber.demant.app';
 const WORKFLOW = process.env.UPLOAD_WORKFLOW || 'chraltro/transcriber/.github/workflows/shows.yml';
-async function authorized(req) {
+const ENHANCE_WORKFLOW = process.env.ENHANCE_WORKFLOW || 'chraltro/transcriber/.github/workflows/enhance.yml';
+async function authorized(req, workflow = WORKFLOW) {
+  // Local testing of the regeneration round trip only; never set on the real server.
+  if (process.env.ENHANCE_TEST_NO_AUTH === '1' && workflow === ENHANCE_WORKFLOW) return true;
   try {
-    await verifyGithubToken(req.headers.authorization?.replace(/^Bearer\s+/i, ''), { audience: AUDIENCE, workflow: WORKFLOW });
+    await verifyGithubToken(req.headers.authorization?.replace(/^Bearer\s+/i, ''), { audience: AUDIENCE, workflow });
     return true;
   } catch (err) {
     log(`upload refused: ${err.message}`);
@@ -300,6 +323,7 @@ async function upload(req, res, name) {
 /* ---------- start ---------- */
 
 await mkdir(LIB, { recursive: true });
+await enhance.init();
 state = { ...state, ...(await readJson(STATE_FILE, {})) };
 current = null;
 server.listen(PORT, () => log(`serving on :${PORT}; data in ${DATA}; model ${MODEL_KEY}; checking feeds every ${POLL_MIN} min`));

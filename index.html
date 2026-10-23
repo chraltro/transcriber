@@ -46,6 +46,8 @@
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
     <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.1 3.6 8.5s-1.2 6.2-3.6 8.5c-2.4-2.3-3.6-5.1-3.6-8.5s1.2-6.2 3.6-8.5z"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24"><path d="m14.5 6-6 6 6 6"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6"/></symbol>
     <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3.5H7.5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8z"/><path d="M14 3.5V8h4.5M10 16.5v-4.5l4-1v4.5"/><circle cx="9" cy="16.5" r="1.2"/><circle cx="13" cy="15.5" r="1.2"/></symbol>
   </svg>
 
@@ -85,13 +87,26 @@
       <li data-step="transcribe"><i></i><span id="step-transcribe">Transcribe</span><small class="note"></small></li>
       <li data-step="speakers"><i></i><span>Speakers</span><small class="note"></small></li>
     </ol>
+    <ol class="steps" id="steps-clean" aria-label="Clean-up progress">
+      <li data-step="find"><i></i><span>Find episode</span></li>
+      <li data-step="download"><i></i><span>Download</span></li>
+      <li data-step="listen"><i></i><span>Listen</span></li>
+      <li data-step="tune"><i></i><span>Tune</span></li>
+      <li data-step="export"><i></i><span>Export</span></li>
+    </ol>
     <p class="spine-foot" id="spine-foot"></p>
   </aside>
 
   <main id="main">
     <section class="hero panel" id="hero">
-      <p class="kicker">New transcript · runs in this browser</p>
-      <h1>Podcast to text.</h1>
+      <p class="kicker" id="hero-kicker">New transcript · runs in this browser</p>
+      <h1 id="hero-title">Podcast to text.</h1>
+
+      <fieldset class="segmented modes" id="modes">
+        <legend class="sr-only">What to do with the episode</legend>
+        <label><input type="radio" name="mode" value="transcribe" checked><span>Transcribe</span></label>
+        <label><input type="radio" name="mode" value="clean"><span>Clean up audio</span></label>
+      </fieldset>
 
       <form id="url-form" class="command" autocomplete="off" novalidate>
         <label for="url" class="sr-only">Podcast link</label>
@@ -220,6 +235,71 @@
           <button type="button" class="btn ghost small" id="refine-all">Refine all</button>
         </div>
         <button type="button" class="btn ghost small hidden" id="names-btn" aria-expanded="false" aria-controls="names-panel">Check names</button>
+        <button type="button" class="btn ghost small hidden" id="clean-btn"><svg class="icon"><use href="#i-sliders"/></svg><span>Clean up audio</span></button>
+      </div>
+    </section>
+
+    <section class="card studio hidden" id="studio" aria-labelledby="studio-title">
+      <div class="session-top">
+        <div class="art session-art" id="studio-art"></div>
+        <div class="session-info">
+          <p class="eyebrow" id="studio-show">Clean up</p>
+          <h2 id="studio-title">Episode</h2>
+        </div>
+        <button type="button" class="icon-btn session-close" id="studio-close" aria-label="Close the clean-up"><svg class="icon"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="studio-status" id="studio-status" aria-live="polite">
+        <div class="status-text">
+          <h3 id="studio-stage">Working</h3>
+          <p id="studio-detail"></p>
+        </div>
+        <div class="meter hidden"><span id="studio-meter"></span></div>
+      </div>
+      <div class="studio-body hidden" id="studio-body">
+        <div class="findings" id="studio-findings"></div>
+        <div class="preview">
+          <div class="overview" id="studio-overview" tabindex="0" role="slider" aria-label="Where the preview is in the episode" aria-valuemin="0" aria-valuemax="100">
+            <canvas id="studio-canvas"></canvas>
+            <span class="wave-tip" id="studio-tip"></span>
+          </div>
+          <div class="transport">
+            <button type="button" class="play" id="pv-play" aria-label="Play preview"><svg class="icon"><use href="#i-play"/></svg></button>
+            <fieldset class="segmented ab" id="pv-ab">
+              <legend class="sr-only">Listen to</legend>
+              <label><input type="radio" name="ab" value="orig"><span>Original</span></label>
+              <label><input type="radio" name="ab" value="clean" checked><span>Cleaned</span></label>
+            </fieldset>
+            <div class="pv-where"><b id="pv-where">0:00–0:20</b><small id="pv-where-sub"></small></div>
+            <div class="pv-nav">
+              <button type="button" class="icon-btn" id="pv-prev" aria-label="Previous trouble spot"><svg class="icon"><use href="#i-prev"/></svg></button>
+              <button type="button" class="icon-btn" id="pv-next" aria-label="Next trouble spot"><svg class="icon"><use href="#i-next"/></svg></button>
+            </div>
+            <label class="switch pv-match" title="Plays the original as loud as the cleaned version, so the louder one doesn't win for being louder"><input type="checkbox" id="pv-match" checked><span class="track"><span class="knob"></span></span><span class="switch-label">Level-matched</span></label>
+            <span class="pv-loud" id="pv-loud"></span>
+            <span class="pv-state" id="pv-state"></span>
+          </div>
+          <p class="panel-sub">Tap the strip to hear another 20 seconds · B switches between original and cleaned</p>
+        </div>
+        <div class="tabs" id="studio-tabs" role="tablist" aria-label="Voices"></div>
+        <div class="studio-panel" id="studio-panel" role="tabpanel"></div>
+        <div class="export">
+          <div>
+            <p class="kicker">Export</p>
+            <h3>The whole episode, cleaned</h3>
+          </div>
+          <div class="export-row">
+            <fieldset class="segmented" id="export-format">
+              <legend class="sr-only">File format</legend>
+              <label><input type="radio" name="format" value="mp3-192" checked><span>MP3 · 192 kbps</span></label>
+              <label><input type="radio" name="format" value="mp3-128"><span>MP3 · 128 kbps</span></label>
+              <label><input type="radio" name="format" value="wav-16"><span>WAV · 16-bit</span></label>
+            </fieldset>
+            <button type="button" class="btn primary" id="export-go"><svg class="icon"><use href="#i-download"/></svg><span>Export</span></button>
+            <button type="button" class="btn ghost small hidden" id="export-cancel">Cancel</button>
+          </div>
+          <div class="meter hidden"><span id="export-meter"></span></div>
+          <p class="hint" id="export-note">Renders in this browser, every setting above included: a few minutes for an hour-long episode.</p>
+        </div>
       </div>
     </section>
 
