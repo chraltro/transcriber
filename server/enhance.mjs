@@ -16,8 +16,11 @@ import path from 'node:path';
 import { pipeline as pipe } from 'node:stream/promises';
 
 export const MAX_MINUTES = 80; // of voice to regenerate per job: about 4 hours on a runner, under GitHub's 6
-const MAX_WAITING = 6;
+const MAX_WAITING = 3;
 const KEEP_DAYS = 14;
+const MAX_UPLOAD = 200e6; // one result; regen.py leaves everything outside the stretches silent
+const MAX_DISK = 1.5e9; // all results together: the oldest go first
+const QUEUE_HOURS = 24; // a job no runner picked up in a day is dropped
 
 export function jobId(url, ranges) {
   return createHash('sha1').update(`${url}\n${JSON.stringify(ranges)}`).digest('hex').slice(0, 16);
@@ -40,6 +43,7 @@ export function validate(body, { site = '' } = {}) {
     else merged.push([a, b]);
   }
   if (!merged.length) throw new Error('Nothing to regenerate');
+  if (merged[merged.length - 1][1] > 6 * 3600) throw new Error('Episodes up to six hours');
   if (merged.length > 400) throw new Error('Too many stretches');
   const total = merged.reduce((s, [a, b]) => s + (b - a), 0);
   if (total > MAX_MINUTES * 60) throw new Error(`That is ${Math.round(total / 60)} minutes of voice; the server takes up to ${MAX_MINUTES} at a time`);
@@ -91,15 +95,31 @@ export function createEnhance({ dataDir, authorized, log = console.log, site = '
   }
 
   async function prune() {
-    for (const j of await all()) {
+    const jobs = await all();
+    for (const j of jobs) {
       const age = Date.now() - (j.finishedAt || j.createdAt || 0);
       if (age > KEEP_DAYS * 864e5) {
         await rm(file(j.id, 'mp3'), { force: true });
         await rm(file(j.id, 'json'), { force: true });
+      } else if (j.status === 'queued' && Date.now() - j.createdAt > QUEUE_HOURS * 3600e3) {
+        await writeJob({ ...j, status: 'failed', message: 'No runner took it within a day', finishedAt: Date.now() });
       } else if (j.status === 'working' && Date.now() - (j.updatedAt || j.startedAt || 0) > 7 * 3600e3) {
         // A runner that went quiet for longer than GitHub lets a job run has died.
         await writeJob({ ...j, status: 'failed', message: 'The runner stopped without finishing', finishedAt: Date.now() });
       }
+    }
+    // Disk budget: the oldest results go first.
+    let used = 0;
+    const done = [];
+    for (const j of jobs) {
+      const s = await stat(file(j.id, 'mp3')).catch(() => null);
+      if (s) { used += s.size; done.push([j, s.size]); }
+    }
+    for (const [j, size] of done.sort((a, b) => (a[0].finishedAt || 0) - (b[0].finishedAt || 0))) {
+      if (used <= MAX_DISK) break;
+      await rm(file(j.id, 'mp3'), { force: true });
+      await writeJob({ ...j, status: 'failed', message: 'Removed to make room', finishedAt: j.finishedAt || Date.now() });
+      used -= size;
     }
   }
 
@@ -154,9 +174,16 @@ export function createEnhance({ dataDir, authorized, log = console.log, site = '
           await writeJob(next);
           if (next.status !== job.status) log(`regeneration ${id}: ${next.status}${next.message ? ` (${next.message})` : ''}`);
         } else {
+          if (Number(req.headers['content-length'] || 0) > MAX_UPLOAD) throw new Error('Too big');
           const tmp = `${file(id, 'mp3')}.part`;
-          await pipe(req, createWriteStream(tmp));
+          let size = 0;
+          try {
+            await pipe(req, async function* (src) {
+              for await (const c of src) { size += c.length; if (size > MAX_UPLOAD) throw new Error('Too big'); yield c; }
+            }, createWriteStream(tmp));
+          } catch (err) { await rm(tmp, { force: true }); throw err; }
           await rename(tmp, file(id, 'mp3'));
+          await prune().catch(() => {});
         }
         send(res, 200, { ok: true });
       } catch (err) {

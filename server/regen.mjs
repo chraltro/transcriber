@@ -5,7 +5,7 @@
 //   node server/regen.mjs --check   only says whether there is work (for the workflow's next steps)
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { appendFile, readFile, rm, writeFile, mkdtemp } from 'node:fs/promises';
+import { appendFile, readFile, rm, writeFile, mkdtemp, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -94,6 +94,8 @@ try {
   const wav = path.join(dir, 'in.wav');
   // Decoded the same way for every job; the page lines the result up with its own decoding.
   await run('ffmpeg', ['-v', 'error', '-y', '-i', src, '-ac', '1', '-ar', '44100', '-c:a', 'pcm_f32le', wav]);
+  const seconds = ((await stat(wav)).size - 44) / 4 / 44100;
+  if (seconds > 4 * 3600) throw new Error(`The episode is ${Math.round(seconds / 60)} minutes long; regeneration takes episodes up to four hours`);
   await writeFile(path.join(dir, 'ranges.json'), JSON.stringify(job.ranges));
   await status(job.id, { status: 'working', progress: 0, message: 'Loading the model' });
   let lastPut = 0;
@@ -109,7 +111,8 @@ try {
     },
   });
   const mp3 = path.join(dir, 'out.mp3');
-  await run('ffmpeg', ['-v', 'error', '-y', '-i', out, '-c:a', 'libmp3lame', '-b:a', '192k', mp3]);
+  // Variable bit rate: the silence around the regenerated stretches costs next to nothing.
+  await run('ffmpeg', ['-v', 'error', '-y', '-i', out, '-c:a', 'libmp3lame', '-q:a', '2', mp3]);
   await put(`${job.id}.mp3`, await readFile(mp3), 'audio/mpeg');
   await status(job.id, { status: 'done', progress: 1, message: '' });
   log(`done in ${Math.round((Date.now() - t0) / 60000)} min`);

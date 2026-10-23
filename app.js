@@ -1385,7 +1385,9 @@ async function cleanableAudio(blob) {
   if (await indexMp3(blob)) return blob;
   const wav = await indexWav(blob);
   if (wav && wav.format !== 0xfffe) return blob;
-  if (blob.size > (IS_MOBILE ? 30e6 : 150e6)) {
+  // Decoding in one go needs the file's own channels at full rate (plus copies): about 20 times
+  // the file size for a typical AAC. Past these sizes a tab runs out of memory.
+  if (blob.size > (IS_MOBILE ? 12e6 : 50e6)) {
     throw new UserError(`This episode's audio format (${blob.type || 'not MP3'}) has to be decoded in one go for the clean-up, and at ${fmtBytes(blob.size)} that needs more memory than ${IS_MOBILE ? 'a phone' : 'this browser'} allows. Find an MP3 version of the episode.`);
   }
   const pcm = await decodeMono(await blob.arrayBuffer(), CLEAN_RATE);
@@ -2211,6 +2213,7 @@ async function renderShelf() {
 
 async function openEntry(entry) {
   if (state.busy) return;
+  if (state.cleaning) leaveCleaning();
   clearError();
   releaseAudio();
   state.source = { title: entry.title, show: entry.show, art: entry.art, url: entry.source?.url, fileId: entry.source?.fileId, key: entry.key, notes: entry.notes || '', audio: entry.audio || '' };
@@ -2319,6 +2322,7 @@ async function applyTags(blob, source) {
 // one, so a cancelled or replaced run can never touch the page, the worker or saved progress.
 async function run(getSource, resume = null) {
   if (state.busy) return;
+  if (state.cleaning) leaveCleaning();
   clearError();
   els.resumeCard.classList.add('hidden');
   els.episodesCard.classList.add('hidden');
@@ -2974,7 +2978,8 @@ const studio = new Studio({
   setBusy: setCleanBusy,
   onStatus: (stage) => { els.topStatus.textContent = state.busy ? stage : DEFAULT_STATUS; },
   onClose: () => {
-    if (state.busy) return;
+    // Closing stops whatever the studio is doing (listening, exporting).
+    if (state.busy) { state.abort?.abort(); setCleanBusy(false); }
     // With a transcript open, only the studio goes; on its own, back to the start.
     if (!els.resultCard.classList.contains('hidden') && state.segments.length) { leaveCleaning(); els.progressCard.scrollIntoView({ behavior: 'smooth', block: 'start' }); } else closeSession();
   },

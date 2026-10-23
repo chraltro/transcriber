@@ -517,7 +517,6 @@ export class Studio {
     const from = Math.max(0, Math.min(Math.max(0, dur - PREVIEW), Math.round(start)));
     this.pv.from = from;
     this.pv.to = Math.min(dur, from + PREVIEW);
-    this.pv.orig = null;
     this.pv.why = why;
     this.updateWhere();
     this.drawOverview();
@@ -536,23 +535,26 @@ export class Studio {
     const seq = ++this.pv.seq;
     const { from, to } = this.pv;
     const pre = Math.min(PREROLL, from);
-    const key = JSON.stringify([from, to, this.settings, !!this.alt]);
+    const altId = this.alt?.id || null;
+    const key = JSON.stringify([from, to, this.settings, altId]);
     if (key === this.pv.rendered && this.pv.proc) { this.els.pvState.textContent = ''; return; }
     this.els.pvState.textContent = 'Rendering';
     try {
-      if (!this.pv.orig || this.pv.origFrom !== from) {
-        const x = await this.deps.decodeRange(this.source.blob, from - pre, to, RATE);
+      // The decoded stretch (and its regenerated twin) are kept as one, for one window.
+      let src = this.pv.src;
+      if (!src || src.from !== from || src.to !== to || src.altId !== altId) {
+        const full = await this.deps.decodeRange(this.source.blob, from - pre, to, RATE);
+        const altFull = this.alt ? await this.alt.range(from - pre, to) : null;
         if (seq !== this.pv.seq) return;
-        this.pv.origFull = x;
-        this.pv.orig = x.subarray(Math.round(pre * RATE));
-        this.pv.origFrom = from;
-        this.pv.altFull = this.alt ? await this.alt.range(from - pre, to) : null;
-        if (seq !== this.pv.seq) return;
+        src = { from, to, pre, full, altFull, altId };
+        this.pv.src = src;
       }
-      const samples = this.pv.origFull.slice();
-      const alt = this.pv.altFull ? this.pv.altFull.slice() : null;
-      const res = await this.ask({ type: 'preview', id: `p${seq}`, settings: this.settings, samples, alt, from: from - pre, skip: Math.round(pre * RATE) }, 'preview', alt ? [samples.buffer, alt.buffer] : [samples.buffer]);
+      const samples = src.full.slice();
+      const alt = src.altFull ? src.altFull.slice() : null;
+      const res = await this.ask({ type: 'preview', id: `p${seq}`, settings: this.settings, samples, alt, from: from - src.pre, skip: Math.round(src.pre * RATE) }, 'preview', alt ? [samples.buffer, alt.buffer] : [samples.buffer]);
       if (seq !== this.pv.seq) return;
+      // Original and cleaned change together: A/B always compares the same stretch.
+      this.pv.orig = src.full.subarray(Math.round(src.pre * RATE));
       this.pv.proc = res.samples;
       this.pv.loud = { input: res.input, output: res.output };
       this.pv.rendered = key;
@@ -855,7 +857,7 @@ export class Studio {
     const idx = new Set(ids.map((id) => this.analysis.voices.findIndex((v) => v.id === id)));
     const out = [];
     for (const s of this.analysis.timeline) {
-      if (!idx.has(s.voice) || s.end - s.start < 1) continue;
+      if (!idx.has(s.voice)) continue;
       const last = out[out.length - 1];
       if (last && s.start - last[1] < 1.5) last[1] = s.end; else out.push([s.start, s.end]);
     }
@@ -951,7 +953,7 @@ export class Studio {
   async useAlt() {
     const job = this.regen;
     const want = job?.status === 'done' && Object.values(this.settings?.voices || {}).some((v) => v.regen);
-    if (!want) { if (this.alt) { this.alt = null; this.pv.orig = null; this.renderPreview(); } return; }
+    if (!want) { if (this.alt) { this.alt = null; this.renderPreview(); } return; }
     if (this.alt?.id === job.id || this.altLoading === job.id) return;
     this.altLoading = job.id;
     try {
@@ -985,12 +987,11 @@ export class Studio {
           };
         },
       };
-      this.pv.orig = null;
       if (this.tab !== 'master') this.renderPanel();
       this.renderPreview();
     } catch (err) {
       console.error(err);
-      this.deps.toast?.("Couldn't load the regenerated voice");
+      this.deps.toast?.(err.userMessage || "Couldn't load the regenerated voice");
     } finally {
       this.altLoading = null;
     }
@@ -998,15 +999,25 @@ export class Studio {
 
   // Seconds by which the regenerated file runs late against this decoding: cross-correlation of
   // the two loudness envelopes (1 ms resolution), which survive the voice being re-synthesised,
-  // over 8 s, preferring a stretch the model left alone.
+  // over 8 s of regenerated voice (the file is silent elsewhere), at up to three places.
   async alignment(blob, ranges) {
-    const dur = this.analysis.duration;
-    let at = Math.min(30, Math.max(0, dur - 10));
-    let prev = 0;
-    for (const [a, b] of [...ranges, [dur, dur]]) {
-      if (a - prev >= 10 && prev + 1 < dur - 9) { at = prev + 1; break; }
-      prev = b;
+    const longest = [...ranges].sort((x, y) => (y[1] - y[0]) - (x[1] - x[0]));
+    const spots = longest.filter(([a, b]) => b - a >= 9).slice(0, 3);
+    const at = (spots.length ? spots : longest.slice(0, 1)).map(([a, b]) => Math.max(0, Math.max(a, (a + b) / 2 - 4)));
+    const lags = [];
+    for (const t of at) lags.push(await this.alignAt(blob, t));
+    lags.sort((x, y) => x - y);
+    // The server downloads the episode itself; a host that inserts different ads per download
+    // gives it a copy that drifts against this one. Then it can't be used.
+    if (lags[lags.length - 1] - lags[0] > 0.02) {
+      const err = new Error(`offsets disagree: ${lags.join(', ')}`);
+      err.userMessage = "The server's copy of this episode doesn't line up with this one (the host probably put different ads in it), so the regenerated voice can't be used";
+      throw err;
     }
+    return lags[Math.floor(lags.length / 2)];
+  }
+
+  async alignAt(blob, at) {
     const maxLag = Math.round(0.25 * RATE);
     const n = 8 * RATE;
     const x = await this.deps.decodeRange(this.source.blob, at, at + n / RATE, RATE);

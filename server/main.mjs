@@ -246,8 +246,19 @@ const dispatch = process.env.GH_DISPATCH_TOKEN ? async () => {
 const enhance = createEnhance({ dataDir: DATA, authorized: (req) => authorized(req, ENHANCE_WORKFLOW), log, site: SITE_URL, dispatch });
 
 const server = http.createServer(async (req, res) => {
+  try {
+    await route(req, res);
+  } catch (err) {
+    // Never let one odd request take the server down.
+    log(`request failed: ${req.method} ${String(req.url).slice(0, 200)}: ${err.message}`);
+    if (!res.headersSent) { res.writeHead(400, { 'content-type': 'text/plain' }); res.end('Bad request'); } else res.destroy();
+  }
+});
+
+async function route(req, res) {
   const url = new URL(req.url, 'http://x');
-  const p = decodeURIComponent(url.pathname);
+  let p;
+  try { p = decodeURIComponent(url.pathname); } catch { res.writeHead(400); res.end('Bad request'); return; }
   if (p === '/healthz') { res.writeHead(200); res.end('ok'); return; }
   if (p.startsWith('/api/enhance') && await enhance.handle(req, res, p)) return;
   if (/^\/enhance\/[0-9a-f]{16}\.mp3$/.test(p)) {
@@ -272,7 +283,7 @@ const server = http.createServer(async (req, res) => {
   }
   res.writeHead(404, { 'content-type': 'text/plain' });
   res.end('Not found');
-});
+}
 
 /* ---------- uploads from the GitHub workflow ---------- */
 

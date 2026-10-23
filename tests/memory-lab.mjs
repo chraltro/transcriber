@@ -28,7 +28,7 @@ function traceApp(src) {
     .replace('async function indexMp3(blob) {', `async function indexMp3(blob) {\n  ${t('indexMp3 start size', 'blob.size')}`)
     .replace("  if (/Xing|Info|VBRI/.test(first)) offsets.shift();\n  return { offsets, spf, sr };", `  if (/Xing|Info|VBRI/.test(first)) offsets.shift();\n  ${t('indexMp3 done frames', 'offsets.length')}\n  return { offsets, spf, sr };`)
     .replace('  if (offsets.length < 50 || covered < size * 0.8) return null;', `  if (offsets.length < 50 || covered < size * 0.8) { ${t('indexMp3 not mp3', 'offsets.length + " " + covered')} return null; }`)
-    .replace('async function decodeMono16k(arrayBuffer) {', `async function decodeMono16k(arrayBuffer) {\n  ${t('decode start bytes', 'arrayBuffer.byteLength')}`)
+    .replace('async function decodeMono(arrayBuffer, rate) {', `async function decodeMono(arrayBuffer, rate) {\n  ${t('decode start bytes', 'arrayBuffer.byteLength')}`)
     .replace('  if (audio.numberOfChannels === 1) return audio.getChannelData(0).slice();', `  ${t('decode done samples', 'audio.length + " ch " + audio.numberOfChannels + " sr " + audio.sampleRate')}\n  if (audio.numberOfChannels === 1) return audio.getChannelData(0).slice();`)
     .replace("    worker.postMessage({ type: 'audio', samples: piece }, [piece.buffer]);", `    ${t('post piece seconds', 'piece.length / 16000')}\n    worker.postMessage({ type: 'audio', samples: piece }, [piece.buffer]);`)
     .replace("  worker.onmessage = ({ data: m }) => {", `  worker.onmessage = ({ data: m }) => {\n    if (m.type !== 'model-progress') ${t('worker msg', "m.type + ' ' + (m.end ?? m.seconds ?? m.message ?? '')")}`);

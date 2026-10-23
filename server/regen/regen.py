@@ -3,8 +3,9 @@ flow-matching enhancer trained to turn degraded speech into studio speech).
 
     python regen.py in.wav out.wav --ranges ranges.json --model <dir with enhancer_stage2>
 
-in.wav is mono float at 44.1 kHz. Outside the ranges the output is the input, sample for sample,
-so the page can switch between the two per voice. Progress goes to stdout as JSON lines.
+in.wav is mono float at 44.1 kHz. The output has the same length and timing; outside the ranges
+(plus a little padding) it is silent: the page only ever uses it inside them, and it keeps the file
+from being a copy of the whole episode. Progress goes to stdout as JSON lines.
 """
 import argparse
 import json
@@ -95,7 +96,7 @@ def main():
         raise SystemExit(f"expected {RATE} Hz, got {sr}")
     with open(args.ranges) as f:
         ranges = json.load(f)
-    out = x.copy()
+    out = np.zeros_like(x)
     total = sum(max(0, min(b, len(x) / RATE) - a) for a, b in ranges)
     done = 0.0
     t0 = time.time()
@@ -118,11 +119,9 @@ def main():
         # Into the output with short crossfades at both ends.
         w = np.ones(len(y), np.float32)
         k = min(FADE, len(y) // 4)
-        if s > 0:
-            w[:k] = np.linspace(0, 1, k)
-        if e < len(x):
-            w[-k:] = np.linspace(1, 0, k)
-        out[s:e] = w * y + (1 - w) * x[s:e]
+        w[:k] = np.linspace(0, 1, k)
+        w[-k:] = np.linspace(1, 0, k)
+        out[s:e] = (1 - w) * out[s:e] + w * y  # fades in and out of silence
     peak = float(np.max(np.abs(out))) if len(out) else 0
     if peak > 0.999:
         out *= 0.999 / peak
