@@ -808,7 +808,7 @@ export class Studio {
     } finally {
       this.onChunk = null;
       this.exporting = null;
-      this.deps.setBusy?.(false);
+      if (job === this.jobId) this.deps.setBusy?.(false);
       els.exportBtn.disabled = false;
       els.exportCancel.classList.add('hidden');
     }
@@ -888,6 +888,16 @@ export class Studio {
       row.append(el('span', 'regen-state', job.status === 'queued' ? 'Waiting for a runner (they check every ten minutes)' : `Regenerating · ${pct}${eta}${job.message ? ` · ${job.message}` : ''}`));
     } else {
       if (covered && job.status === 'failed') row.append(el('span', 'regen-state bad', `Failed: ${job.message || 'no reason given'}`));
+      if (this.deps.server.needsKey && !load('enhance-key')) {
+        const field = el('input', 'key-field');
+        field.type = 'password';
+        field.placeholder = 'Server key';
+        field.setAttribute('aria-label', 'Server key');
+        field.addEventListener('change', () => { save('enhance-key', field.value.trim()); this.renderPanel(); });
+        row.append(field);
+        box.append(row);
+        return box;
+      }
       const b = el('button', 'btn ghost small', covered ? 'Try again' : 'Regenerate on the server');
       b.type = 'button';
       b.addEventListener('click', () => this.regenStart(v.id, b));
@@ -903,10 +913,15 @@ export class Studio {
     button.disabled = true;
     try {
       const res = await fetch(`${this.deps.server.base}api/enhance`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-enhance-key': load('enhance-key') || '' },
         body: JSON.stringify({ url: this.regenUrl(), title: this.source.title, show: this.source.show, ranges: this.voiceRanges(voices) }),
       });
       const job = await res.json();
+      if (res.status === 401 && job.needsKey) {
+        this.deps.server.needsKey = true;
+        this.renderPanel();
+        throw new Error('it needs its key first');
+      }
       if (!res.ok) throw new Error(job.error || `HTTP ${res.status}`);
       this.regen = { ...job, voices };
       save(this.regenKey(), this.regen);
@@ -1001,9 +1016,18 @@ export class Studio {
   // the two loudness envelopes (1 ms resolution), which survive the voice being re-synthesised,
   // over 8 s of regenerated voice (the file is silent elsewhere), at up to three places.
   async alignment(blob, ranges) {
-    const longest = [...ranges].sort((x, y) => (y[1] - y[0]) - (x[1] - x[0]));
-    const spots = longest.filter(([a, b]) => b - a >= 9).slice(0, 3);
-    const at = (spots.length ? spots : longest.slice(0, 1)).map(([a, b]) => Math.max(0, Math.max(a, (a + b) / 2 - 4)));
+    // Places spread over the episode (near 15, 50 and 85 % of it), inside regenerated stretches,
+    // so an ad break between them shows up as a disagreement.
+    const dur = this.analysis.duration;
+    const long = ranges.filter(([a, b]) => b - a >= 9);
+    const pool = long.length ? long : [...ranges].sort((x, y) => (y[1] - y[0]) - (x[1] - x[0])).slice(0, 3);
+    const at = [];
+    for (const q of [0.15, 0.5, 0.85]) {
+      const target = q * dur;
+      const r = [...pool].sort((x, y) => Math.abs((x[0] + x[1]) / 2 - target) - Math.abs((y[0] + y[1]) / 2 - target))[0];
+      const t = Math.max(r[0], Math.min(r[1] - 8, target - 4));
+      if (!at.some((u) => Math.abs(u - t) < 20)) at.push(Math.max(0, t));
+    }
     const lags = [];
     for (const t of at) lags.push(await this.alignAt(blob, t));
     lags.sort((x, y) => x - y);

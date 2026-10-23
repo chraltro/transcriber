@@ -1109,6 +1109,8 @@ input[type="range"]:disabled { cursor: default; opacity: 0.4; }
 .regen-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
 .regen-row .switch { padding: 0; }
 .regen-state { font: 500 12px var(--font-mono); color: var(--accent); }
+.key-field { height: 32px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--bg); font-size: 14px; outline: none; }
+.key-field:focus { border-color: var(--teal); }
 .regen-state.ok { color: var(--ok); }
 .regen-state.bad { color: var(--danger); }
 .export { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--line); }

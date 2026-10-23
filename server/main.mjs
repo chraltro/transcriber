@@ -243,7 +243,7 @@ const dispatch = process.env.GH_DISPATCH_TOKEN ? async () => {
   });
   if (!res.ok) throw new Error(`GitHub: HTTP ${res.status}`);
 } : null;
-const enhance = createEnhance({ dataDir: DATA, authorized: (req) => authorized(req, ENHANCE_WORKFLOW), log, site: SITE_URL, dispatch });
+const enhance = createEnhance({ dataDir: DATA, authorized: (req) => authorized(req, ENHANCE_WORKFLOW), log, site: SITE_URL, dispatch, key: process.env.ENHANCE_KEY || '' });
 
 const server = http.createServer(async (req, res) => {
   try {

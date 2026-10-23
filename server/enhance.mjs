@@ -57,7 +57,9 @@ export function validate(body, { site = '' } = {}) {
   };
 }
 
-export function createEnhance({ dataDir, authorized, log = console.log, site = '', dispatch = null }) {
+// key: when set, queueing a job needs it (header x-enhance-key), so strangers can't fill the
+// queue or the disk; reading status stays open.
+export function createEnhance({ dataDir, authorized, log = console.log, site = '', dispatch = null, key = '', maxDisk = MAX_DISK, maxUpload = MAX_UPLOAD }) {
   const DIR = path.join(dataDir, 'enhance');
   const file = (id, ext) => path.join(DIR, `${id}.${ext}`);
   const readJob = async (id) => { try { return JSON.parse(await readFile(file(id, 'json'), 'utf8')); } catch { return null; } };
@@ -94,7 +96,7 @@ export function createEnhance({ dataDir, authorized, log = console.log, site = '
     return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
   }
 
-  async function prune() {
+  async function prune(keep = null) {
     const jobs = await all();
     for (const j of jobs) {
       const age = Date.now() - (j.finishedAt || j.createdAt || 0);
@@ -115,8 +117,9 @@ export function createEnhance({ dataDir, authorized, log = console.log, site = '
       const s = await stat(file(j.id, 'mp3')).catch(() => null);
       if (s) { used += s.size; done.push([j, s.size]); }
     }
-    for (const [j, size] of done.sort((a, b) => (a[0].finishedAt || 0) - (b[0].finishedAt || 0))) {
-      if (used <= MAX_DISK) break;
+    const evictable = done.filter(([j]) => j.id !== keep && j.status === 'done' && j.finishedAt);
+    for (const [j, size] of evictable.sort((a, b) => a[0].finishedAt - b[0].finishedAt)) {
+      if (used <= maxDisk) break;
       await rm(file(j.id, 'mp3'), { force: true });
       await writeJob({ ...j, status: 'failed', message: 'Removed to make room', finishedAt: j.finishedAt || Date.now() });
       used -= size;
@@ -126,6 +129,7 @@ export function createEnhance({ dataDir, authorized, log = console.log, site = '
   // -> true if it handled the request
   async function handle(req, res, p) {
     if (p === '/api/enhance' && req.method === 'POST') {
+      if (key && req.headers['x-enhance-key'] !== key) return send(res, 401, { error: 'This server needs its key to regenerate', needsKey: true }), true;
       try {
         const want = validate(await body(req), { site });
         const id = jobId(want.url, want.ranges);
@@ -146,7 +150,7 @@ export function createEnhance({ dataDir, authorized, log = console.log, site = '
     if (p === '/api/enhance/queue' && req.method === 'GET') {
       await prune().catch(() => {});
       const jobs = (await all()).filter((j) => j.status === 'queued' || j.status === 'working');
-      send(res, 200, { jobs: jobs.map((j) => ({ ...publicJob(j), url: j.url })) });
+      send(res, 200, { jobs: jobs.map((j) => ({ ...publicJob(j), url: j.url })), needsKey: !!key });
       return true;
     }
     let m = p.match(/^\/api\/enhance\/([0-9a-f]{16})$/);
@@ -174,16 +178,16 @@ export function createEnhance({ dataDir, authorized, log = console.log, site = '
           await writeJob(next);
           if (next.status !== job.status) log(`regeneration ${id}: ${next.status}${next.message ? ` (${next.message})` : ''}`);
         } else {
-          if (Number(req.headers['content-length'] || 0) > MAX_UPLOAD) throw new Error('Too big');
+          if (Number(req.headers['content-length'] || 0) > maxUpload) throw new Error('Too big');
           const tmp = `${file(id, 'mp3')}.part`;
           let size = 0;
           try {
             await pipe(req, async function* (src) {
-              for await (const c of src) { size += c.length; if (size > MAX_UPLOAD) throw new Error('Too big'); yield c; }
+              for await (const c of src) { size += c.length; if (size > maxUpload) throw new Error('Too big'); yield c; }
             }, createWriteStream(tmp));
           } catch (err) { await rm(tmp, { force: true }); throw err; }
           await rename(tmp, file(id, 'mp3'));
-          await prune().catch(() => {});
+          await prune(id).catch(() => {});
         }
         send(res, 200, { ok: true });
       } catch (err) {
