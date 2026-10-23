@@ -1,3 +1,4 @@
+// (baseline run of the link checks on main; this branch is temporary)
 // End-to-end test: loads the app in headless Chromium with real network access,
 // pastes real podcast links and waits for actual Whisper output.
 // Run: node tests/e2e.mjs  (needs `npm i playwright` and `npx playwright install chromium`)
