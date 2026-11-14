@@ -6,7 +6,8 @@ import { statusOf, fractionOf } from '../lib/podstate.js';
 import { leftText, lengthText, timeIn, fmtSpeed } from '../lib/playback.js';
 import { parseOpml, toOpml } from '../lib/feed.js';
 import { CHOICES } from '../lib/autosave.js';
-import { longPress, swipeActions } from './gestures.js';
+import { longPress, swipeActions, pullToRefresh } from './gestures.js';
+import { snapshot, swapIcon, closeUp, openUp } from './motion.js';
 import { notifyCard } from './notify.js';
 
 const $ = (id) => document.getElementById(id);
@@ -197,7 +198,10 @@ export class Pod {
     const status = statusOf(prog);
     const now = player.item?.id === ep.id;
     const playing = now && player.playing;
-    li.className = `ep is-${status}${now ? ' now' : ''}`;
+    // (Only what this paints: a row's other marks, queued or on its way out, stay.)
+    li.classList.remove('is-new', 'is-started', 'is-done');
+    li.classList.add('ep', `is-${status}`);
+    li.classList.toggle('now', now);
     const d = prog?.d || ep.duration || 0;
     const saving = downloads.progress(ep.id);
     const bits = [
@@ -213,9 +217,9 @@ export class Pod {
     if (saving != null) meta.append(h('span.tag.hot', { text: `Saving ${Math.round(saving * 100)}%` }));
     else if (downloads.has(ep.id)) meta.append(h('span.tag', { text: 'Saved' }));
     // (In the queue's own list everything is queued: it goes without saying.)
-    if (store.queued(ep.id) && !now && !li.closest('#pod-queue')) meta.append(h('span.tag', { text: 'Queued' }));
+    if (store.queued(ep.id) && !now && !li.closest('#pod-queue') && !li.classList.contains('queued')) meta.append(h('span.tag', { text: 'Queued' }));
     const play = li.querySelector('.ep-play');
-    setIcon(play, playing ? 'pause' : 'play');
+    swapIcon(play, playing ? 'pause' : 'play');
     play.classList.toggle('playing', playing);
     play.setAttribute('aria-label', `${playing ? 'Pause' : status === 'started' ? 'Carry on with' : 'Play'} ${ep.title}`);
     li.querySelector('.ep-bar span').style.width = `${(now && d ? Math.min(1, player.time / d) : fractionOf(prog, ep.duration)) * 100}%`;
@@ -250,12 +254,16 @@ export class Pod {
   }
 
   // Played, and out of Carry on; undone, it is back where it was.
+  // (In New episodes showing only what is not played, the row closes up at once, and opens again
+  // on Undo.)
   played(ep) {
     const { store, player } = this;
     const had = { ...store.progress(ep.id) };
+    const unplayed = () => { if (this.view === 'home' && this.filter === 'new' && this.inbox) this.drawLatest(); };
     store.markPlayed(ep, true);
     if (player.item?.id !== ep.id) store.queueRemove(ep.id);
-    this.toast('Marked as played', { label: 'Undo', run: () => store.setProgress(ep, { p: had.p || 0, d: had.d || 0, done: !!had.done }) });
+    unplayed();
+    this.toast('Marked as played', { label: 'Undo', run: () => { store.setProgress(ep, { p: had.p || 0, d: had.d || 0, done: !!had.done }); unplayed(); } });
   }
 
   // Out of Carry on without being played: where it was is forgotten (undone, it is remembered).
@@ -297,6 +305,33 @@ export class Pod {
     return h('ul.ep-list', {}, eps.map((e) => this.row(e, opts)));
   }
 
+  // Whether a list drawn again is a change to watch happen: not the first time it is drawn on a
+  // screen as it is now (route() starts `drawn` afresh for each screen it opens).
+  settled(el) {
+    const was = el._seen === this.drawn;
+    el._seen = this.drawn;
+    return was;
+  }
+
+  // The rows of `ul` become these episodes', in this order: a row already there is kept (and
+  // painted again), a new one made; rows that went close up, new ones open, and the rest move
+  // to their places (ui/motion.js), unless the list has just come on screen.
+  fillRows(ul, eps, opts) {
+    const flip = this.settled(ul) ? snapshot(ul) : null;
+    const had = new Map();
+    for (const li of ul.children) if (li.dataset.id && !li.classList.contains('leaving')) had.set(li.dataset.id, li);
+    const showName = opts?.showName ?? true;
+    ul.replaceChildren(...eps.map((ep) => {
+      const li = had.get(ep.id);
+      if (!li || li._showName !== showName) return this.row(ep, opts);
+      this.know(ep);
+      this.paintRow(li, ep);
+      if (li.matches('.is-started, .now')) this.drawIn(li.querySelector('.ep-bar span'), ep.id);
+      return li;
+    }));
+    flip?.play(ul);
+  }
+
   /* ---------- home ---------- */
 
   home() {
@@ -322,6 +357,8 @@ export class Pod {
                 ...[['new', 'Not played'], ['all', 'All']].map(([v, label]) => h('label', {}, h('input', { type: 'radio', name: 'latest', value: v, checked: this.filter === v, onchange: () => { this.filter = v; pref.set('pod-filter', v); this.shown = PAGE; this.drawLatest(); } }), h('span', { text: label })))),
               h('button.icon-btn', { type: 'button', id: 'latest-refresh', 'aria-label': 'Check for new episodes', onclick: () => this.loadInbox(true) }, icon('resume')))),
           h('div', { id: 'latest-list' })));
+      // Pulled down from the top, it looks for new episodes, as the button does.
+      pullToRefresh(root, { refresh: () => this.loadInbox(true), can: () => this.view === 'home' && !sheetOpen() });
     }
     this.finder?.entry();
     this.drawLink();
@@ -402,32 +439,77 @@ export class Pod {
       h('div.command', {}, h('div.command-field', {}, input, paste), h('button.btn.primary', { type: 'button', onclick: go, text: 'Link' })));
   }
 
+  // Carry on: a tile for each episode started and not finished. A tile stays the same element
+  // while its episode is in the list (painted again as it changes), so a list that changes moves:
+  // a tile taken out closes up, one put back opens, and the section itself closes up when its
+  // last tile goes (ui/motion.js).
   drawStarted() {
     const box = $('started-list');
     if (!box) return;
     const { store, player } = this;
     const list = store.started.map((e) => store.decorate(e)).filter((e) => e.url && e.id !== player.item?.id).slice(0, 6);
-    $('home-started').classList.toggle('hidden', !list.length);
+    const section = $('home-started');
+    const settled = this.settled(box);
+    const watch = settled && !section.classList.contains('hidden');
+    const flip = watch ? snapshot(box) : null;
+    const had = new Map();
+    for (const w of box.children) if (!w.classList.contains('leaving')) had.set(w.dataset.id, w);
     box.replaceChildren(...list.map((ep) => {
       this.know(ep);
-      const prog = store.progress(ep.id);
-      const now = player.item?.id === ep.id;
-      const playing = now && player.playing;
-      const tile = h(`div.tile${now ? '.now' : ''}`, { dataset: { id: ep.id } },
-        h('div.art'),
-        h('button.tile-main', { type: 'button', onclick: () => this.episode(ep) },
-          h('span.tile-show', { text: ep.show || '' }),
-          h('span.tile-title', { text: ep.title }),
-          h('span.tile-left', { text: leftText(now ? player.time : prog.p, prog.d || ep.duration) })),
-        h(`button.play${playing ? '.playing' : ''}`, { type: 'button', 'aria-label': `${playing ? 'Pause' : 'Carry on with'} ${ep.title}`, onclick: () => this.playOrPause(ep) }, icon(playing ? 'pause' : 'play')),
-        h('div.meter', {}, h('span', { style: `width:${fractionOf(prog, ep.duration) * 100}%` })));
-      this.artInto(tile.querySelector('.art'), ep);
-      this.drawIn(tile.querySelector('.meter span'), `tile:${ep.id}`);
-      // A long press opens the episode's menu; swiped to the left it shows "Played" and "Remove"
-      // (all the way: played).
-      longPress(tile, () => this.menu(tile, ep));
-      return swipeActions(tile, [{ label: 'Played', run: () => this.played(ep) }, { label: 'Remove', run: () => this.unstart(ep) }]);
+      const wrap = had.get(ep.id) || this.tile(ep);
+      this.paintTile(wrap, ep);
+      return wrap;
     }));
+    if (!list.length) {
+      // (The last tile closes up inside its section as the section does.)
+      flip?.play(box);
+      if (watch && had.size && !section.classList.contains('leaving')) closeUp(section, { keep: true });
+      else if (!section.classList.contains('leaving')) section.classList.add('hidden');
+      return;
+    }
+    const was = section.classList.contains('hidden');
+    if (section.classList.contains('leaving')) section.getAnimations?.().forEach((a) => a.cancel());
+    section.classList.remove('hidden', 'leaving');
+    section.inert = false;
+    section.style.overflow = '';
+    if (was && settled) openUp(section);
+    flip?.play(box);
+  }
+
+  tile(ep) {
+    const id = ep.id;
+    const tile = h('div.tile', { dataset: { id } },
+      h('div.art'),
+      h('button.tile-main', { type: 'button', onclick: () => this.episode(this.eps.get(id)) },
+        h('span.tile-show', { text: ep.show || '' }),
+        h('span.tile-title', { text: ep.title }),
+        h('span.tile-left')),
+      h('button.play', { type: 'button', onclick: () => this.playOrPause(this.eps.get(id)) }, icon('play')),
+      h('div.meter', {}, h('span')));
+    this.artInto(tile.querySelector('.art'), ep);
+    // A long press opens the episode's menu; swiped to the left it shows "Played" and "Remove"
+    // (all the way: played).
+    longPress(tile, () => this.menu(tile, this.eps.get(id)));
+    const wrap = swipeActions(tile, [{ label: 'Played', run: () => this.played(this.eps.get(id)) }, { label: 'Remove', run: () => this.unstart(this.eps.get(id)) }]);
+    wrap.dataset.id = id;
+    return wrap;
+  }
+
+  paintTile(wrap, ep) {
+    const { store, player } = this;
+    const tile = wrap.querySelector('.tile');
+    const prog = store.progress(ep.id);
+    const now = player.item?.id === ep.id;
+    const playing = now && player.playing;
+    tile.classList.toggle('now', now);
+    tile.querySelector('.tile-left').textContent = leftText(now ? player.time : prog?.p, prog?.d || ep.duration);
+    const play = tile.querySelector('.play');
+    swapIcon(play, playing ? 'pause' : 'play');
+    play.classList.toggle('playing', playing);
+    play.setAttribute('aria-label', `${playing ? 'Pause' : 'Carry on with'} ${ep.title}`);
+    const meter = tile.querySelector('.meter span');
+    meter.style.width = `${fractionOf(prog, ep.duration) * 100}%`;
+    this.drawIn(meter, `tile:${ep.id}`);
   }
 
   drawShows() {
@@ -493,12 +575,22 @@ export class Pod {
       return;
     }
     const more = eps.length > this.shown ? h('button.btn.ghost.more', { type: 'button', onclick: () => { this.shown += PAGE; this.drawLatest(); } }, h('span', { text: `Show ${Math.min(PAGE, eps.length - this.shown)} more` })) : null;
-    box.replaceChildren(this.list(eps.slice(0, this.shown)), more || '');
+    // The same list, its rows moved in place: one played closes up, new ones open at the top.
+    const ul = box.querySelector(':scope > ul.ep-list') || h('ul.ep-list');
+    this.fillRows(ul, eps.slice(0, this.shown));
+    if (box.firstChild !== ul) box.replaceChildren(ul);
+    box.querySelector(':scope > .more')?.remove();
+    if (more) box.append(more);
   }
 
-  async loadInbox(force = false) {
-    if (this.loading) { this.loadAgain = true; return; }
-    this.loading = true;
+  // (A second ask while one is under way is answered by that one, and then one more.)
+  loadInbox(force = false) {
+    if (this.loading) { this.loadAgain = true; return this.loading; }
+    this.loading = this.fetchInbox(force);
+    return this.loading;
+  }
+
+  async fetchInbox(force) {
     this.inboxStale = false;
     $('latest-refresh')?.classList.add('spinning');
     if ($('latest-kicker') && force) $('latest-kicker').textContent = 'From the shows you follow · checking now';
@@ -511,7 +603,7 @@ export class Pod {
       if (force) this.freshAt = Date.now();
       if (force) this.store.loadTranscripts();
     } finally {
-      this.loading = false;
+      this.loading = null;
       $('latest-refresh')?.classList.remove('spinning');
     }
     if (this.view === 'home') { this.drawLatest(); this.drawShows(); }
@@ -723,13 +815,21 @@ export class Pod {
   queue() {
     const root = $('pod-queue');
     const { store, player, downloads } = this;
+    // Drawn again on the same screen, the queue moves to its new order: a row taken out closes
+    // up, two that change places move past each other (ui/motion.js); and the button pressed
+    // keeps the focus.
+    const settled = this.settled(root);
+    const flip = settled ? snapshot(root.querySelector('ol.ep-list')) : null;
+    const focused = settled && root.contains(document.activeElement) ? document.activeElement.getAttribute('aria-label') : null;
     const now = player.item;
     const eps = store.queue.filter((e) => e.id !== now?.id).map((e) => store.decorate(e));
     const total = eps.reduce((n, e) => n + (e.duration || 0), 0);
-    const move = (ep, i, by) => store.queueMove(ep.id, store.doc.queue.ids.indexOf(ep.id) + by);
+    // (The one moved goes over the one it passes.)
+    const move = (ep, i, by) => { this.lift = ep.id; store.queueMove(ep.id, store.doc.queue.ids.indexOf(ep.id) + by); };
     const rows = eps.map((ep, i) => {
       const li = this.row(ep);
       li.classList.add('queued');
+      this.paintRow(li, ep); // (as a row of the queue: no "Queued" on it)
       li.querySelector('.ep-more').before(h('span.ep-order', {},
         h('button.icon-btn.tiny', { type: 'button', 'aria-label': `Move ${ep.title} up`, disabled: i === 0, onclick: () => move(ep, i, -1) }, icon('up')),
         h('button.icon-btn.tiny', { type: 'button', 'aria-label': `Move ${ep.title} down`, disabled: i === eps.length - 1, onclick: () => move(ep, i, 1) }, icon('down')),
@@ -752,6 +852,12 @@ export class Pod {
           h('div', {}, h('p.kicker', { text: saved.length ? `On this device · ${fmtBytes(downloads.bytes)}` : 'On this device' }), h('h2', { text: 'Saved for offline' }))),
         saved.length ? this.list(saved) : h('p.pod-none', { text: 'Nothing saved. Save an episode before a flight or a tunnel and it plays without a connection.' })),
     ].filter(Boolean));
+    flip?.play(root.querySelector('ol.ep-list'), { lift: this.lift });
+    this.lift = '';
+    if (focused) {
+      const again = [...root.querySelectorAll('button[aria-label]')].find((b) => b.getAttribute('aria-label') === focused);
+      (again && !again.disabled ? again : again?.closest('.ep')?.querySelector('.ep-order button:not(:disabled)'))?.focus({ preventScroll: true });
+    }
   }
 
   /* ---------- finding a show ---------- */

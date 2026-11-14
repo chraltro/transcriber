@@ -183,7 +183,9 @@ if (inPage) {
   document.addEventListener('click', (e) => { if (e.target === back()) closeSheet(); });
 }
 
-/* ---------- the menu behind a row's three dots ---------- */
+/* ---------- the menu behind a row's three dots ----------
+ * It grows out of the button that opened it on a spring and shrinks back into it (style.css
+ * .menu-pop.floating); its items give under the finger as buttons do (ui/motion.js). */
 
 const menuEl = () => document.getElementById('row-menu');
 const menuOpen = () => menuEl().classList.contains('open');
@@ -217,7 +219,10 @@ export function openMenu(anchor, items) {
   const below = r.bottom + 6 + hgt <= window.innerHeight - 8;
   m.style.left = `${left}px`;
   m.style.top = `${below ? r.bottom + 6 : Math.max(8, r.top - hgt - 6)}px`;
-  // It unrolls from the edge nearest its button: settled there first, without a motion.
+  // It grows out of its button, from the corner nearest it (a long-pressed row: under the middle
+  // of the row): settled there first, without a motion. (style.css .menu-pop.floating)
+  m.style.setProperty('--from-x', `${Math.max(0, Math.min(w, (r.width > 120 ? r.left + r.width / 2 : r.right - 6) - left))}px`);
+  m.style.setProperty('--from-y', below ? '0px' : `${hgt}px`);
   m.style.transition = 'none';
   m.classList.toggle('up', !below);
   void m.offsetWidth;

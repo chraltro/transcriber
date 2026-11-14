@@ -84,6 +84,17 @@ async function run(name, options) {
   const A = await device(browser, world, name, options);
   const { page, shot, noSideScroll, audio, playing, mobile } = A;
   const row = (title) => page.locator('#pod .ep', { hasText: title }).first();
+  // The children of `sel`, a frame at a time for `ms`: each one's id, top, height, transform and
+  // whether it is on its way out (ui/motion.js), to see a list change in place.
+  const frames = (sel, ms = 900) => page.evaluate(([sel, ms]) => new Promise((done) => {
+    const seen = [];
+    const t0 = performance.now();
+    const look = () => {
+      seen.push([...document.querySelectorAll(sel)].map((el) => { const r = el.getBoundingClientRect(); return { id: el.dataset.id, top: Math.round(r.top), y: Math.round(r.top + scrollY), h: Math.round(r.height), moved: getComputedStyle(el).transform !== 'none', leaving: el.classList.contains('leaving') }; }));
+      if (performance.now() - t0 < ms) requestAnimationFrame(look); else done(seen);
+    };
+    look();
+  }), [sel, ms]);
   try {
     /* ---------- a first visit: nothing followed, and the library becomes this device's ---------- */
     await page.goto(world.base);
@@ -1104,19 +1115,171 @@ async function run(name, options) {
         const open = await page.evaluate(() => ({ open: !!document.querySelector('#started-list .swipe.open'), labels: [...document.querySelectorAll('#started-list .swipe.open .swipe-actions button')].map((b) => b.textContent) }));
         await shot('4b-swipe');
         check(open.open && open.labels.join() === 'Played,Remove', `swiped to the left, a Carry on episode shows what can be done (${open.labels.join(', ')})`);
-        await page.click('#started-list .swipe.open .swipe-actions button:has-text("Remove")');
-        await page.waitForTimeout(300);
+        // "Remove": the tile goes off to the left, then its row closes up (its height going to
+        // nothing) before it is gone, and the tile under it ends where it was.
+        const before = await page.evaluate(() => [...document.querySelectorAll('#started-list > .swipe')].map((w) => ({ id: w.dataset.id, top: Math.round(w.getBoundingClientRect().top), h: Math.round(w.getBoundingClientRect().height) })));
+        const [removing] = await Promise.all([frames('#started-list > .swipe', 1400), page.click('#started-list .swipe.open .swipe-actions button:has-text("Remove")')]);
+        const out = before[0];
+        const closing = removing.map((f) => f.find((x) => x.id === out.id)).filter((x) => x?.leaving).map((x) => x.h);
+        const after = removing.at(-1);
+        check(closing.some((x) => x > 2 && x < out.h - 2) && !after.some((x) => x.id === out.id), `"Remove": its row closes up before it is gone (${out.h} px, then ${[...new Set(closing)].slice(0, 6).join(', ')}, ... gone)`);
+        check(!before[1] || after[0]?.id === before[1].id && Math.abs(after[0].top - out.top) <= 1, `and the tile under it ends where it was (${before[1] ? `${after[0]?.top} px, was ${out.top}` : 'none under it'})`);
         check((await first()) !== title && /Removed from Carry on/.test(await page.locator('#toast').textContent()), `"Remove" takes it out of Carry on (${title})`);
-        await page.click('#toast-action');
-        await page.waitForFunction((t) => [...document.querySelectorAll('#started-list .tile-title')].some((x) => x.textContent === t), title, { timeout: 5000 }).catch(() => {});
+        // Undo: it comes back in, its row opening.
+        const [back] = await Promise.all([frames('#started-list > .swipe', 700), page.click('#toast-action')]);
+        const opening = back.map((f) => f.find((x) => x.id === out.id)?.h).filter((x) => x != null);
+        check(opening.some((x) => x > 2 && x < out.h - 2) && opening.at(-1) === out.h, `Undo opens its row again (${[...new Set(opening)].slice(0, 5).join(', ')}, ... ${opening.at(-1)} px)`);
         check(await page.evaluate((t) => [...document.querySelectorAll('#started-list .tile-title')].some((x) => x.textContent === t), title), 'and Undo puts it back, where it was');
         // Swiped all the way: played.
         await swipe(360);
-        await page.waitForTimeout(500);
+        await page.waitForFunction((t) => ![...document.querySelectorAll('#started-list .tile-title')].some((x) => x.textContent === t), title, { timeout: 3000 }).catch(() => {});
         const gone = await page.evaluate((t) => ![...document.querySelectorAll('#started-list .tile-title')].some((x) => x.textContent === t), title);
         check(gone && /Marked as played/.test(await page.locator('#toast').textContent()), 'swiped all the way, it is marked as played');
         await page.click('#toast-action');
-        await page.waitForTimeout(400);
+        await page.waitForTimeout(600);
+      }
+    }
+
+    /* ---------- the small things: a press, a choice, a list changing, a pull ---------- */
+    {
+      await page.click(mobile ? '#tabbar [data-nav=listen]' : '#nav [data-nav=listen]');
+      await page.waitForSelector('#pod-home:not(.hidden) #latest-list .ep');
+      await page.evaluate(() => window.scrollTo(0, 0));
+      // A finger down on `sel`, held 250 ms (or moved on at once, as a scroll starts), and let go:
+      // how far what it pressed gave way while held, and after.
+      const press = (sel, scroll = false) => page.evaluate(async ([sel, scroll]) => {
+        const el = document.querySelector(sel);
+        el.scrollIntoView({ block: 'center' });
+        const who = el.matches('.ep-main, .tile-main') ? el.closest('.ep, .tile') : el;
+        const wait = (ms) => new Promise((f) => setTimeout(f, ms));
+        await wait(120); // (the scroll that brought it into view is over: a scroll lets go of a press)
+        const r = el.getBoundingClientRect();
+        const at = (dy) => ({ pointerId: 21, pointerType: 'touch', isPrimary: true, button: 0, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 + dy, bubbles: true });
+        const scale = () => +(parseFloat(getComputedStyle(who).scale) || 1).toFixed(3);
+        el.dispatchEvent(new PointerEvent('pointerdown', at(0)));
+        if (scroll) { await wait(15); el.dispatchEvent(new PointerEvent('pointermove', at(-30))); el.dispatchEvent(new PointerEvent('pointercancel', at(-30))); }
+        await wait(250);
+        const held = { scale: scale(), marked: who.hasAttribute('data-pressed') };
+        el.dispatchEvent(new PointerEvent('pointerup', at(scroll ? -30 : 0)));
+        await wait(450);
+        return { held, after: { scale: scale(), marked: who.hasAttribute('data-pressed') } };
+      }, [sel, scroll]);
+      const btn = await press('#shows-add');
+      check(btn.held.scale < 0.99 && btn.held.marked && btn.after.scale === 1 && !btn.after.marked, `a button gives way while it is pressed (${btn.held.scale}) and springs back when let go (${btn.after.scale})`);
+      const pressedRow = await press('#latest-list .ep .ep-main');
+      check(pressedRow.held.scale < 0.995 && pressedRow.held.marked && pressedRow.after.scale === 1, `a row gives way a little while pressed (${pressedRow.held.scale}), and is back after (${pressedRow.after.scale})`);
+      const scrolled = await press('#latest-list .ep .ep-main', true);
+      check(scrolled.held.scale === 1 && !scrolled.held.marked, `a finger that starts a scroll on a row leaves it as it was (${scrolled.held.scale}${scrolled.held.marked ? ', marked pressed' : ''})`);
+
+      // A segmented control's highlight slides from the option that was on to the new one.
+      const slide = () => page.evaluate(() => new Promise((done) => {
+        const fs = document.querySelector('#latest-filter');
+        fs.scrollIntoView({ block: 'center' });
+        const label = [...fs.querySelectorAll('label')].find((l) => !l.querySelector('input').checked);
+        const r = label.getBoundingClientRect();
+        const at = { pointerId: 22, pointerType: 'touch', isPrimary: true, button: 0, clientX: r.left + 5, clientY: r.top + 5, bubbles: true };
+        label.dispatchEvent(new PointerEvent('pointerdown', at));
+        label.dispatchEvent(new PointerEvent('pointerup', at));
+        label.click();
+        const seen = [];
+        const look = () => {
+          seen.push(Math.round(new DOMMatrix(getComputedStyle(fs.querySelector('input:checked + span'), '::before').transform).m41));
+          if (seen.length < 40) requestAnimationFrame(look); else done(seen);
+        };
+        requestAnimationFrame(look);
+      }));
+      const hl = await slide();
+      check(Math.abs(hl[0]) > 10 && hl.some((x) => x !== hl[0] && x !== 0) && hl.at(-1) === 0, `the highlight of "Not played" and "All" slides over to the one chosen (from ${hl[0]} px: ${[...new Set(hl)].slice(0, 6).join(', ')} ... ${hl.at(-1)})`);
+      await slide(); // (back as it was)
+      await page.waitForTimeout(500);
+
+      // The queue changes in place: two that change places move past each other; one taken out
+      // closes up, and the row under it ends where it was.
+      const added = [];
+      for (let i = 0; added.length < 2 && i < 8; i++) {
+        const r = page.locator('#latest-list .ep').nth(i);
+        await r.locator('.ep-more').click();
+        const add = page.locator('#row-menu.open button:has-text("Add to the queue")');
+        if (await add.count()) { added.push(await r.locator('.ep-title').textContent()); await add.click(); } else await page.keyboard.press('Escape');
+        await page.waitForTimeout(150);
+      }
+      await page.click(mobile ? '#tabbar [data-nav=queue]' : '#nav [data-nav=queue]');
+      await page.waitForSelector('#pod-queue ol > .ep');
+      await page.waitForTimeout(300);
+      await page.evaluate(() => document.querySelector('#pod-queue ol > .ep:last-child').scrollIntoView({ block: 'center' }));
+      const queueNow = () => page.evaluate(() => [...document.querySelectorAll('#pod-queue ol > .ep')].map((li) => ({ id: li.dataset.id, top: Math.round(li.getBoundingClientRect().top), y: Math.round(li.getBoundingClientRect().top + scrollY), h: Math.round(li.getBoundingClientRect().height) })));
+      let q = await queueNow();
+      const n = q.length;
+      const [a, b] = [q[n - 2], q[n - 1]];
+      const [moving] = await Promise.all([frames('#pod-queue ol > .ep', 900), page.locator('#pod-queue ol > .ep').nth(n - 2).locator('button[aria-label$=" down"]').click()]);
+      const aTops = moving.map((f) => f.find((x) => x.id === a.id)).filter(Boolean);
+      const last = moving.at(-1);
+      check(aTops.some((x) => x.moved && x.top > a.top + 2 && x.top < a.top + b.h - 2) && last.at(-1)?.id === a.id && last.at(-2)?.id === b.id && Math.abs(last.at(-2).top - a.top) <= 1 && last.every((x) => !x.moved),
+        `moved down in the queue, an episode and the one under it go past each other (${[...new Set(aTops.map((x) => x.top))].slice(0, 6).join(', ')} ... to ${last.at(-1)?.top} px)`);
+      q = await queueNow();
+      const [taking] = await Promise.all([frames('#pod-queue ol > .ep', 900), page.locator('#pod-queue ol > .ep').nth(n - 2).locator('button[aria-label^="Take"]').click()]);
+      const closing = taking.map((f) => f.find((x) => x.id === b.id)).filter((x) => x?.leaving).map((x) => x.h);
+      const ended = taking.at(-1);
+      // (In the page, that is: near the end of it, the page itself gets shorter and scrolls.)
+      check(closing.some((x) => x > 2 && x < b.h - 2) && !ended.some((x) => x.id === b.id) && ended.at(-1)?.id === a.id && Math.abs(ended.at(-1).y - q[n - 2].y) <= 1,
+        `taken out of the queue, its row closes up before it is gone (${b.h} px, then ${[...new Set(closing)].slice(0, 5).join(', ')} ...), and the one under it ends in its place (${ended.at(-1)?.y} px down the page, was ${q[n - 2].y})`);
+
+      // With motion turned down on the device: nothing gives way or slides, and a row taken out
+      // is gone at once.
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      const still = await press('#pod-queue ol > .ep:last-child .ep-more');
+      await page.keyboard.press('Escape');
+      const [instant] = await Promise.all([frames('#pod-queue ol > .ep', 300), page.locator('#pod-queue ol > .ep').last().locator('button[aria-label^="Take"]').click()]);
+      await page.click(mobile ? '#tabbar [data-nav=listen]' : '#nav [data-nav=listen]');
+      await page.waitForSelector('#pod-home:not(.hidden) #latest-list .ep');
+      const stillSlide = await slide();
+      await slide();
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      check(still.held.scale === 1 && instant.every((f) => !f.some((x) => x.leaving || x.moved)) && !instant.at(-1).some((x) => x.id === a.id) && stillSlide.every((x) => x === 0),
+        `with reduced motion a press, a row taken out and a highlight changing are instant (${still.held.scale}; ${instant.filter((f) => f.some((x) => x.leaving)).length} frames closing; highlight ${[...new Set(stillSlide)].join(', ')})`);
+
+      // Pull to refresh, on Listen, with a finger (where a touch can be made up): short of the
+      // mark nothing is asked; past it, what is new is asked for, and the page settles back.
+      if (mobile) {
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await page.waitForTimeout(200);
+        const pull = (by) => page.evaluate(async (by) => {
+          const el = document.querySelector('#home-shows');
+          try { new Touch({ identifier: 1, target: el, clientX: 0, clientY: 0 }); } catch { return null; }
+          const touch = (y) => [new Touch({ identifier: 6, target: el, clientX: 200, clientY: y })];
+          const send = (type, y) => el.dispatchEvent(new TouchEvent(type, { touches: type === 'touchend' ? [] : touch(y), targetTouches: type === 'touchend' ? [] : touch(y), changedTouches: touch(y), bubbles: true, cancelable: true }));
+          send('touchstart', 200);
+          let most = 0;
+          for (let i = 1; i <= 12; i++) {
+            await new Promise((f) => setTimeout(f, 16));
+            send('touchmove', 200 + (by * i) / 12);
+            most = Math.max(most, parseFloat(getComputedStyle(document.querySelector('#pod-home')).translate.split(' ')[1]) || 0);
+          }
+          send('touchend', 200 + by);
+          return Math.round(most);
+        }, by);
+        let asked = 0;
+        const count = (r) => { if (/\/api\/pod\/inbox\?fresh=1/.test(r.url())) asked++; };
+        page.on('request', count);
+        const short = await pull(60);
+        await page.waitForTimeout(600);
+        const shortAsked = asked;
+        const long = await pull(240);
+        if (long == null) console.log('  note: this browser cannot make up a touch, so pull to refresh is not gone through here');
+        else {
+          await page.waitForFunction(() => !document.querySelector('.pull.turning') && getComputedStyle(document.querySelector('#pod-home')).translate === 'none', null, { timeout: 8000 }).catch(() => {});
+          const settled = await page.evaluate(() => getComputedStyle(document.querySelector('#pod-home')).translate);
+          await shot('4c-pull');
+          check(shortAsked === 0 && asked === 1 && long > 64 && short > 0 && settled === 'none', `pulled down from the top of Listen past the mark, it looks for new episodes, and settles back (pulled ${long} px: ${asked} ask; ${short} px, short of the mark: ${shortAsked})`);
+        }
+        page.off('request', count);
+      }
+      // (What was added and is still queued goes out again.)
+      await page.click(mobile ? '#tabbar [data-nav=queue]' : '#nav [data-nav=queue]');
+      await page.waitForSelector('#pod-queue');
+      for (const t of added) {
+        const r = page.locator('#pod-queue ol > .ep:not(.leaving)', { hasText: t });
+        if (await r.count()) { await r.locator('button[aria-label^="Take"]').click(); await page.waitForTimeout(500); }
       }
     }
 

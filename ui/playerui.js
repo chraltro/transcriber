@@ -9,6 +9,7 @@ import { adSeconds, breakAt } from '../lib/breaks.js';
 import { voiceAt } from '../lib/shape.js';
 import { Score } from './score.js';
 import { cutSeconds } from '../lib/quiet.js';
+import { swapIcon, swapText } from './motion.js';
 
 const $ = (id) => document.getElementById(id);
 // The row of buttons in the sheet, each opening its control in a panel under the row. (An iPhone
@@ -86,7 +87,8 @@ export class PlayerUI {
     const playing = player.playing;
     document.body.classList.toggle('pod-playing', playing);
     for (const b of [$('pb-play'), this.sheet?.querySelector('.np-play')].filter(Boolean)) {
-      setIcon(b, playing ? 'pause' : 'play');
+      // (Play turns into pause and back: ui/motion.js.)
+      swapIcon(b, playing ? 'pause' : 'play');
       b.setAttribute('aria-label', playing ? 'Pause' : 'Play');
       b.classList.toggle('playing', playing);
       b.classList.toggle('waiting', player.loading && !player.audio.paused);
@@ -241,11 +243,12 @@ export class PlayerUI {
   }
 
   // A button in the row under the transport: where its control stands, and whether that is
-  // other than the usual (marked as a switched-on chip is).
+  // other than the usual (marked as a switched-on chip is). A new value slides in over the old
+  // (ui/motion.js swapText).
   toolValue(name, text, on) {
     const b = this.sheet?.querySelector(`.np-tool[data-tool="${name}"]`);
     if (!b) return;
-    b.querySelector('.np-tool-value').textContent = text;
+    swapText(b.querySelector('.np-tool-value'), text);
     b.classList.toggle('on', on);
   }
 
