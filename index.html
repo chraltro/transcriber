@@ -4,7 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Transcriber</title>
-  <meta name="description" content="Paste a podcast link and get the full transcript in English, Norwegian, Danish, French, German, Spanish or Italian. Whisper runs right in your browser: no account, no API key, nothing uploaded.">
+  <meta name="description" content="A podcast player that also writes the transcript: follow shows, pick up where you left off on any device, skip the ads a transcript marks, and turn any episode into text with Whisper in the browser.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Transcriber">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#e6edef" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0a1d24" media="(prefers-color-scheme: dark)">
   <meta name="color-scheme" content="light dark">
@@ -48,21 +54,32 @@
     <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.1 3.6 8.5s-1.2 6.2-3.6 8.5c-2.4-2.3-3.6-5.1-3.6-8.5s1.2-6.2 3.6-8.5z"/></symbol>
     <symbol id="i-prev" viewBox="0 0 24 24"><path d="m14.5 6-6 6 6 6"/></symbol>
     <symbol id="i-next" viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6"/></symbol>
+    <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M4.5 14.5v-2.5a7.5 7.5 0 0 1 15 0v2.5"/><rect x="3.5" y="13.5" width="4" height="6.5" rx="1.6"/><rect x="16.5" y="13.5" width="4" height="6.5" rx="1.6"/></symbol>
+    <symbol id="i-queue" viewBox="0 0 24 24"><path d="M4 6.5h12M4 11.5h12M4 16.5h6"/><path fill="currentColor" stroke="none" d="M14.5 14.4v5.2a.6.6 0 0 0 .92.5l4.1-2.6a.6.6 0 0 0 0-1l-4.1-2.6a.6.6 0 0 0-.92.5z"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M4.5 12.5a7.5 7.5 0 1 0 2.4-5.5"/><path d="M4.5 3.8v4.4h4.4"/></symbol>
+    <symbol id="i-fwd" viewBox="0 0 24 24"><path d="M19.5 12.5a7.5 7.5 0 1 1-2.4-5.5"/><path d="M19.5 3.8v4.4h-4.4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M19.5 14.4A8 8 0 0 1 9.6 4.5a7.8 7.8 0 1 0 9.9 9.9z"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><g fill="currentColor" stroke="none"><circle cx="5.5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="18.5" cy="12" r="1.5"/></g></symbol>
+    <symbol id="i-skip" viewBox="0 0 24 24"><path fill="currentColor" stroke="none" d="M5.5 5.8v12.4a1 1 0 0 0 1.55.83l9-6.2a1 1 0 0 0 0-1.66l-9-6.2a1 1 0 0 0-1.55.83z"/><path d="M19 5.5v13"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M4 9.5v5h3.5l4.5 4v-13l-4.5 4z"/><path d="M15.5 9.2a4 4 0 0 1 0 5.6M18 6.7a7.6 7.6 0 0 1 0 10.6"/></symbol>
+    <symbol id="i-saved" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="m8.2 12.3 2.7 2.7 4.9-5.4"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M13.5 5H19v5.5M19 5l-8 8M10 6.5H7a2 2 0 0 0-2 2V17a2 2 0 0 0 2 2h8.5a2 2 0 0 0 2-2v-3"/></symbol>
+    <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M5.2 17.5a8 8 0 1 1 13.6 0"/><path d="m12 13.5 3.6-4.6"/></symbol>
     <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3.5H7.5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8z"/><path d="M14 3.5V8h4.5M10 16.5v-4.5l4-1v4.5"/><circle cx="9" cy="16.5" r="1.2"/><circle cx="13" cy="15.5" r="1.2"/></symbol>
   </svg>
 
   <header class="topbar">
-    <a class="brand" href="./" aria-label="Transcriber, start over">
+    <a class="brand" href="#/" aria-label="Transcriber, home">
       <span class="logo-box"><svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><g stroke-width="3" stroke-linecap="round" fill="none"><path stroke="var(--accent)" d="M7 13v6M12 8v16"/><path stroke="currentColor" d="M17 12v8M22 10v12M27 14v4"/></g></svg></span>
       <span class="wordmark">Transcriber</span>
     </a>
     <div class="context">
-      <span class="crumb" id="top-crumb">Transcripts / local Whisper</span>
-      <span class="context-line" id="top-context">New transcript</span>
+      <span class="crumb" id="top-crumb">Listen</span>
+      <span class="context-line" id="top-context">New episodes</span>
     </div>
     <div class="top-meta" aria-live="off">
       <span id="top-date"></span>
-      <span id="top-status">Nothing leaves this browser</span>
+      <span id="top-status"></span>
     </div>
   </header>
 
@@ -72,13 +89,18 @@
       <span class="mini-title" id="mini-title"></span>
       <span class="mini-status" id="mini-status"></span>
     </div>
-    <button type="button" class="icon-btn mini-play hidden" id="mini-play" aria-label="Play"><svg class="icon"><use href="#i-play"/></svg></button>
     <div class="mini-bar"><span id="mini-bar"></span></div>
   </div>
 
   <div class="shell">
-  <aside class="spine" aria-label="Pipeline">
-    <p class="spine-label">Pipeline</p>
+  <aside class="spine" aria-label="Sections and progress">
+    <nav class="nav" id="nav" aria-label="Sections">
+      <a href="#/" data-nav="listen"><svg class="icon" aria-hidden="true"><use href="#i-headphones"/></svg><span>Listen</span></a>
+      <a href="#/queue" data-nav="queue"><svg class="icon" aria-hidden="true"><use href="#i-queue"/></svg><span>Up next</span><small class="nav-count" data-count="queue"></small></a>
+      <a href="#/transcribe" data-nav="transcribe"><svg class="icon" aria-hidden="true"><use href="#i-lines"/></svg><span>Transcribe</span><small class="nav-count" data-count="busy"></small></a>
+      <a href="#/settings" data-nav="settings"><svg class="icon" aria-hidden="true"><use href="#i-sliders"/></svg><span>Settings</span></a>
+    </nav>
+    <p class="spine-label pipeline-label">Pipeline</p>
     <ol class="steps" id="steps" aria-label="Progress">
       <li data-step="find"><i></i><span>Find episode</span><small class="note"></small></li>
       <li data-step="download"><i></i><span>Download</span><small class="note"></small></li>
@@ -98,6 +120,14 @@
   </aside>
 
   <main id="main">
+    <div class="pod" id="pod">
+      <section class="pod-view" id="pod-home" aria-label="Listen"></section>
+      <section class="pod-view hidden" id="pod-show" aria-label="Show"></section>
+      <section class="pod-view hidden" id="pod-queue" aria-label="Up next"></section>
+      <section class="pod-view hidden" id="pod-add" aria-label="Find a show"></section>
+      <section class="pod-view hidden" id="pod-settings" aria-label="Settings"></section>
+    </div>
+
     <section class="hero panel" id="hero">
       <p class="kicker" id="hero-kicker">New transcript · runs in this browser</p>
       <h1 id="hero-title">Podcast to text.</h1>
@@ -196,6 +226,7 @@
           <p class="eyebrow" id="feed-count">Episodes</p>
           <h2 id="feed-title">Pick an episode</h2>
         </div>
+        <button type="button" class="btn ghost small hidden" id="episodes-follow"><svg class="icon"><use href="#i-plus"/></svg><span>Follow</span></button>
         <button type="button" class="icon-btn" id="episodes-close" aria-label="Close"><svg class="icon"><use href="#i-x"/></svg></button>
       </div>
       <p class="hint episodes-note hidden" id="episodes-note"></p>
@@ -402,21 +433,49 @@
   <div class="pill sel-pill hidden" id="sel-pill"><button type="button" id="refine-sel">Refine this part</button><span id="sel-model"></span></div>
   <button type="button" class="pill jump hidden" id="jump-live"><svg class="icon"><use href="#i-down"/></svg><span>Jump to live</span></button>
 
-  <nav class="dock hidden" id="dock" aria-label="Transcript actions">
-    <button type="button" id="dock-play" class="dock-btn hidden"><svg class="icon"><use href="#i-play"/></svg><span>Play</span></button>
-    <button type="button" id="dock-copy" class="dock-btn"><svg class="icon"><use href="#i-copy"/></svg><span>Copy</span></button>
-    <button type="button" id="dock-save" class="dock-btn primary"><svg class="icon"><use href="#i-share"/></svg><span>Save</span></button>
+  <div class="playbar hidden" id="playbar" role="region" aria-label="Player">
+    <div class="pb-line" aria-hidden="true"><span id="pb-line"></span></div>
+    <button type="button" class="pb-now" id="pb-open" aria-label="Open the player">
+      <span class="art pb-art" id="pb-art"></span>
+      <span class="pb-text"><span class="pb-title" id="pb-title"></span><span class="pb-sub" id="pb-sub"></span></span>
+    </button>
+    <div class="pb-transport">
+      <button type="button" class="icon-btn jump-btn" id="pb-back" aria-label="Back 15 seconds"><svg class="icon"><use href="#i-back"/></svg><b>15</b></button>
+      <button type="button" class="play" id="pb-play" aria-label="Play"><svg class="icon"><use href="#i-play"/></svg></button>
+      <button type="button" class="icon-btn jump-btn" id="pb-fwd" aria-label="Forward 30 seconds"><svg class="icon"><use href="#i-fwd"/></svg><b>30</b></button>
+    </div>
+    <div class="pb-scrub">
+      <span class="pb-time" id="pb-cur">0:00</span>
+      <div class="scrub" id="pb-scrub"><div class="scrub-ads" aria-hidden="true"></div><input type="range" min="0" max="1000" value="0" step="1" aria-label="Position in the episode"></div>
+      <span class="pb-time" id="pb-left"></span>
+    </div>
+    <div class="pb-tools">
+      <button type="button" class="btn ghost small hidden" id="pb-ad">Skip ad</button>
+      <button type="button" class="chip-btn" id="pb-speed" aria-label="Playback speed">1×</button>
+      <a class="icon-btn" href="#/queue" id="pb-queue" aria-label="Up next"><svg class="icon"><use href="#i-queue"/></svg></a>
+    </div>
+  </div>
+
+  <nav class="tabbar" id="tabbar" aria-label="Sections">
+    <a href="#/" data-nav="listen"><svg class="icon" aria-hidden="true"><use href="#i-headphones"/></svg><span>Listen</span></a>
+    <a href="#/queue" data-nav="queue"><svg class="icon" aria-hidden="true"><use href="#i-queue"/></svg><span>Up next</span><small class="nav-count" data-count="queue"></small></a>
+    <a href="#/transcribe" data-nav="transcribe"><svg class="icon" aria-hidden="true"><use href="#i-lines"/></svg><span>Transcribe</span><small class="nav-count" data-count="busy"></small></a>
+    <a href="#/settings" data-nav="settings"><svg class="icon" aria-hidden="true"><use href="#i-sliders"/></svg><span>Settings</span></a>
   </nav>
+
+  <div class="sheet-back hidden" id="sheet-back"></div>
+  <div class="sheet-pane hidden" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" tabindex="-1"></div>
+  <div class="menu-pop floating" id="row-menu" role="menu"></div>
 
   <div class="dropzone" id="dropzone" hidden>
     <div class="dropzone-inner"><svg class="icon"><use href="#i-file"/></svg><p>Drop the audio file to transcribe it</p></div>
   </div>
-  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"><span id="toast-text"></span><button type="button" id="toast-action" class="hidden"></button></div>
   <div id="announce" class="sr-only" aria-live="polite"></div>
   <audio id="audio" preload="none"></audio>
 
   <footer class="footer">
-    <p>Transcriber / runs in your browser with <a href="https://github.com/huggingface/transformers.js">Whisper</a>, <a href="https://huggingface.co/NbAiLab">NB-Whisper</a> and <a href="https://huggingface.co/pyannote/segmentation-3.0">pyannote</a> / nothing is uploaded</p>
+    <p>Transcriber / transcripts are written in your browser with <a href="https://github.com/huggingface/transformers.js">Whisper</a>, <a href="https://huggingface.co/NbAiLab">NB-Whisper</a> and <a href="https://huggingface.co/pyannote/segmentation-3.0">pyannote</a> / audio you transcribe is never uploaded</p>
   </footer>
 
   <script type="module" src="app.js"></script>

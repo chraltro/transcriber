@@ -9,7 +9,8 @@ import path from 'node:path';
 import { readFile, rm } from 'node:fs/promises';
 import { findFeed, readFeed } from './feeds.mjs';
 import { transcribeEpisode } from './transcribe.mjs';
-import { SHOWS, idOf, markdownOf, notesWithHosts } from './shows.mjs';
+import { SHOWS, markdownOf, notesWithHosts } from './shows.mjs';
+import { planQueue } from './plan.mjs';
 import { correctText } from '../lib/glossary.js';
 import { extractTerms } from '../lib/context.js';
 import { MODELS, dtypeFor } from '../lib/models.js';
@@ -62,23 +63,32 @@ if (!indexRes.ok || !/json/.test(indexRes.headers.get('content-type') || '')) {
   process.exit(1);
 }
 const index = await indexRes.json();
-const have = new Set(index.entries.map((e) => e.id));
-const queue = [];
-for (const show of SHOWS) {
-  try {
-    const feed = await readFeed(await findFeed(show));
-    const name = feed.show || show.name;
-    const mine = index.entries.filter((e) => e.show === name);
-    const first = Math.min(...mine.map((e) => e.createdAt || 0));
-    const fresh = feed.episodes.filter((ep) => ep.published > Date.now() - MAX_AGE_DAYS * 864e5);
-    const wanted = mine.length ? fresh.filter((ep) => ep.published >= first && !have.has(idOf(ep.guid))) : fresh.slice(0, 1);
-    for (const ep of wanted) queue.push({ ...ep, id: idOf(ep.guid), show: name, notes: notesWithHosts(ep.notes, name) });
-    log(`${name}: ${feed.episodes.length} episodes, ${mine.length} on the site, ${wanted.length} to do`);
-  } catch (err) {
-    log(`${show.name}: feed check failed: ${err.message}`);
+
+// What to do comes from the app (a show's page: Transcribe new episodes, and how far back to go;
+// an episode: Transcribe on the server), which the site lists once it has the built-in shows in
+// its library. Until then, the built-in shows' new episodes.
+let shows = SHOWS.map((s) => ({ ...s, fresh: true, backfill: 0 }));
+let asked = [];
+try {
+  const listed = await (await fetch(`${SITE}/api/pod/transcribe`, { cache: 'no-store' })).json();
+  if (listed.ready && Array.isArray(listed.shows)) {
+    shows = listed.shows.slice(0, 20).map((s) => ({ name: s.name, feedUrl: s.feedUrl, lang: s.lang, fresh: s.fresh !== false, backfill: Number(s.backfill) || 0 }));
+    asked = Array.isArray(listed.episodes) ? listed.episodes : [];
+    log(`from the app: ${shows.map((s) => `${s.name}${s.backfill ? ` (and the last ${s.backfill})` : ''}`).join(', ') || 'no shows'}${asked.length ? `; ${asked.length} episode${asked.length === 1 ? '' : 's'} asked for` : ''}`);
   }
+} catch (err) {
+  log(`the site lists nothing to do (${err.message}); using the built-in shows`);
 }
-queue.sort((a, b) => a.published - b.published);
+
+const feeds = new Map();
+const queue = await planQueue({
+  shows, asked, index, log, maxAgeDays: MAX_AGE_DAYS,
+  feedOf: async (show) => {
+    const url = show.feedUrl || await findFeed(show);
+    if (!feeds.has(url)) feeds.set(url, await readFeed(url));
+    return feeds.get(url);
+  },
+});
 
 // Transcripts made before a fix to names (FIXES) get it without being transcribed again: the
 // hosts in their notes, and known names' spelling corrected in their text.

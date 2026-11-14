@@ -1,56 +1,24 @@
 // Podcast feeds for the server: find a show's RSS feed through Apple's directory, and read its
 // episodes (title, audio, date, notes, art) without an XML library.
 import { plainText } from '../lib/context.js';
+import { parseFeed as readXml, durationSec } from '../lib/feed.js';
+
+export { durationSec };
 
 const UA = { 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36' };
 
-const decode = (s) => (s || '')
-  .replace(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/, '$1')
-  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
-  .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
-  .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
-  .replace(/&amp;/g, '&')
-  .trim();
-
-const tag = (xml, name) => {
-  const m = xml.match(new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`, 'i'));
-  return m ? decode(m[1]) : '';
-};
-const attr = (xml, name, a) => xml.match(new RegExp(`<${name}\\s[^>]*?\\b${a}="([^"]*)"`, 'i'))?.[1] ?? '';
-
-// Seconds from "1:02:03", "62:03" or "3723".
-export function durationSec(s) {
-  if (!s) return 0;
-  const p = String(s).trim().split(':').map(Number);
-  if (p.some((x) => Number.isNaN(x))) return 0;
-  return p.reduce((a, x) => a * 60 + x, 0);
-}
-
-// -> { show, art, episodes: [{ guid, title, url, published, notes, art, duration }] }, newest first.
+// The feed as the transcribing needs it: audio episodes only, notes as plain text (they go into
+// the speech model's prompt). -> { show, art, language, episodes: [{ guid, title, url, published, notes, art, duration }] }
 export function parseFeed(xml) {
-  const channel = xml.split(/<item[\s>]/i)[0];
-  const show = tag(channel, 'title');
-  const art = attr(channel, 'itunes:image', 'href') || tag(tag(channel, 'image'), 'url');
-  const episodes = [];
-  for (const raw of xml.split(/<item[\s>]/i).slice(1)) {
-    const item = raw.split(/<\/item>/i)[0];
-    const url = decode(attr(item, 'enclosure', 'url'));
-    const type = attr(item, 'enclosure', 'type');
-    if (!url || (type && !/^audio\//i.test(type))) continue;
-    const title = tag(item, 'title');
-    const published = Date.parse(tag(item, 'pubDate')) || 0;
-    episodes.push({
-      guid: tag(item, 'guid') || url,
-      title,
-      url,
-      published,
-      notes: plainText(tag(item, 'content:encoded') || tag(item, 'description') || tag(item, 'itunes:summary')),
-      art: decode(attr(item, 'itunes:image', 'href')) || art,
-      duration: durationSec(tag(item, 'itunes:duration')),
-    });
-  }
-  episodes.sort((a, b) => b.published - a.published);
-  return { show, art, episodes };
+  const feed = readXml(xml);
+  return {
+    show: feed.title,
+    art: feed.art,
+    language: feed.language,
+    episodes: feed.episodes
+      .filter((e) => !e.type || /^audio\//.test(e.type))
+      .map((e) => ({ guid: e.guid, title: e.title, url: e.url, published: e.published, notes: plainText(e.html), art: e.art || feed.art, duration: e.duration })),
+  };
 }
 
 const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();

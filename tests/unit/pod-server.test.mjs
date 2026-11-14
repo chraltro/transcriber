@@ -1,0 +1,240 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { mkdtemp, rm, readdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { gunzipSync } from 'node:zlib';
+import { createPod, isPrivateHost } from '../../server/pod.mjs';
+import { subId } from '../../lib/podstate.js';
+import { idOf } from '../../server/shows.mjs';
+
+const KEY = 'k'.repeat(24);
+const item = (n, date, notes = '') => `<item><title>Episode ${n}</title><guid>g${n}</guid><pubDate>${new Date(date).toUTCString()}</pubDate>
+<enclosure url="https://cdn.example/${n}.mp3" type="audio/mpeg"/><itunes:duration>${n}:00</itunes:duration><description><![CDATA[${notes || `<p>Notes for ${n}</p>`}]]></description></item>`;
+const feedXml = (title, items) => `<rss><channel><title>${title}</title><language>en-us</language><itunes:image href="https://img.example/${title}.jpg"/>${items.join('')}</channel></rss>`;
+
+// A server with two feeds on the web: one answers conditional requests, one can be broken.
+async function serve(opts = {}) {
+  const dir = await mkdtemp(path.join(tmpdir(), 'pod-'));
+  const web = { hits: {}, broken: false, clock: Date.UTC(2026, 10, 10) };
+  const feeds = {
+    'https://feeds.example/a': () => feedXml('Alpha', [item(1, web.clock - 3 * 864e5), item(2, web.clock - 864e5), ...(web.extra ? [item(3, web.clock)] : [])]),
+    'https://feeds.example/b': () => feedXml('Beta', [item(7, web.clock - 2 * 864e5, '<p>Long <a href="https://x.example">notes</a></p>'), item(8, web.clock - 100 * 864e5), item(9, web.clock - 101 * 864e5), item(10, web.clock - 102 * 864e5), item(11, web.clock - 103 * 864e5)]),
+  };
+  const fetchImpl = async (url, init = {}) => {
+    web.hits[url] = (web.hits[url] || 0) + 1;
+    if (url.startsWith('https://cdn.example/')) {
+      const bytes = Buffer.from('0123456789');
+      const range = init.headers?.range?.match(/bytes=(\d+)-(\d*)/);
+      if (range) {
+        const part = bytes.subarray(Number(range[1]), range[2] ? Number(range[2]) + 1 : undefined);
+        return new Response(init.method === 'HEAD' ? null : part, { status: 206, headers: { 'content-type': 'audio/mpeg', 'content-range': `bytes ${range[1]}-${Number(range[1]) + part.length - 1}/10`, 'content-length': String(part.length) } });
+      }
+      return new Response(bytes, { status: 200, headers: { 'content-type': 'audio/mpeg', 'content-length': '10' } });
+    }
+    if (web.broken || !feeds[url]) return new Response('nope', { status: 500 });
+    const body = feeds[url]();
+    const etag = `"${body.length}"`;
+    if (init.headers?.['if-none-match'] === etag) return new Response(null, { status: 304 });
+    return new Response(body, { status: 200, headers: { etag } });
+  };
+  const pod = createPod({ dataDir: dir, log: () => {}, fetchImpl, now: () => web.clock, findFeed: async (s) => `https://feeds.example/${s.appleId}`, ...opts });
+  await pod.init();
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://x');
+    try { if (!(await pod.handle(req, res, url.pathname, url))) { res.writeHead(404); res.end(); } } catch (err) { res.writeHead(500); res.end(err.message); }
+  }).listen(0);
+  const base = `http://localhost:${server.address().port}`;
+  const call = async (method, p, body, headers = { authorization: `Bearer ${KEY}` }) => {
+    const res = await fetch(base + p, { method, body: body == null ? undefined : JSON.stringify(body), headers });
+    const text = await res.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch {}
+    return { status: res.status, json, text, headers: res.headers };
+  };
+  return { pod, call, web, dir, base, close: async () => { server.close(); await pod.flush(); await rm(dir, { recursive: true, force: true }); } };
+}
+
+const A = subId('https://feeds.example/a');
+const B = subId('https://feeds.example/b');
+const sub = (feedUrl, title, at) => ({ id: subId(feedUrl), feedUrl, title, addedAt: at, at });
+
+test('the first device claims the library; others need its key', async () => {
+  const s = await serve();
+  try {
+    const none = {};
+    assert.deepEqual((await s.call('GET', '/api/pod/status', null, none)).json, { claimed: false, linked: false });
+    assert.equal((await s.call('POST', '/api/pod/sync', {}, none)).status, 401);
+    assert.equal((await s.call('POST', '/api/pod/claim', { key: 'short' }, none)).status, 400);
+    const claim = await s.call('POST', '/api/pod/claim', { key: KEY }, none);
+    assert.equal(claim.status, 200);
+    const cookie = claim.headers.get('set-cookie');
+    assert.match(cookie, /^pod_key=k+; Path=\/; Max-Age=315360000; HttpOnly; SameSite=Lax$/);
+    assert.equal((await s.call('POST', '/api/pod/claim', { key: 'x'.repeat(24) }, none)).status, 409, 'only once');
+    assert.equal((await s.call('POST', '/api/pod/link', { key: 'x'.repeat(24) }, none)).status, 401);
+    assert.equal((await s.call('POST', '/api/pod/link', { key: KEY }, none)).status, 200);
+    assert.deepEqual((await s.call('GET', '/api/pod/status')).json, { claimed: true, linked: true });
+    assert.deepEqual((await s.call('GET', '/api/pod/status', null, { authorization: 'Bearer wrong-key-wrong-key-wrong' })).json, { claimed: true, linked: false });
+    // A device that only has the cookie (a web app added to the home screen) can ask for the key.
+    assert.deepEqual((await s.call('GET', '/api/pod/key', null, { cookie: 'pod_key=' + KEY })).json, { key: KEY });
+    assert.equal((await s.call('GET', '/api/pod/inbox', null, { cookie: 'other=1; pod_key=nope' })).status, 401);
+    assert.match((await s.call('POST', '/api/pod/unlink', null, none)).headers.get('set-cookie'), /Max-Age=0/);
+    for (let i = 0; i < 20; i++) await s.call('POST', '/api/pod/link', { key: `wrong-${i}-wrong-wrong-wrong` }, none);
+    assert.equal((await s.call('POST', '/api/pod/link', { key: KEY }, none)).status, 429, 'guessing is slowed down');
+  } finally { await s.close(); }
+});
+
+test('a key set on the server cannot be claimed away', async () => {
+  const s = await serve({ key: KEY });
+  try {
+    assert.deepEqual((await s.call('GET', '/api/pod/status', null, {})).json, { claimed: true, linked: false });
+    assert.equal((await s.call('POST', '/api/pod/claim', { key: 'x'.repeat(24) }, {})).status, 409);
+    assert.equal((await s.call('GET', '/api/pod/inbox')).status, 200);
+  } finally { await s.close(); }
+});
+
+test('two devices stay in step, each getting only what it has not seen', async () => {
+  const s = await serve({ key: KEY });
+  try {
+    const first = await s.call('POST', '/api/pod/sync', { changes: { subs: { [A]: sub('https://feeds.example/a', 'Alpha', 100) }, progress: { ep1: { p: 60, d: 600, at: 100 } }, queue: { ids: ['ep1'], at: 100 } } });
+    assert.equal(first.status, 200);
+    const { epoch, rev } = first.json;
+    assert.ok(epoch && rev === 3);
+    // (The server reads the new show's feed and fills in its art: one more change, settled here
+    // so the counts below don't depend on when it lands.)
+    await s.pod.refreshAll();
+    // The other device knows nothing yet: it gets everything.
+    const other = await s.call('POST', '/api/pod/sync', { since: 0, changes: {} });
+    assert.deepEqual(Object.keys(other.json.changes.subs), [A]);
+    assert.equal(other.json.changes.progress.ep1.p, 60);
+    // It plays on; an older edit from the first device loses, a newer one wins.
+    const played = await s.call('POST', '/api/pod/sync', { epoch, since: other.json.rev, changes: { progress: { ep1: { p: 300, d: 600, at: 500 } } } });
+    assert.equal(played.json.rev, other.json.rev + 1);
+    const stale = await s.call('POST', '/api/pod/sync', { epoch, since: rev, changes: { progress: { ep1: { p: 90, d: 600, at: 200 } }, settings: { speed: 1.5, at: 300 } } });
+    assert.equal(stale.json.changes.progress.ep1.p, 300, 'it is told the newer position');
+    assert.equal(stale.json.changes.settings.speed, 1.5);
+    assert.equal(stale.json.changes.subs[A].art, 'https://img.example/Alpha.jpg', 'and of the art the server found');
+    const quiet = await s.call('POST', '/api/pod/sync', { epoch, since: stale.json.rev, changes: {} });
+    assert.deepEqual(quiet.json.changes, {});
+    // A device that last talked to another copy of the server gets everything again.
+    const moved = await s.call('POST', '/api/pod/sync', { epoch: 'older', since: 999, changes: {} });
+    assert.equal(moved.json.changes.progress.ep1.p, 300);
+    assert.ok(moved.json.changes.subs[A]);
+    assert.equal((await s.call('POST', '/api/pod/sync', '{not json')).status, 200, 'a string body is just no changes');
+  } finally { await s.close(); }
+});
+
+test('followed shows are read on the server: inbox, one show, notes, and again only when changed', async () => {
+  const s = await serve({ key: KEY });
+  try {
+    await s.call('POST', '/api/pod/sync', { changes: { subs: { [A]: sub('https://feeds.example/a', '', 100), [B]: sub('https://feeds.example/b', 'Beta', 100) } } });
+    const feed = await s.call('GET', `/api/pod/feed/${A}`);
+    assert.equal(feed.status, 200);
+    assert.equal(feed.json.title, 'Alpha');
+    assert.equal(feed.json.lang, 'english');
+    assert.deepEqual(feed.json.episodes.map((e) => e.title), ['Episode 2', 'Episode 1']);
+    assert.equal(feed.json.episodes[0].id, idOf('g2'));
+    assert.equal(feed.json.episodes[0].duration, 120);
+    assert.equal(feed.json.episodes[0].html, undefined, 'notes are fetched one at a time');
+    assert.equal(feed.json.etag, undefined);
+    assert.equal((await s.call('GET', `/api/pod/feed/${A}?limit=1`)).json.episodes.length, 1);
+    assert.equal((await s.call('GET', `/api/pod/feed/${A}?limit=1`)).json.total, 2);
+    await s.pod.refreshAll();
+    assert.equal(s.pod.doc.subs[A].title, 'Alpha', 'a show followed by address gets its name from the feed');
+    assert.equal(s.pod.doc.subs[A].art, 'https://img.example/Alpha.jpg');
+
+    const inbox = await s.call('GET', '/api/pod/inbox');
+    assert.deepEqual(inbox.json.episodes.map((e) => e.title), ['Episode 2', 'Episode 7', 'Episode 1', 'Episode 8', 'Episode 9'], 'the last 45 days, and at least three of each show');
+    assert.equal(inbox.json.episodes[0].sub, A);
+    const notes = await s.call('GET', `/api/pod/notes/${B}/${idOf('g7')}`);
+    assert.equal(notes.json.html, '<p>Long <a href="https://x.example">notes</a></p>');
+    assert.equal((await s.call('GET', `/api/pod/notes/${B}/${idOf('nope')}`)).json.html, '');
+
+    // Nothing new: the feed answers "not modified" and the copy is kept. Then a new episode.
+    await s.pod.refreshAll();
+    assert.equal((await s.call('GET', `/api/pod/feed/${A}`)).json.episodes.length, 2);
+    s.web.extra = true;
+    assert.equal((await s.call('GET', '/api/pod/inbox?fresh=1')).json.episodes[0].title, 'Episode 2', 'read a moment ago: not read again');
+    s.web.clock += 3600e3;
+    assert.equal((await s.call('GET', '/api/pod/inbox?fresh=1')).json.episodes[0].title, 'Episode 3', 'asked for what is new, the server reads the feeds');
+    assert.equal((await s.call('GET', `/api/pod/feed/${A}?fresh=1`)).json.episodes[0].title, 'Episode 3');
+    // A feed that stops answering keeps what was read last.
+    s.web.broken = true;
+    await s.pod.refreshAll();
+    const kept = await s.call('GET', `/api/pod/feed/${A}`);
+    assert.equal(kept.json.episodes.length, 3);
+    assert.match(kept.json.failed, /HTTP 500/);
+    s.web.broken = false;
+
+    // Unfollowing drops the show from the inbox and, at the next round, its files.
+    await s.call('POST', '/api/pod/sync', { changes: { subs: { [B]: { id: B, feedUrl: 'https://feeds.example/b', title: 'Beta', gone: true, at: s.web.clock } } } });
+    assert.ok((await s.call('GET', '/api/pod/inbox')).json.episodes.every((e) => e.sub === A));
+    assert.equal((await s.call('GET', `/api/pod/feed/${B}`)).status, 404);
+    await s.pod.refreshAll();
+    assert.deepEqual((await readdir(path.join(s.dir, 'pod', 'feeds'))).filter((f) => f.startsWith(B)), []);
+    assert.equal((await s.call('GET', '/api/pod/feed/../../auth')).status, 404);
+  } finally { await s.close(); }
+});
+
+test('a feed from anywhere can be looked at before it is followed', async () => {
+  const s = await serve({ key: KEY });
+  try {
+    const got = await s.call('GET', `/api/pod/resolve?url=${encodeURIComponent('https://feeds.example/b')}`);
+    assert.equal(got.json.title, 'Beta');
+    assert.equal(got.json.id, B);
+    assert.equal(got.json.episodes.length, 5);
+    assert.equal((await s.call('GET', '/api/pod/resolve?url=file:///etc/passwd')).status, 400);
+    assert.equal((await s.call('GET', `/api/pod/resolve?url=${encodeURIComponent('http://127.0.0.1:3000/x')}`)).status, 400);
+    assert.equal((await s.call('GET', `/api/pod/resolve?url=${encodeURIComponent('https://feeds.example/missing')}`)).status, 502);
+    assert.equal((await s.call('GET', `/api/pod/resolve?url=${encodeURIComponent('https://feeds.example/b')}`, null, {})).status, 401);
+    assert.equal(isPrivateHost('192.168.1.5'), true);
+    assert.equal(isPrivateHost('172.20.0.1'), true);
+    assert.equal(isPrivateHost('feeds.megaphone.fm'), false);
+  } finally { await s.close(); }
+});
+
+test('audio is passed through with byte ranges, for the key holder only', async () => {
+  const s = await serve({ key: KEY });
+  try {
+    const u = encodeURIComponent('https://cdn.example/1.mp3');
+    const whole = await fetch(`${s.base}/api/pod/audio?u=${u}`, { headers: { authorization: `Bearer ${KEY}` } });
+    assert.equal(whole.status, 200);
+    assert.equal(await whole.text(), '0123456789');
+    const part = await fetch(`${s.base}/api/pod/audio?u=${u}`, { headers: { authorization: `Bearer ${KEY}`, range: 'bytes=2-5' } });
+    assert.equal(part.status, 206);
+    assert.equal(part.headers.get('content-range'), 'bytes 2-5/10');
+    assert.equal(await part.text(), '2345');
+    assert.equal((await fetch(`${s.base}/api/pod/audio?u=${u}`)).status, 401);
+    assert.equal((await s.call('GET', `/api/pod/audio?u=${encodeURIComponent('http://localhost/x.mp3')}`)).status, 400);
+  } finally { await s.close(); }
+});
+
+test('the built-in shows are followed from the start and listed for the transcribing', async () => {
+  const s = await serve({ key: KEY, seeds: [{ name: 'Alpha Show', appleId: 'a' }, { name: 'Beta Show', appleId: 'b' }] });
+  try {
+    assert.equal((await s.call('GET', '/api/pod/transcribe', null, {})).json.ready, false);
+    await s.pod.refreshAll();
+    const list = await s.call('GET', '/api/pod/transcribe', null, {});
+    assert.equal(list.json.ready, true);
+    assert.deepEqual(list.json.shows.map((x) => x.feedUrl).sort(), ['https://feeds.example/a', 'https://feeds.example/b']);
+    assert.equal(list.json.shows[0].lang, 'english');
+    // Switched off in the app, a show is no longer transcribed, and it is not followed again.
+    const cur = s.pod.doc.subs[A];
+    await s.call('POST', '/api/pod/sync', { changes: { subs: { [A]: { ...cur, transcribe: false, at: s.web.clock + 1 } } } });
+    await s.pod.refreshAll();
+    assert.deepEqual((await s.call('GET', '/api/pod/transcribe', null, {})).json.shows.map((x) => x.feedUrl), ['https://feeds.example/b']);
+    // Large answers are compressed for those who ask.
+    const res = await fetch(`${s.base}/api/pod/feed/${B}`, { headers: { authorization: `Bearer ${KEY}`, 'accept-encoding': 'identity' } });
+    assert.equal(res.headers.get('content-encoding'), null);
+    const raw = await new Promise((resolve) => {
+      http.get(`${s.base}/api/pod/feed/${B}`, { headers: { authorization: `Bearer ${KEY}`, 'accept-encoding': 'gzip' } }, (r) => {
+        const chunks = [];
+        r.on('data', (c) => chunks.push(c));
+        r.on('end', () => resolve({ enc: r.headers['content-encoding'], body: Buffer.concat(chunks) }));
+      });
+    });
+    assert.equal(raw.enc, 'gzip');
+    assert.equal(JSON.parse(gunzipSync(raw.body)).title, 'Beta');
+  } finally { await s.close(); }
+});

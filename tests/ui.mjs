@@ -52,7 +52,7 @@ const check = (ok, what) => {
 
 async function run(name, contextOptions, audio) {
   console.log(`\n=== ${name}`);
-  const browser = await chromium.launch();
+  const browser = await chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME } : {});
   const ctx = await browser.newContext({ ...contextOptions, serviceWorkers: 'block' });
   await ctx.route('**/worker.js', (r) => r.fulfill({ path: join(ROOT, 'tests/ui/fake-worker.js'), contentType: 'text/javascript' }));
   const page = await ctx.newPage();
@@ -66,7 +66,7 @@ async function run(name, contextOptions, audio) {
   };
   const mobile = !!contextOptions.isMobile;
 
-  await page.goto(BASE);
+  await page.goto(`${BASE}#/transcribe`); // the app opens on the podcast side; this is the transcript side's test
   await page.evaluate(() => { localStorage.clear(); localStorage.setItem('glossary', 'Derek Thompson\nAnna Berg'); indexedDB.deleteDatabase('transcriber'); });
   await page.reload();
   await page.waitForSelector('#go');
@@ -147,8 +147,8 @@ async function run(name, contextOptions, audio) {
   const reopened = await page.evaluate(() => document.querySelector('#transcript .who')?.textContent);
   check(!!reopened, `library reopens the transcript with speakers (${reopened})`);
   if (mobile) {
-    const dock = await page.locator('#dock').isVisible();
-    check(dock, 'phone dock is shown');
+    const tools = await page.evaluate(() => ['#copy', '#export'].every((s) => document.querySelector(s).getBoundingClientRect().width > 30) && getComputedStyle(document.querySelector('#tabbar')).display !== 'none');
+    check(tools, 'on a phone, copy and export are in the toolbar and the sections along the bottom');
   }
 
   // Clean up the same episode: the studio's voices are the transcript's speakers.

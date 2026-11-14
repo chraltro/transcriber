@@ -215,7 +215,7 @@ for (const c of CASES) {
     if (!u.startsWith(base) && !/huggingface|jsdelivr|hf\.co|xethub/.test(u)) console.log(`  [${r.status()}] ${u.slice(0, 150)}`);
   });
 
-  await page.goto(`${base}/index.html${c.query || ''}`);
+  await page.goto(`${base}/index.html${c.query || ''}#/transcribe`);
   // Diagnostic cases can switch parts of the page's styling off.
   if (c.css) await page.addStyleTag({ content: c.css });
   // The page settles on GPU or CPU before the model list is final.

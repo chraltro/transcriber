@@ -16,7 +16,7 @@ await ctx.route(`${ORIGIN}/**`, async (route) => {
 });
 const page = await ctx.newPage();
 page.on('console', (m) => console.log(`  [console.${m.type()}] ${m.text().slice(0, 400)}`));
-await page.goto(`${ORIGIN}/index.html`);
+await page.goto(`${ORIGIN}/index.html#/transcribe`);
 
 // Top-level worker scripts: which ones start under the routed fake origin?
 const startTest = () => page.evaluate(async () => {
@@ -42,7 +42,7 @@ const server = createServer(async (req, res) => {
     res.end(body);
   } catch { res.writeHead(404); res.end(); }
 }).listen(8765);
-await page.goto('http://localhost:8765/index.html');
+await page.goto('http://localhost:8765/index.html#/transcribe');
 console.log('real server:', await startTest());
 
 // The full app flow on a generated 70 s WAV (tone bursts with pauses), as a user would.

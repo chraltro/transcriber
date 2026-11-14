@@ -6,7 +6,7 @@ import { createServer } from 'node:http';
 const server = createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<!doctype html><title>probe</title>'); }).listen(8766);
 const browser = await chromium.launch();
 const page = await browser.newPage();
-await page.goto('http://localhost:8766/');
+await page.goto('http://localhost:8766/#/transcribe');
 
 async function inPage(url, opts = {}, max = 400) {
   return page.evaluate(async ({ url, opts, max }) => {

@@ -5,7 +5,7 @@ const SITE = process.env.SITE || 'https://chraltro.github.io/transcriber/';
 let failures = 0;
 const check = (ok, msg) => { console.log(`${ok ? 'PASS' : 'FAIL'} ${msg}`); if (!ok) failures++; };
 
-for (const f of ['', 'app.js', 'worker.js', 'coi-sw.js', 'style.css', 'ui/waveform.js', 'ui/library.js', 'ui/speakermap.js', 'fonts/roboto-slab.woff2', 'fonts/jetbrains-mono.woff2', 'lib/speakers.js', 'lib/diarize.js', 'lib/speakermap.js', 'lib/names.js', 'lib/ads.js', 'lib/glossary.js', 'lib/context.js', 'lib/prompted.js', 'lib/paragraphs.js', 'lib/id3.js', 'lib/levels.js', 'lib/models.js', 'lib/stream.js', 'lib/mp3.js', 'lib/wav.js', 'lib/links.js', 'lib/text.js', 'lib/segment.js', 'lib/subtitles.js', 'lib/langid.js']) {
+for (const f of ['', 'app.js', 'worker.js', 'coi-sw.js', 'style.css', 'ui/waveform.js', 'ui/library.js', 'ui/speakermap.js', 'fonts/roboto-slab.woff2', 'fonts/jetbrains-mono.woff2', 'lib/speakers.js', 'lib/diarize.js', 'lib/speakermap.js', 'lib/names.js', 'lib/ads.js', 'lib/glossary.js', 'lib/context.js', 'lib/prompted.js', 'lib/paragraphs.js', 'lib/id3.js', 'lib/levels.js', 'lib/models.js', 'lib/stream.js', 'lib/mp3.js', 'lib/wav.js', 'lib/links.js', 'lib/text.js', 'lib/segment.js', 'lib/subtitles.js', 'lib/langid.js', 'lib/feed.js', 'lib/adbreaks.js', 'lib/podstate.js', 'lib/playback.js', 'lib/vendor/qrcode.mjs', 'ui/dom.js', 'ui/pod.js', 'ui/podstore.js', 'ui/player.js', 'ui/playerui.js', 'ui/downloads.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png']) {
   const r = await fetch(SITE + f);
   check(r.ok, `${f || 'index.html'} ${r.status} ${r.headers.get('content-type')}`);
 }
@@ -18,7 +18,7 @@ const browser = await chromium.launch();
 for (const c of CASES) {
   const page = await (await browser.newContext()).newPage();
   page.on('pageerror', (e) => console.log(`  [pageerror] ${e.message}`));
-  await page.goto(SITE);
+  await page.goto(`${SITE}#/transcribe`);
   // The service worker reloads the page once to enable cross-origin isolation.
   await page.waitForTimeout(4000);
   const iso = await page.evaluate(() => ({ isolated: self.crossOriginIsolated, sw: !!navigator.serviceWorker.controller }));

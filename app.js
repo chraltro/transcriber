@@ -19,6 +19,14 @@ import { speakerMap, talkTime, selection } from './lib/speakermap.js';
 import { Studio } from './ui/studio.js';
 import { RATE as CLEAN_RATE } from './lib/enhance/chain.js';
 import { wavHeader, toInt16 } from './lib/enhance/encode.js';
+import { PodStore, adhocId } from './ui/podstore.js';
+import { Downloads } from './ui/downloads.js';
+import { Player } from './ui/player.js';
+import { PlayerUI } from './ui/playerui.js';
+import { Pod } from './ui/pod.js';
+import { adBreaks } from './lib/adbreaks.js';
+import { subId } from './lib/podstate.js';
+import { summaryOf } from './lib/feed.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -30,7 +38,7 @@ const els = {
   deviceHint: $('#device-hint'), modelNote: $('#model-note'), refineBar: $('#refine-bar'), refineModel: $('#refine-model'), refineAll: $('#refine-all'), selPill: $('#sel-pill'), selModel: $('#sel-model'), stepTranscribe: $('#step-transcribe'),
   settings: $('#settings'), settingsToggle: $('#settings-toggle'), settingsSummary: $('#settings-summary'),
   episodesCard: $('#episodes-card'), feedTitle: $('#feed-title'), feedCount: $('#feed-count'), feedArt: $('#feed-art'),
-  episodesNote: $('#episodes-note'), episodes: $('#episodes'), filter: $('#episode-filter'),
+  episodesNote: $('#episodes-note'), episodes: $('#episodes'), filter: $('#episode-filter'), episodesFollow: $('#episodes-follow'),
   progressCard: $('#progress-card'), art: $('#art'), show: $('#session-show'), title: $('#episode-title'), steps: $('#steps'),
   stage: $('#stage'), detail: $('#detail'), stats: $('#stats'), cancel: $('#cancel'), sessionClose: $('#session-close'),
   play: $('#play'), waveWrap: $('#wave-wrap'), wave: $('#wave'), waveTip: $('#wave-tip'),
@@ -41,12 +49,12 @@ const els = {
   copy: $('#copy'), exportMenu: $('#export-menu'), exportBtn: $('#export'), download: $('#download'), downloadSrt: $('#download-srt'), downloadMd: $('#download-md'), downloadVtt: $('#download-vtt'), share: $('#share'),
   timestamps: $('#timestamps'),
   library: $('#library'), libraryList: $('#library-list'), shelf: $('#shelf'), shelfList: $('#shelf-list'), shelfNow: $('#shelf-now'),
-  jump: $('#jump-live'), dock: $('#dock'), dockPlay: $('#dock-play'), dockCopy: $('#dock-copy'), dockSave: $('#dock-save'),
+  jump: $('#jump-live'),
   topContext: $('#top-context'), topCrumb: $('#top-crumb'), topStatus: $('#top-status'), topDate: $('#top-date'), spineFoot: $('#spine-foot'),
   mapCard: $('#map-card'), mapGrid: $('#map-grid'), mapSel: $('#map-sel'), mapScope: $('#map-scope'), mapSummary: $('#map-summary'), mapKicker: $('#map-kicker'),
   mapPlay: $('#map-play'), mapRefine: $('#map-refine'), mapCopy: $('#map-copy'), mapClear: $('#map-clear'), talkCard: $('#talk-card'), talkList: $('#talk-list'),
-  mini: $('#mini'), miniArt: $('#mini-art'), miniTitle: $('#mini-title'), miniStatus: $('#mini-status'), miniPlay: $('#mini-play'), miniBar: $('#mini-bar'),
-  dropzone: $('#dropzone'), toast: $('#toast'), announce: $('#announce'), audio: $('#audio'),
+  mini: $('#mini'), miniArt: $('#mini-art'), miniTitle: $('#mini-title'), miniStatus: $('#mini-status'), miniBar: $('#mini-bar'),
+  dropzone: $('#dropzone'), toast: $('#toast'), toastText: $('#toast-text'), toastAction: $('#toast-action'), announce: $('#announce'), audio: $('#audio'),
   modes: $('#modes'), heroTitle: $('#hero-title'), heroKicker: $('#hero-kicker'), studio: $('#studio'), cleanBtn: $('#clean-btn'), stepsClean: $('#steps-clean'),
 };
 
@@ -66,8 +74,7 @@ const state = {
   source: null,       // what is on screen: { title, show, art, url, fileId, key }
   sourceFile: null,   // a picked File, for playback
   audioKey: null,
-  audioReadyFor: null,
-  audioObjectUrl: null,
+  sessionBlob: null,  // the audio being transcribed, for the player to start at once
   playable: false,
   playingIdx: -1,
   userScrolledAt: 0,
@@ -144,11 +151,18 @@ function setIcon(button, name) {
 }
 
 let toastTimer = 0;
-function toast(text) {
-  els.toast.textContent = text;
+// action: { label, run } puts a button beside the words ("Undo"), and gives it time to be pressed.
+function toast(text, action = null) {
+  els.toastText.textContent = text;
+  els.toastAction.classList.toggle('hidden', !action);
+  els.toast.classList.toggle('has-action', !!action);
+  if (action) {
+    els.toastAction.textContent = action.label;
+    els.toastAction.onclick = () => { els.toast.classList.remove('show'); action.run(); };
+  }
   els.toast.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => els.toast.classList.remove('show'), 2400);
+  toastTimer = setTimeout(() => els.toast.classList.remove('show'), action ? 7000 : 2400);
 }
 
 function announce(text) {
@@ -231,6 +245,15 @@ function setNote(step, text) {
 
 const DEFAULT_STATUS = 'Nothing leaves this browser';
 
+// The top bar belongs to whichever side is on screen. What the transcript side would say is
+// kept while the podcast screens are up, and put back when they go.
+const top = { crumb: '', context: 'New transcript', status: DEFAULT_STATUS };
+const transcribing = () => document.body.classList.contains('view-transcribe');
+function setTop(part, text) {
+  top[part] = text;
+  if (transcribing()) ({ crumb: els.topCrumb, context: els.topContext, status: els.topStatus })[part].textContent = text;
+}
+
 function renderStats(items) {
   els.stats.replaceChildren(...(items || []).map(({ v, l }) => {
     const s = el('span', 'stat', v);
@@ -244,7 +267,7 @@ function progress(stage, fraction, detail = '', stats = null) {
     studio.status(stage, detail, fraction);
     if (/^(Looking up|Reading link|Finding)/.test(stage)) studio.setStep('find');
     if (/^Downloading/.test(stage)) studio.setStep('download');
-    els.topStatus.textContent = state.busy ? stage : DEFAULT_STATUS;
+    setTop('status', state.busy ? stage : DEFAULT_STATUS);
     return;
   }
   els.stage.textContent = stage;
@@ -253,7 +276,7 @@ function progress(stage, fraction, detail = '', stats = null) {
   if (step) setStep(step);
   if (step === 'download') { const mb = detail.match(/[\d.]+ MB(?: of [\d.]+ MB)?/); if (mb) setNote('download', mb[0]); }
   if ((step === 'transcribe' || step === 'speakers') && stats?.[0]?.v) setNote(step, stats[0].v);
-  els.topStatus.textContent = state.busy ? [stage, stats?.[0]?.v].filter(Boolean).join(' · ') : (stage === 'Done' && detail ? detail : DEFAULT_STATUS);
+  setTop('status', state.busy ? [stage, stats?.[0]?.v].filter(Boolean).join(' · ') : (stage === 'Done' && detail ? detail : DEFAULT_STATUS));
   if (step === 'download') wave.setDownload(fraction);
   const waiting = fraction == null && step !== 'transcribe' && step !== 'draft' && step !== 'done';
   els.waveWrap.classList.toggle('loading', waiting && step !== undefined);
@@ -264,6 +287,8 @@ function progress(stage, fraction, detail = '', stats = null) {
     els.tailText.textContent = stats?.[0]?.v ? `${word} · ${stats[0].v}` : word;
   }
   updateMini();
+  // On the podcast screens, how far along it is shows beside "Transcribe".
+  pod.setBusy(!state.busy ? '' : wave.total ? `${Math.min(99, Math.round((100 * (wave.done || wave.draftDone || 0)) / wave.total))}%` : '…');
 }
 
 function showError(msg, title = "That didn't work", { retry = true } = {}) {
@@ -511,12 +536,16 @@ function startKeepAlive() {
 
 function stopKeepAlive() {
   keepAlive?.pause();
-  if ('mediaSession' in navigator && audio.paused) navigator.mediaSession.metadata = null;
+  sessionLine = '';
+  // The lock screen goes back to the episode in the player, if there is one.
+  if (!('mediaSession' in navigator) || !audio.paused) return;
+  if (player.item) player.metadata(); else navigator.mediaSession.metadata = null;
 }
 
 let sessionLine = '';
 function updateMediaSession() {
-  if (!IS_MOBILE || !('mediaSession' in navigator) || !window.MediaMetadata || !state.busy) return;
+  // While an episode plays, the lock screen is the player's.
+  if (!IS_MOBILE || !('mediaSession' in navigator) || !window.MediaMetadata || !state.busy || !audio.paused) return;
   const line = `${els.stage.textContent}${wave.total && (wave.done || wave.draftDone) ? ` · ${fmtTime(wave.done || wave.draftDone)} / ${fmtTime(wave.total)}` : ''}`;
   if (line === sessionLine) return;
   sessionLine = line;
@@ -538,6 +567,7 @@ function setBusy(busy) {
   document.body.classList.toggle('busy', busy);
   els.go.disabled = busy;
   els.file.disabled = busy;
+  if (!busy) pod.setBusy('');
   els.cancel.classList.toggle('hidden', !busy);
   els.sessionClose.classList.toggle('hidden', busy);
   els.cleanBtn.classList.toggle('hidden', busy || !state.playable || !state.segments.length);
@@ -584,10 +614,11 @@ function proxyChain() {
   return chain;
 }
 
-async function smartFetch(url, { accept } = {}) {
+// signal: the running job's by default, so cancelling it stops the request; null for requests
+// that belong to no job (the podcast screens).
+async function smartFetch(url, { accept, signal = state.abort?.signal } = {}) {
   let firstErr;
   for (const make of proxyChain()) {
-    const signal = state.abort?.signal;
     try {
       const res = await fetch(make(url), { signal, redirect: 'follow', headers: accept ? { Accept: accept } : undefined });
       if (res.ok) return res;
@@ -603,13 +634,12 @@ async function smartFetch(url, { accept } = {}) {
   );
 }
 
-async function fetchText(url) {
-  const res = await smartFetch(url);
+async function fetchText(url, opts) {
+  const res = await smartFetch(url, opts);
   return { text: await res.text(), type: res.headers.get('content-type') || '' };
 }
 
-function jsonp(url, timeout = 15000) {
-  const signal = state.abort?.signal;
+function jsonp(url, timeout = 15000, signal = state.abort?.signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(cancelled());
     const cb = `__jsonp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -672,6 +702,9 @@ async function forgetAudio(key) {
   try { await (await openAudioCache())?.delete(key); } catch {}
 }
 
+// The library's own server fetches audio for its owner when the podcast's host turns pages away.
+const passThrough = (url, signal) => fetch(`api/pod/audio?u=${encodeURIComponent(url)}`, { signal, headers: podcasts.key ? { authorization: `Bearer ${podcasts.key}` } : {} });
+
 async function openAudio(url) {
   for (const candidate of audioCandidates(url)) {
     try {
@@ -680,10 +713,41 @@ async function openAudio(url) {
       if (err.name === 'AbortError') throw err;
     }
   }
+  if (podcasts.server.linked) {
+    try {
+      const res = await passThrough(url, state.abort?.signal);
+      if (res.ok) return res;
+    } catch (err) {
+      if (err.name === 'AbortError') throw err;
+    }
+  }
   throw new UserError(
     "The podcast's host doesn't allow web pages to download its audio, so this episode can't be fetched from the browser.\n\n" +
     'Download the episode yourself and pick the file under "More options", or add your own CORS proxy there.'
   );
+}
+
+// An episode's audio, for keeping on the device: the server's copy of one it transcribed (the
+// one its transcript and ad marks line up with), else the podcast's own, straight from its host,
+// through the library's server, or through the listener's own proxy.
+async function openEpisodeAudio(ep, signal) {
+  const attempt = async (make, from) => {
+    try {
+      const res = await make();
+      if (res.ok && res.body) return { response: res, from };
+    } catch (err) {
+      if (err.name === 'AbortError') throw err;
+    }
+    return null;
+  };
+  const own = podcasts.transcripts.get(ep.id)?.audio;
+  let got = own ? await attempt(() => fetch(own, { signal }), 'server') : null;
+  for (const candidate of ep.url ? audioCandidates(ep.url) : []) got ||= await attempt(() => fetch(candidate, { signal, redirect: 'follow' }), 'origin');
+  if (ep.url && podcasts.server.linked) got ||= await attempt(() => passThrough(ep.url, signal), 'origin');
+  const custom = els.proxy.value.trim();
+  if (ep.url && custom) got ||= await attempt(() => fetch(custom.includes('{url}') ? custom.replace('{url}', encodeURIComponent(ep.url)) : custom + encodeURIComponent(ep.url), { signal }), 'origin');
+  if (!got) throw new Error(navigator.onLine === false ? 'there is no connection' : "its host doesn't let web pages download it");
+  return got;
 }
 
 function counting(res, label) {
@@ -734,17 +798,17 @@ async function resolveFeed(url, preferTitle) {
     const hit = bestTitleMatch(feed.episodes, preferTitle);
     if (hit) return { kind: 'audio', url: hit.url, title: hit.title, show: feed.title, art: hit.art || feed.image, notes: hit.notes };
   }
-  return { kind: 'list', ...feed };
+  return { kind: 'list', ...feed, feedUrl: url };
 }
 
 
 
 const ITUNES_COUNTRIES = ['us', 'no', 'dk', 'se', 'gb', 'fr', 'de', 'es', 'it'];
 
-async function itunesLookupEpisodes(showId) {
+async function itunesLookupEpisodes(showId, signal) {
   for (const country of ITUNES_COUNTRIES) {
     try {
-      const data = await jsonp(`https://itunes.apple.com/lookup?id=${showId}&entity=podcastEpisode&limit=200&country=${country}`);
+      const data = await jsonp(`https://itunes.apple.com/lookup?id=${showId}&entity=podcastEpisode&limit=200&country=${country}`, 15000, signal);
       const results = data?.results || [];
       const show = results.find((r) => r.kind === 'podcast' || r.wrapperType === 'track');
       const art = show?.artworkUrl600 || show?.artworkUrl100 || '';
@@ -755,6 +819,7 @@ async function itunesLookupEpisodes(showId) {
           duration: e.trackTimeMillis ? fmtTime(e.trackTimeMillis / 1000) : '',
           art: e.artworkUrl600 || e.artworkUrl160 || art, show: e.collectionName || show?.collectionName || '',
           notes: e.description || e.shortDescription || '',
+          guid: e.episodeGuid || '', seconds: e.trackTimeMillis ? Math.round(e.trackTimeMillis / 1000) : 0,
         }));
       if (show || episodes.length) return { show, episodes, art };
     } catch {}
@@ -763,10 +828,10 @@ async function itunesLookupEpisodes(showId) {
 }
 
 // Searches Apple's podcast directory (JSONP, so no CORS needed) across a few storefronts.
-async function itunesSearch(term, entity, keep = () => true) {
-  for (const country of ITUNES_COUNTRIES) {
+async function itunesSearch(term, entity, keep = () => true, { signal, countries = ITUNES_COUNTRIES } = {}) {
+  for (const country of countries) {
     try {
-      const data = await jsonp(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=${entity}&limit=50&country=${country}`);
+      const data = await jsonp(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=${entity}&limit=50&country=${country}`, 15000, signal);
       const results = (data?.results || []).filter(keep);
       if (results.length) return results;
     } catch {}
@@ -787,7 +852,7 @@ async function resolveApple(u) {
     if (ep) return { kind: 'audio', url: ep.url, title: ep.title, show: ep.show, art: ep.art, notes: ep.notes };
   }
   if (show?.feedUrl) {
-    try { return await resolveFeed(show.feedUrl); } catch (err) { if (err.name === 'AbortError') throw err; }
+    try { return { ...(await resolveFeed(show.feedUrl)), appleId: Number(showId) }; } catch (err) { if (err.name === 'AbortError') throw err; }
   }
   if (episodes.length) {
     return { kind: 'list', title: show?.collectionName || 'Episodes', image: art, episodes, note: episodeId ? "Couldn't find that exact episode, pick it from the list." : '' };
@@ -1144,7 +1209,7 @@ async function resolveLink(raw) {
   }
   if (text && looksLikeFeed(text)) {
     const feed = parseFeed(text);
-    if (feed?.episodes.length) return { kind: 'list', ...feed };
+    if (feed?.episodes.length) return { kind: 'list', ...feed, feedUrl: u.href };
   }
   const found = text ? findAudioInHtml(text, u.href) : null;
   if (found?.kind === 'audio') return found;
@@ -1174,12 +1239,24 @@ function showEpisodes(feed) {
   artInto(els.feedArt, { art: feed.image || feed.episodes[0]?.art, title: feed.title });
   els.episodesNote.textContent = feed.note || '';
   els.episodesNote.classList.toggle('hidden', !feed.note);
+  drawFollow();
   els.filter.value = '';
   renderEpisodes();
   els.episodesCard.classList.remove('hidden');
   updateLayout();
   els.episodesCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
   if (!IS_MOBILE) els.filter.focus({ preventScroll: true });
+}
+
+// A list that came from a feed can be followed from here.
+function drawFollow() {
+  const feed = state.feed;
+  els.episodesFollow.classList.toggle('hidden', !feed?.feedUrl);
+  if (!feed?.feedUrl) return;
+  const on = !!podcasts.show(subId(feed.feedUrl));
+  els.episodesFollow.querySelector('span').textContent = on ? 'Following' : 'Follow';
+  setIcon(els.episodesFollow, on ? 'check' : 'plus');
+  els.episodesFollow.disabled = on;
 }
 
 function renderEpisodes() {
@@ -1863,45 +1940,49 @@ async function shareTranscript() {
   downloadTranscript();
 }
 
-/* ---------- playback ---------- */
+/* ---------- playback ----------
+ * Everything plays through the one player (ui/player.js), and an open transcript borrows it.
+ * While the player holds this transcript's audio the two are bound: the waveform, the speaker
+ * map and the highlighted sentence follow it, and tapping a sentence moves it. Opening another
+ * transcript, or starting one, never stops what is playing. */
 
 const audio = els.audio;
 
+const podcasts = new PodStore({
+  fetchText: (url) => fetchText(url, { signal: null }).then((r) => r.text),
+  lookupApple: async (id) => {
+    const r = await itunesLookupEpisodes(id, null);
+    return { title: r.show?.collectionName || '', art: r.art, episodes: r.episodes };
+  },
+});
+const downloads = new Downloads({ open: openEpisodeAudio });
+const player = new Player({ audio, store: podcasts, downloads, cachedAudio, adsFor });
+
+// What the player calls the audio of the transcript on screen: the episode's id when it comes
+// from a followed show, else one made from where the audio is kept.
+const sessionId = () => state.source?.episodeId || (state.audioKey ? adhocId(state.audioKey) : null);
+const bound = () => !!player.item && player.item.id === sessionId();
+
+function sessionItem() {
+  const s = state.source || {};
+  return {
+    id: sessionId(), sub: s.sub || '', title: s.title || 'Audio', show: s.show || '', art: s.art || '',
+    url: s.url || '', audio: s.audio || '', key: state.audioKey || '', file: state.sourceFile || null, blob: state.sessionBlob || null,
+    duration: wave.total || 0,
+  };
+}
+
+// The transcript on screen lets go of the player (which plays on, in its bar).
 function releaseAudio() {
-  audio.pause();
-  audio.removeAttribute('src');
-  audio.load();
-  if (state.audioObjectUrl) URL.revokeObjectURL(state.audioObjectUrl);
-  state.audioObjectUrl = null;
-  state.audioReadyFor = null;
+  state.sessionBlob = null;
   highlightPlaying(-1);
   wave.setPosition(null);
+  map.setPlayhead(null);
   onPlayState();
 }
 
-// The copy that was transcribed (kept in Cache Storage) plays back in sync with the transcript;
-// a fresh download could carry different ads and drift. The original link is the fallback.
-async function ensureAudio() {
-  if (audio.getAttribute('src') && state.audioReadyFor === state.audioKey) return true;
-  releaseAudio();
-  let src = null;
-  if (state.sourceFile) src = URL.createObjectURL(state.sourceFile);
-  else {
-    const blob = state.audioKey ? await cachedAudio(state.audioKey) : null;
-    if (blob) src = URL.createObjectURL(blob);
-    // The server's copy of an episode it transcribed, else the original link.
-    else if (state.source?.audio) src = state.source.audio;
-    else if (state.source?.url) src = state.source.url;
-  }
-  if (!src) return false;
-  if (src.startsWith('blob:')) state.audioObjectUrl = src;
-  audio.src = src;
-  state.audioReadyFor = state.audioKey;
-  return true;
-}
-
 async function hasAudio() {
-  if (state.sourceFile || state.source?.url) return true;
+  if (state.sourceFile || state.source?.url || state.source?.audio) return true;
   if (!state.audioKey) return false;
   try { return !!(await (await openAudioCache())?.match(state.audioKey)); } catch { return false; }
 }
@@ -1915,41 +1996,20 @@ function setPlayable(on) {
   els.cleanBtn.classList.toggle('hidden', !on || state.busy || !state.segments.length);
   updateRefineBar();
   els.play.disabled = !on;
-  els.dockPlay.classList.toggle('hidden', !on);
-  els.miniPlay.classList.toggle('hidden', !on);
   els.transcript.classList.toggle('playable', on);
   wave.setSeekable(on && wave.total > 0 && !state.busy);
 }
 
-function startPlayback() {
-  audio.play().catch((err) => {
-    if (err.name === 'NotAllowedError') toast('Tap play again to start listening');
-    else if (err.name !== 'AbortError') toast("Couldn't play this audio in this browser.");
-  });
-}
-
-// Attach the audio before anyone taps play: iOS only starts playback when play() runs
-// directly in the tap, not after waiting for storage (that took a second tap).
+// The audio being transcribed is kept at hand, so the player can start it inside the tap that
+// asks for it (iOS plays nothing that had to wait for storage first).
 function attachAudio(blob) {
-  releaseAudio();
-  const src = URL.createObjectURL(blob);
-  state.audioObjectUrl = src;
-  audio.src = src;
-  state.audioReadyFor = state.audioKey;
+  state.sessionBlob = blob;
 }
-
-const audioReady = () => !!audio.getAttribute('src') && state.audioReadyFor === state.audioKey;
 
 async function togglePlay() {
   if (!state.playable) return;
-  if (!audio.paused) { audio.pause(); return; }
-  if (audioReady()) { startPlayback(); return; }
-  if (!(await ensureAudio())) {
-    setPlayable(false);
-    toast('The audio for this transcript is no longer stored in this browser.');
-    return;
-  }
-  startPlayback();
+  if (bound()) player.toggle();
+  else await player.play(sessionItem());
 }
 
 async function playFrom(t) {
@@ -1957,12 +2017,9 @@ async function playFrom(t) {
     toast('Audio is not available for this transcript.');
     return;
   }
-  if (!audioReady() && !(await ensureAudio())) { setPlayable(false); return; }
-  if (audio.readyState >= 1) audio.currentTime = t;
-  else audio.addEventListener('loadedmetadata', () => { audio.currentTime = t; }, { once: true });
-  wave.setPosition(t);
   state.userScrolledAt = 0;
-  startPlayback();
+  if (bound()) wave.setPosition(t);
+  await player.play(sessionItem(), { at: t });
 }
 
 function segmentAt(t) {
@@ -1991,33 +2048,155 @@ function highlightPlaying(i) {
 }
 
 function onPlayState() {
-  const playing = !audio.paused;
-  document.body.classList.toggle('playing', playing);
-  for (const b of [els.play, els.miniPlay, els.dockPlay]) {
-    setIcon(b, playing ? 'pause' : 'play');
-    b.setAttribute('aria-label', playing ? 'Pause' : 'Play');
-  }
+  const playing = bound() && player.playing;
+  setIcon(els.play, playing ? 'pause' : 'play');
+  els.play.setAttribute('aria-label', playing ? 'Pause' : 'Play');
   els.play.classList.toggle('playing', playing);
-  els.dockPlay.querySelector('span').textContent = playing ? 'Pause' : 'Play';
-  updateMini();
+}
+
+// The page follows the player wherever it is in this transcript's audio.
+function followPlayer() {
+  if (!bound()) return;
+  const t = player.time;
+  if (!player.playing && !t) return;
+  wave.setPosition(t);
+  map.setPlayhead(t);
+  highlightPlaying(segmentAt(t));
 }
 
 audio.addEventListener('play', () => { keepAlive?.pause(); });
 audio.addEventListener('pause', () => { if (state.busy) startKeepAlive(); });
-audio.addEventListener('play', onPlayState);
-audio.addEventListener('pause', onPlayState);
-audio.addEventListener('ended', onPlayState);
-audio.addEventListener('timeupdate', () => {
-  if (!audio.getAttribute('src') || (audio.paused && !audio.currentTime)) return;
-  wave.setPosition(audio.currentTime);
-  map.setPlayhead(audio.currentTime);
-  highlightPlaying(segmentAt(audio.currentTime));
-  updateMini();
-});
-audio.addEventListener('error', () => {
-  if (!audio.getAttribute('src')) return;
-  toast("Couldn't play this audio in this browser.");
+player.addEventListener('state', onPlayState);
+player.addEventListener('time', followPlayer);
+player.addEventListener('item', () => {
+  if (!bound()) { highlightPlaying(-1); wave.setPosition(null); map.setPlayhead(null); }
   onPlayState();
+});
+
+// Where the ads are in the copy of the audio the player has. The server's copy goes with the
+// server's transcript, whose ads are in its index; the copy that was transcribed here goes with
+// the transcript on screen or in the library. (The player asks only for copies that line up with
+// a transcript: the podcast's own file may carry other ads.)
+async function adsFor(item, source) {
+  if (source.kind === 'server' || source.kind === 'download') return podcasts.transcripts.get(item.id)?.ads || null;
+  if (item.id === sessionId() && state.segments.length && !state.busy) return adBreaks(state.segments, { minor: state.minor });
+  const entry = localIndex.has(item.id) ? await getEntry(localIndex.get(item.id)) : null;
+  return entry?.segments ? adBreaks(entry.segments) : null;
+}
+
+/* ---------- transcripts and the podcast screens ---------- */
+
+// Transcripts kept in this browser, by the episode (or pasted link) they are of.
+const localIndex = new Map();
+async function indexLocal() {
+  const entries = await listEntries();
+  localIndex.clear();
+  for (const e of entries) {
+    if (e.source?.episodeId) localIndex.set(e.source.episodeId, e.id);
+    if (e.key) localIndex.set(adhocId(e.key), e.id);
+    if (e.source?.url) localIndex.set(`url:${e.source.url}`, e.id);
+  }
+  pod.paintRows();
+}
+
+const localEntryOf = (ep) => localIndex.get(ep.id) || (ep.url ? localIndex.get(`url:${ep.url}`) : null) || null;
+const transcriptOf = (ep) => (podcasts.transcripts.has(ep.id) ? 'server' : localEntryOf(ep) ? 'local' : null);
+
+// The server's transcript of an episode (made from its own copy of the audio, ads marked), else
+// the one made in this browser.
+async function openEpisodeTranscript(ep) {
+  if (sessionId() === ep.id && state.segments.length) { pod.go('#/transcribe'); return; }
+  if (state.busy) { toast('A transcript is being made. This one opens when it is done or cancelled.'); pod.go('#/transcribe'); return; }
+  let entry = null;
+  if (podcasts.transcripts.has(ep.id)) {
+    try {
+      const res = await fetch(`library/${encodeURIComponent(ep.id)}.json`, { cache: 'no-cache' });
+      if (res.ok) entry = await res.json();
+    } catch {}
+  }
+  const local = localEntryOf(ep);
+  if (!entry && local) entry = await getEntry(local);
+  if (!entry) { toast(navigator.onLine === false ? 'The transcript is on the server, and there is no connection.' : "Couldn't open this transcript. Try again in a moment."); return; }
+  pod.go('#/transcribe');
+  await openEntry(entry, { episode: ep });
+}
+
+// An episode from the podcast screens goes to the speech model like a pasted link would, in
+// its show's language.
+function transcribeEpisode(ep) {
+  if (!ep?.url) { toast('This one has no link to fetch its audio from.'); return; }
+  if (state.busy) { toast('One transcript at a time. This one can start when the other is done.'); pod.go('#/transcribe'); return; }
+  const lang = podcasts.show(ep.sub)?.lang;
+  const radio = lang && document.querySelector(`input[name=lang][value="${CSS.escape(lang)}"]`);
+  if (radio && !radio.checked) {
+    radio.checked = true;
+    store.set('lang', lang);
+    fillModels();
+  }
+  pod.go('#/transcribe');
+  run(async () => {
+    // The show notes name the guests: they go into the speech model's prompt.
+    const notes = await podcasts.notes(ep.sub, ep.id).catch(() => '');
+    return { kind: 'audio', url: ep.url, title: ep.title, show: ep.show, art: ep.art, notes: summaryOf(notes || ep.summary || '', 4000), episodeId: ep.id, sub: ep.sub || '' };
+  });
+}
+
+// Shows by name, from Apple's directory: the listener's own country's first, then the US one.
+async function searchShows(term) {
+  const own = (navigator.language || '').split('-')[1]?.toLowerCase();
+  const countries = [...new Set([own, 'us'].filter((c) => c && /^[a-z]{2}$/.test(c)))];
+  const lists = await Promise.all(countries.map((c) => itunesSearch(term, 'podcast', (r) => r.feedUrl, { signal: null, countries: [c] }).catch(() => [])));
+  const seen = new Set();
+  return lists.flat().filter((r) => !seen.has(r.collectionId) && seen.add(r.collectionId)).slice(0, 30).map((r) => ({
+    id: subId(r.feedUrl), feedUrl: r.feedUrl, title: r.collectionName, author: r.artistName || '', genre: r.primaryGenreName || '',
+    art: r.artworkUrl600 || r.artworkUrl100 || '', appleId: r.collectionId,
+  }));
+}
+
+// A show from what was pasted: an Apple Podcasts link, or the address of a feed.
+async function showFromLink(text) {
+  const link = normalizeLink(text);
+  if (!link) return null;
+  const u = new URL(link);
+  const appleId = /(^|\.)apple\.com$/.test(u.hostname) ? u.pathname.match(/id(\d+)/)?.[1] : (/^(overcast|castro)\.fm$/.test(u.hostname) && u.pathname.match(/^\/itunes\/?(\d+)/)?.[1]);
+  if (appleId) {
+    for (const country of ITUNES_COUNTRIES.slice(0, 4)) {
+      const data = await jsonp(`https://itunes.apple.com/lookup?id=${appleId}&entity=podcast&country=${country}`, 15000, null).catch(() => null);
+      const r = data?.results?.find((x) => x.feedUrl);
+      if (r) return { id: subId(r.feedUrl), feedUrl: r.feedUrl, title: r.collectionName, author: r.artistName || '', genre: r.primaryGenreName || '', art: r.artworkUrl600 || r.artworkUrl100 || '', appleId: r.collectionId };
+    }
+    return null;
+  }
+  const feed = await podcasts.preview(link).catch(() => null);
+  return feed?.title ? { id: subId(link), feedUrl: link, title: feed.title, author: feed.author || '', art: feed.art || '', lang: feed.lang || '' } : null;
+}
+
+const playerUI = new PlayerUI({
+  player, store: podcasts, artInto, toast,
+  hasTranscript: (item) => !!transcriptOf(item),
+  // With none yet, the episode's own sheet has the ways of getting one.
+  openTranscript: (item) => (transcriptOf(item) || sessionId() === item.id ? openEpisodeTranscript(item) : pod.episode(item)),
+  openEpisode: (item) => pod.episode(item),
+});
+
+const pod = new Pod({
+  store: podcasts, player, playerUI, downloads, artInto, toast, searchShows, showFromLink, transcriptOf,
+  openTranscript: openEpisodeTranscript,
+  transcribe: transcribeEpisode,
+  setTop: ({ crumb, context, status }) => {
+    if (transcribing()) return;
+    els.topCrumb.textContent = crumb;
+    els.topContext.textContent = context;
+    els.topStatus.textContent = status;
+  },
+  onView: (view) => {
+    if (view !== 'transcribe') return;
+    els.topCrumb.textContent = top.crumb;
+    els.topContext.textContent = top.context;
+    els.topStatus.textContent = top.status;
+    updateLayout();
+    updateMap(true);
+  },
 });
 
 /* ---------- session, mini player, layout ---------- */
@@ -2038,7 +2217,7 @@ function showSessionMeta(meta, { loading = false } = {}) {
   artInto(els.art, meta, { loading });
   artInto(els.miniArt, meta, { loading });
   els.miniTitle.textContent = meta?.title || '';
-  els.topContext.textContent = [meta?.show, meta?.title].filter(Boolean).join(' · ') || 'Transcript';
+  setTop('context', [meta?.show, meta?.title].filter(Boolean).join(' · ') || 'Transcript');
 }
 
 function hideSession() {
@@ -2051,33 +2230,27 @@ function updateLayout() {
   const session = !els.progressCard.classList.contains('hidden') || !els.resultCard.classList.contains('hidden') || !els.resumeCard.classList.contains('hidden') || !els.studio.classList.contains('hidden');
   document.body.classList.toggle('has-session', session);
   document.body.classList.toggle('reading', reading);
-  els.dock.classList.toggle('hidden', !reading);
   els.readerFoot.classList.toggle('hidden', state.busy || !reading || !els.resumeCard.classList.contains('hidden'));
   if (session) {
     els.library.classList.add('hidden');
     els.shelf.classList.add('hidden');
-  } else {
+  } else if (transcribing()) {
     renderLibrary();
     renderShelf();
   }
   updateSettingsSummary();
 }
 
+// How far the transcript is, when its panel has scrolled out of sight (playing has its own bar).
 function updateMini() {
-  const active = state.busy || (state.playable && !audio.paused);
-  const show = state.sessionOffscreen && active && !els.progressCard.classList.contains('hidden');
+  const show = state.sessionOffscreen && state.busy && transcribing() && !els.progressCard.classList.contains('hidden');
   document.body.classList.toggle('show-mini', show);
   els.mini.setAttribute('aria-hidden', String(!show));
   if (!show) return;
   const total = wave.total;
-  if (!audio.paused) {
-    els.miniStatus.textContent = `${fmtTime(audio.currentTime)} / ${fmtTime(total)}`;
-    els.miniBar.style.width = total ? `${(audio.currentTime / total) * 100}%` : '0';
-  } else {
-    const done = wave.done;
-    els.miniStatus.textContent = total && done ? `${els.stage.textContent} · ${fmtTime(done)} / ${fmtTime(total)}` : els.stage.textContent;
-    els.miniBar.style.width = total ? `${(done / total) * 100}%` : '0';
-  }
+  const done = wave.done;
+  els.miniStatus.textContent = total && done ? `${els.stage.textContent} · ${fmtTime(done)} / ${fmtTime(total)}` : els.stage.textContent;
+  els.miniBar.style.width = total ? `${(done / total) * 100}%` : '0';
 }
 
 new IntersectionObserver(([e]) => {
@@ -2103,8 +2276,8 @@ function closeSession() {
   els.resumeCard.classList.add('hidden');
   els.episodesCard.classList.add('hidden');
   clearError();
-  els.topContext.textContent = 'New transcript';
-  els.topStatus.textContent = DEFAULT_STATUS;
+  setTop('context', 'New transcript');
+  setTop('status', DEFAULT_STATUS);
   els.steps.querySelectorAll('li').forEach((li) => li.classList.remove('done', 'active'));
   els.steps.querySelectorAll('.note').forEach((n) => { n.textContent = ''; });
   updateMap();
@@ -2150,6 +2323,7 @@ async function renderLibrary() {
       await deleteEntry(e.id);
       toast('Transcript deleted');
       renderLibrary();
+      indexLocal();
     });
     card.append(art, text, el('span', 'entry-num', fmtTime(e.total || 0)), el('span', 'entry-num', fmtNum(e.words)), open, del);
     li.append(card);
@@ -2211,12 +2385,16 @@ async function renderShelf() {
   }));
 }
 
-async function openEntry(entry) {
+// episode: the episode it was opened from on the podcast screens, when it was.
+async function openEntry(entry, { episode = null } = {}) {
   if (state.busy) return;
   if (state.cleaning) leaveCleaning();
   clearError();
   releaseAudio();
-  state.source = { title: entry.title, show: entry.show, art: entry.art, url: entry.source?.url, fileId: entry.source?.fileId, key: entry.key, notes: entry.notes || '', audio: entry.audio || '' };
+  // The server files a transcript under its episode's id; one made here remembers its episode.
+  const episodeId = episode?.id || entry.source?.episodeId || (String(entry.key || '').startsWith('server:') ? entry.id : '');
+  const sub = episode?.sub || entry.source?.sub || podcasts.shows.find((x) => x.title === entry.show)?.id || '';
+  state.source = { title: entry.title, show: entry.show, art: entry.art, url: entry.source?.url, fileId: entry.source?.fileId, key: entry.key, notes: entry.notes || '', audio: entry.audio || '', episodeId, sub };
   state.vocab = vocabulary(state.source);
   state.entryId = entry.id;
   state.lang = entry.lang;
@@ -2235,6 +2413,8 @@ async function openEntry(entry) {
     [{ v: fmtTime(entry.total || 0), l: 'audio' }, { v: fmtNum(entry.words), l: 'words' }]);
   setBusy(false);
   await refreshPlayable();
+  // Already in the player: the page falls in with it.
+  if (bound()) { onPlayState(); followPlayer(); player.loadAds(); }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -2368,7 +2548,9 @@ async function run(getSource, resume = null) {
 
     let blob;
     if (source.url) {
-      blob = await downloadAudio(source.url, key);
+      // An episode saved for offline is already on the device.
+      const saved = source.episodeId && !(await cachedAudio(key)) ? await downloads.blob(source.episodeId) : null;
+      blob = saved ? await storeAudio(key, new Response(saved), () => saved) : await downloadAudio(source.url, key);
     } else if (source.file) {
       // Kept on disk so a reload can resume; if storage is full, the file itself works too.
       blob = await storeAudio(key, new Response(source.file), () => source.file);
@@ -2392,7 +2574,7 @@ async function run(getSource, resume = null) {
     showSteps(drafting);
     saveJob({
       id: resume?.id || newId(),
-      source: { kind: 'audio', title: state.source.title, show: state.source.show, art: state.source.art, url: source.url, fileId: source.fileId, notes: (source.notes || '').slice(0, 4000) },
+      source: { kind: 'audio', title: state.source.title, show: state.source.show, art: state.source.art, url: source.url, fileId: source.fileId, notes: (source.notes || '').slice(0, 4000), episodeId: source.episodeId || '', sub: source.sub || '' },
       key,
       title: state.source.title,
       lang: language(),
@@ -2473,7 +2655,7 @@ async function finishRun() {
     segments: state.segments,
     levels: encodeLevels(wave.levels),
     key: job.key,
-    source: { url: job.source?.url, fileId: job.source?.fileId },
+    source: { url: job.source?.url, fileId: job.source?.fileId, episodeId: job.source?.episodeId || '', sub: job.source?.sub || '' },
     notes: job.source?.notes || '',
     voices: state.voices,
     speakerNames: state.speakerNames,
@@ -2482,6 +2664,7 @@ async function finishRun() {
     await saveEntry(entry);
     state.entryId = entry.id;
     state.transcriptModel = entry.model;
+    indexLocal();
   }
   wave.setDone(total);
   wave.setFinished(true);
@@ -2497,6 +2680,8 @@ async function finishRun() {
     [{ v: fmtTime(total), l: 'audio' }, { v: fmtNum(words), l: 'words' }, { v: `${(total / Math.max(took, 1)).toFixed(1)}×`, l: 'speed' }]);
   setPlayable(state.playable);
   updateLayout();
+  // The ads this transcript marks, for the player if it has this audio.
+  if (bound()) player.loadAds();
   announce('Transcript finished.');
   toast(state.segments.length ? `Done: ${fmtNum(words)} words` : 'No speech found');
 }
@@ -2806,6 +2991,7 @@ function applyMode() {
 
 // Every way of starting (the link, the episode picker, a file) goes through here.
 function start(getSource) {
+  if (!transcribing()) pod.go('#/transcribe');
   if (mode() === 'clean') runClean(getSource);
   else run(getSource);
 }
@@ -2837,7 +3023,7 @@ function showStudioHeader(meta, { loading = false } = {}) {
   els.studio.querySelector('#studio-title').textContent = meta?.title || 'Episode';
   els.studio.querySelector('#studio-show').textContent = meta?.show ? `${meta.show} · clean up` : 'Clean up';
   artInto(els.studio.querySelector('#studio-art'), meta, { loading });
-  els.topContext.textContent = [meta?.show, meta?.title].filter(Boolean).join(' · ') || 'Clean up';
+  setTop('context', [meta?.show, meta?.title].filter(Boolean).join(' · ') || 'Clean up');
 }
 
 function enterCleaning() {
@@ -2977,7 +3163,7 @@ const studio = new Studio({
   toast,
   saveBlob,
   setBusy: setCleanBusy,
-  onStatus: (stage) => { els.topStatus.textContent = state.busy ? stage : DEFAULT_STATUS; },
+  onStatus: (stage) => { setTop('status', state.busy ? stage : DEFAULT_STATUS); },
   onClose: () => {
     // Closing stops whatever the studio is doing (listening, exporting); a transcript job that
     // is running (refine, speaker labels) carries on, only the studio goes.
@@ -3065,14 +3251,14 @@ function foldSettings(fold) {
 
 function updateSettingsSummary() {
   if (document.body.classList.contains('cleaning') || document.body.classList.contains('mode-clean')) {
-    els.topCrumb.textContent = 'Clean up / 44.1 kHz / in this browser';
+    setTop('crumb', 'Clean up / 44.1 kHz / in this browser');
     els.spineFoot.textContent = 'Clean up\nEvery voice its own chain\nNothing uploaded';
     return;
   }
   const m = MODELS[selectedModel()];
   els.settingsSummary.textContent = `${LANG_NAMES[language()]} · ${m?.name || ''} model`;
   els.spineFoot.textContent = `${LANG_NAMES[language()]} / ${m?.name || ''}\n${state.gpu.available ? 'GPU' : 'CPU'} / speakers ${speakersOn() ? 'on' : 'off'}\nNothing uploaded`;
-  els.topCrumb.textContent = `Transcripts / ${LANG_NAMES[language()]} / ${m?.name || ''}`;
+  setTop('crumb', `Transcripts / ${LANG_NAMES[language()]} / ${m?.name || ''}`);
 }
 
 function tickClock() {
@@ -3159,9 +3345,12 @@ function wireEvents() {
   els.refineModel.addEventListener('change', () => { els.selModel.textContent = `with ${els.refineModel.selectedOptions[0]?.textContent || ''}`; });
   els.sessionClose.addEventListener('click', closeSession);
   $('#new-transcript').addEventListener('click', () => { closeSession(); setTimeout(() => els.url.focus({ preventScroll: true }), 400); });
-  document.querySelector('.brand').addEventListener('click', (e) => {
-    e.preventDefault();
-    closeSession();
+  els.episodesFollow.addEventListener('click', () => {
+    const f = state.feed;
+    if (!f?.feedUrl) return;
+    podcasts.follow({ feedUrl: f.feedUrl, title: f.title, art: f.image, appleId: f.appleId });
+    toast(`Following ${f.title || 'the show'}`);
+    drawFollow();
   });
   els.filter.addEventListener('input', renderEpisodes);
   $('#episodes-close').addEventListener('click', () => { els.episodesCard.classList.add('hidden'); updateLayout(); });
@@ -3169,8 +3358,6 @@ function wireEvents() {
   els.errorRetry.addEventListener('click', () => { clearError(); state.lastAttempt?.(); });
 
   els.copy.addEventListener('click', copyTranscript);
-  els.dockCopy.addEventListener('click', copyTranscript);
-  els.dockSave.addEventListener('click', () => (IS_MOBILE ? shareTranscript() : downloadTranscript()));
   els.exportBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     const open = els.exportMenu.classList.toggle('open');
@@ -3200,7 +3387,7 @@ function wireEvents() {
     playFrom(Number(seg.dataset.start));
   });
 
-  for (const b of [els.play, els.miniPlay, els.dockPlay]) b.addEventListener('click', (e) => { e.stopPropagation(); togglePlay(); });
+  els.play.addEventListener('click', (e) => { e.stopPropagation(); togglePlay(); });
   els.mini.addEventListener('click', () => els.progressCard.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   els.jump.addEventListener('click', scrollToLive);
 
@@ -3223,8 +3410,14 @@ function wireEvents() {
       if (!els.episodesCard.classList.contains('hidden')) { els.episodesCard.classList.add('hidden'); updateLayout(); }
     }
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === '/' && !els.resultCard.classList.contains('hidden')) { e.preventDefault(); els.search.focus(); }
-    if (e.key === 'k' && state.playable) { e.preventDefault(); togglePlay(); }
+    if (e.key === '/' && transcribing() && !els.resultCard.classList.contains('hidden')) { e.preventDefault(); els.search.focus(); }
+    // The player's keys, as video sites have them: k or space plays and pauses, j and l (or the
+    // arrows) go back and forward. Not while a button or a slider has the keyboard.
+    const onControl = !!document.activeElement?.closest?.('button, a, summary, [role=slider], [tabindex="0"]');
+    const key = e.key === ' ' ? (onControl ? '' : 'k') : e.key === 'ArrowLeft' ? (onControl ? '' : 'j') : e.key === 'ArrowRight' ? (onControl ? '' : 'l') : e.key.toLowerCase();
+    if (key === 'k' && (player.item || state.playable)) { e.preventDefault(); if (player.item) player.toggle(); else togglePlay(); }
+    if (key === 'j' && player.item) { e.preventDefault(); player.skip(-podcasts.settings.back); }
+    if (key === 'l' && player.item) { e.preventDefault(); player.skip(podcasts.settings.fwd); }
   });
 
   // Drop an audio file anywhere on the page.
@@ -3262,7 +3455,6 @@ async function init() {
     state.canShareFiles = !!navigator.canShare?.({ files: [new File(['x'], 'x.txt', { type: 'text/plain' })] });
   } catch {}
   els.share.classList.toggle('hidden', !state.canShareFiles);
-  if (!IS_MOBILE) els.dockSave.querySelector('span').textContent = 'Download';
   if (store.get('model', null)) foldSettings(true);
   wireEvents();
   tickClock();
@@ -3288,16 +3480,22 @@ async function init() {
   if (job?.source && job.doneSec >= 0) offerResume(job);
   updateLayout();
 
-  // Regeneration needs this app's own server (transcriber.demant.app); a static copy (GitHub
-  // Pages) has none, and says so in its library index.
-  fetch('library/index.json', { cache: 'no-cache' })
-    .then((r) => (r.ok && /json/.test(r.headers.get('content-type') || '') ? r.json() : null))
-    .then((index) => (index && !index.static ? fetch('api/enhance/queue', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)) : null))
+  // A link handed over by another app (?url=, or ?text= from a share sheet) is for transcribing.
+  const params = new URLSearchParams(location.search);
+  const shared = params.get('url') || normalizeLink(params.get('text') || '');
+  if (shared) els.url.value = shared;
+
+  // The podcast side. It opens on what is new, unless there is something to do with a transcript.
+  if (!/^#(\/|link=)/.test(location.hash) && (shared || job?.source || params.get('mode'))) history.replaceState(history.state, '', `${location.pathname}${location.search}#/transcribe`);
+  player.restore();
+  pod.route();
+  downloads.verify();
+  // The server, if this copy of the app has one: the library, and (for the clean-up studio)
+  // voice regeneration. A static copy (GitHub Pages) has neither.
+  podcasts.connect().then((server) => (server.there && !server.offline ? fetch('api/enhance/queue', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)) : null))
     .then((q) => { if (q?.jobs) studio.deps.server.available = true; })
     .catch(() => {});
-
-  const shared = new URLSearchParams(location.search).get('url');
-  if (shared) els.url.value = shared;
+  (window.requestIdleCallback || setTimeout)(() => indexLocal());
 }
 
 init();

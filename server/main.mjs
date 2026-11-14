@@ -15,9 +15,13 @@ import { pipeline as pipe } from 'node:stream/promises';
 import { findFeed, readFeed } from './feeds.mjs';
 import { transcribeEpisode } from './transcribe.mjs';
 import { MODELS, dtypeFor } from '../lib/models.js';
-import { SHOWS, idOf, metaOf, markdownOf } from './shows.mjs';
+import { promisify } from 'node:util';
+import zlib from 'node:zlib';
+import { SHOWS, idOf, metaOf, markdownOf, adsOf } from './shows.mjs';
 import { verifyGithubToken } from './oidc.mjs';
 import { createEnhance } from './enhance.mjs';
+import { createPod } from './pod.mjs';
+import { ADS_VERSION } from '../lib/adbreaks.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = process.env.DATA_DIR || '/data';
@@ -58,7 +62,8 @@ async function readIndex() {
 
 async function addToIndex(entry) {
   const index = await readIndex();
-  const meta = metaOf(entry);
+  // Where the ads are goes into the index, so the player can skip them without the transcript.
+  const meta = metaOf({ ...entry, ads: adsOf(entry), adsV: ADS_VERSION });
   index.entries = [meta, ...index.entries.filter((e) => e.id !== entry.id)].sort((a, b) => b.createdAt - a.createdAt);
   await writeJson(path.join(LIB, 'index.json'), index);
 }
@@ -193,6 +198,28 @@ async function pruneAudio() {
 }
 
 
+// Transcripts filed before the index held their ads (or under an older way of finding them)
+// get them now, one at a time.
+async function markAds() {
+  const index = await readIndex();
+  let changed = 0;
+  for (const meta of index.entries) {
+    if (meta.adsV === ADS_VERSION) continue;
+    const entry = await readJson(path.join(LIB, `${meta.id}.json`), null);
+    if (!entry?.segments) continue;
+    meta.ads = adsOf(entry);
+    meta.adsV = ADS_VERSION;
+    changed++;
+  }
+  if (!changed) return;
+  // Uploads may have come in meanwhile: only the ads are carried over.
+  const fresh = await readIndex();
+  const mine = new Map(index.entries.map((m) => [m.id, m]));
+  for (const meta of fresh.entries) if (meta.adsV !== ADS_VERSION && mine.get(meta.id)?.adsV === ADS_VERSION) Object.assign(meta, { ads: mine.get(meta.id).ads, adsV: ADS_VERSION });
+  await writeJson(path.join(LIB, 'index.json'), fresh);
+  log(`ads: marked in ${changed} transcript${changed === 1 ? '' : 's'}`);
+}
+
 /* ---------- web ---------- */
 
 const TYPES = {
@@ -203,12 +230,31 @@ const TYPES = {
 };
 const PUBLIC = /^\/(index\.html|app\.js|worker\.js|enhance-worker\.js|coi-sw\.js|style\.css|(lib|ui|fonts)\/[\w./-]+|[\w-]+\.(png|svg|ico|webmanifest|txt))$/;
 
+// Text is sent compressed (the app's own files are compressed once and kept; transcripts as
+// they go out), and everything carries a tag so a reload costs a few bytes when nothing changed.
+const gzip = promisify(zlib.gzip);
+const brotli = promisify(zlib.brotliCompress);
+const TEXT = new Set(['.html', '.js', '.mjs', '.css', '.json', '.md', '.svg', '.webmanifest', '.txt']);
+const packed = new Map(); // file -> { tag, br, gzip }
+async function compressed(file, tag, enc, keep) {
+  let hit = packed.get(file);
+  if (!hit || hit.tag !== tag) hit = { tag };
+  if (!hit[enc]) {
+    const raw = await readFile(file);
+    hit[enc] = enc === 'br' ? await brotli(raw, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } }) : await gzip(raw, { level: 6 });
+  }
+  if (keep) packed.set(file, hit);
+  return hit[enc];
+}
+
 // With byte ranges: the audio element seeks with them.
 async function serveFile(req, res, file, { cache = 'no-cache' } = {}) {
   try {
     const s = await stat(file);
     if (!s.isFile()) throw new Error('not a file');
-    const type = TYPES[path.extname(file)] || 'application/octet-stream';
+    const ext = path.extname(file);
+    const type = TYPES[ext] || 'application/octet-stream';
+    const tag = `"${s.size.toString(36)}-${Math.round(s.mtimeMs).toString(36)}"`;
     const range = req.headers.range?.match(/^bytes=(\d*)-(\d*)$/);
     if (range && (range[1] || range[2])) {
       let start = range[1] ? Number(range[1]) : Math.max(0, s.size - Number(range[2]));
@@ -218,11 +264,24 @@ async function serveFile(req, res, file, { cache = 'no-cache' } = {}) {
         res.end();
         return;
       }
-      res.writeHead(206, { 'content-type': type, 'content-length': end - start + 1, 'content-range': `bytes ${start}-${end}/${s.size}`, 'accept-ranges': 'bytes', 'cache-control': cache });
+      res.writeHead(206, { 'content-type': type, 'content-length': end - start + 1, 'content-range': `bytes ${start}-${end}/${s.size}`, 'accept-ranges': 'bytes', 'cache-control': cache, etag: tag });
       createReadStream(file, { start, end }).pipe(res);
       return;
     }
-    res.writeHead(200, { 'content-type': type, 'content-length': s.size, 'accept-ranges': 'bytes', 'cache-control': cache });
+    if (req.headers['if-none-match'] === tag) {
+      res.writeHead(304, { etag: tag, 'cache-control': cache });
+      res.end();
+      return;
+    }
+    const accepts = req.headers['accept-encoding'] || '';
+    const enc = TEXT.has(ext) && s.size > 1024 && s.size < 8e6 ? (/\bbr\b/.test(accepts) ? 'br' : /\bgzip\b/.test(accepts) ? 'gzip' : '') : '';
+    if (enc) {
+      const body = await compressed(file, tag, enc, file.startsWith(ROOT + path.sep));
+      res.writeHead(200, { 'content-type': type, 'content-length': body.length, 'content-encoding': enc, vary: 'accept-encoding', 'cache-control': cache, etag: tag });
+      res.end(req.method === 'HEAD' ? undefined : body);
+      return;
+    }
+    res.writeHead(200, { 'content-type': type, 'content-length': s.size, 'accept-ranges': 'bytes', 'cache-control': cache, etag: tag });
     if (req.method === 'HEAD') { res.end(); return; }
     createReadStream(file).pipe(res);
   } catch {
@@ -244,6 +303,10 @@ const dispatch = process.env.GH_DISPATCH_TOKEN ? async () => {
   if (!res.ok) throw new Error(`GitHub: HTTP ${res.status}`);
 } : null;
 const enhance = createEnhance({ dataDir: DATA, authorized: (req) => authorized(req, ENHANCE_WORKFLOW), log, site: SITE_URL, dispatch, key: process.env.ENHANCE_KEY || '' });
+// The podcast side: followed shows, positions and queue in step across devices, feeds read here
+// (server/pod.mjs). SYNC_KEY fixes the library's key; without it the first device to ask sets it.
+const pod = createPod({ dataDir: DATA, log, findFeed, seeds: SHOWS, key: process.env.SYNC_KEY || '', pollMinutes: POLL_MIN, allowPrivate: process.env.POD_ALLOW_PRIVATE === '1', freshSeconds: Number(process.env.POD_FRESH_SECONDS ?? 120),
+  transcribed: async () => new Set((await readIndex()).entries.map((e) => e.id)) });
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -261,6 +324,7 @@ async function route(req, res) {
   try { p = decodeURIComponent(url.pathname); } catch { res.writeHead(400); res.end('Bad request'); return; }
   if (p === '/healthz') { res.writeHead(200); res.end('ok'); return; }
   if (p.startsWith('/api/enhance') && await enhance.handle(req, res, p)) return;
+  if (p.startsWith('/api/pod/') && await pod.handle(req, res, p, url)) return;
   if (/^\/enhance\/[0-9a-f]{16}\.mp3$/.test(p)) {
     await serveFile(req, res, path.join(enhance.dir, path.basename(p)), { cache: 'max-age=31536000, immutable' });
     return;
@@ -335,9 +399,13 @@ async function upload(req, res, name) {
 
 await mkdir(LIB, { recursive: true });
 await enhance.init();
+await pod.init();
+if (process.env.POD_FEEDS !== '0') pod.start();
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => pod.flush().catch(() => {}).finally(() => process.exit(0)));
 state = { ...state, ...(await readJson(STATE_FILE, {})) };
 current = null;
 server.listen(PORT, () => log(`serving on :${PORT}; data in ${DATA}; model ${MODEL_KEY}; checking feeds every ${POLL_MIN} min`));
+markAds().catch((err) => log(`ads: ${err.message}`));
 if (process.env.TRANSCRIBE === '1') {
   const tick = async () => {
     await poll();

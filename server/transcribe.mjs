@@ -65,7 +65,7 @@ export async function transcribeEpisode(ep, models, { tmpFile, onProgress = () =
       transcribeWindow(asr, samples, { language, prompt: buildPrompt(terms, previous), state: promptState }),
   });
   const id = 1;
-  stream.start(id, { language: 'english', speakers: !!diarizer, detectLanguage: checker ? 'transcribe' : false });
+  stream.start(id, { language: ep.lang || 'english', speakers: !!diarizer, detectLanguage: checker ? 'transcribe' : false });
   stream.ready(id).catch((err) => { failure = err; });
 
   const ff = spawn('ffmpeg', ['-loglevel', 'error', '-i', tmpFile, '-ac', '1', '-ar', String(RATE), '-f', 'f32le', '-'], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -120,7 +120,7 @@ export async function transcribeEpisode(ep, models, { tmpFile, onProgress = () =
     title: ep.title,
     show: ep.show,
     art: ep.art || '',
-    lang: 'english',
+    lang: ep.lang || 'english',
     model: modelKey,
     total,
     words: wordCount(segments),

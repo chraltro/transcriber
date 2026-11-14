@@ -80,7 +80,7 @@ for (const run of RUNS) {
   });
   page.on('worker', (w) => w.on('console', (m) => console.log(`  ${stamp()} [worker ${m.type()}] ${m.text().slice(0, 200)}`)));
   const pattern = isWebkit ? 'WPEWebProcess|WebKitWebProcess' : '--type=renderer';
-  await page.goto(`${ORIGIN}/index.html`);
+  await page.goto(`${ORIGIN}/index.html#/transcribe`);
   await page.click(`input[name=model][value=${run.model === 'fake' ? 'tiny' : run.model}]`);
   await page.fill('#url', URL_);
   await page.click('#go');

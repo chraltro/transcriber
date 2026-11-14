@@ -25,8 +25,10 @@ jobs:
       - name: Collect site files
         run: |
           mkdir _site
-          cp index.html style.css app.js worker.js enhance-worker.js coi-sw.js .nojekyll _site/
+          cp index.html style.css app.js worker.js enhance-worker.js coi-sw.js manifest.webmanifest *.png .nojekyll _site/
           cp -r lib ui fonts _site/
+          # The (empty) library index tells the app this copy has no server behind it.
+          mkdir _site/library && cp library/index.json _site/library/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

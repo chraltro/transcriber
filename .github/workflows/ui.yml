@@ -1,7 +1,8 @@
 name: UI test
 
-# Every push: unit tests and the fast UI test (the real page with the speech models swapped for
-# a fake worker). Takes a couple of minutes. Real models and real podcasts are e2e.yml.
+# Every push: unit tests, the fast UI test (the real page with the speech models swapped for
+# a fake worker) and the podcast test (the real server with a stand-in for the podcast world).
+# Takes a few minutes. Real models and real podcasts are e2e.yml.
 on:
   push:
     branches: ['claude/**']
@@ -26,6 +27,8 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: UI test
         run: node tests/ui.mjs
+      - name: Podcast test
+        run: node tests/pod.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

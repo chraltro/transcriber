@@ -1,8 +1,57 @@
 # Podcast Transcriber
 
-Paste a podcast link, get the full transcript with a copy button. Supports English, Norwegian and Danish.
+A podcast player for one person that also writes the transcript, made to be used as a home-screen web app on an iPhone. It opens on **Listen**: the shows you follow, what is new from them, and the player.
 
-Everything runs in your browser using OpenAI's Whisper through [Transformers.js](https://github.com/huggingface/transformers.js). No API key, no backend, no account. The audio never leaves your machine.
+The transcriber is the **Transcribe** section (`#/transcribe`): paste a podcast link, get the full transcript with a copy button. It runs OpenAI's Whisper in your browser through [Transformers.js](https://github.com/huggingface/transformers.js), with no API key or account, and audio you transcribe there never leaves your machine. Shows and positions go to your own server when there is one.
+
+## Listening
+
+- **Following shows**: search Apple's podcast directory by name, or paste an Apple Podcasts link or feed address. OPML files import and export.
+- **New episodes** across followed shows, filtered by **Not played** or **All**, and **Carry on** for episodes started and not finished.
+- **A show's page**: its episodes, a search, and Play the latest.
+- **Up next**: the queue. **Play next** puts an episode first, and when one ends the next starts.
+- **The player**: back 15 and forward 30 seconds (changeable in Settings), speed from 0.8x to 3x with an optional speed per show, and a sleep timer. Each episode's position is remembered, and after a pause it picks up a few seconds earlier (up to 25 after a day). Keys: `k` or space plays and pauses, `j` goes back, `l` forward.
+- **Episode notes** come from the feed, and times in them (`12:34`) start the episode there.
+- **Save for offline** keeps an episode on the device, listed under Up next.
+
+## On an iPhone
+
+- In Safari, tap Share, then Add to Home Screen. It keeps playing with the screen locked.
+- The lock screen and Control Center get play and pause, back and forward, and scrubbing through the Media Session API. Settings > Lock screen shows previous and next instead.
+- From the home screen the page runs under the status bar, with a dark strip behind it in either theme.
+- The home-screen app keeps its storage apart from Safari: link it by pasting the link from Settings on a linked device.
+
+## Skipping ads
+
+Ads are found from an episode's transcript (`lib/adbreaks.js`, built on `lib/ads.js`). When a transcript is uploaded, its ad breaks are stored in the server's library index.
+
+- Breaks are marked on the position slider and skipped as they come up, with an **Undo**.
+- Skipping happens only when the copy being played is the one the transcript was made from (the server's copy).
+- Going back 15 seconds just after an ad lands 15 seconds before it. On the lock screen, the forward button inside an ad leaves the ad.
+
+It is wording-based and errs towards leaving an ad in: what isn't clearly a sponsor read is never skipped.
+
+## One library on every device
+
+The server keeps shows, positions, the queue and settings (`server/pod.mjs`, in `/data/pod`), with no accounts:
+
+- The first device to open the site claims the library with a random key. Other devices join with the link or QR code under Settings.
+- Setting `SYNC_KEY` on the server fixes the key instead.
+- Records merge one by one, the last change winning (`lib/podstate.js`).
+
+Feeds are read on the server, every `POLL_MINUTES` (30 by default) and when the app asks for what is new.
+
+A static copy (GitHub Pages) has no server: everything stays in the browser, and feeds are read directly where their hosts allow it.
+
+## Transcripts on the server
+
+A followed show's page has **Transcribe new episodes** and **And the last** N, which goes back for older ones. Any episode has **Transcribe on the server**.
+
+The work runs on GitHub's runners (`.github/workflows/shows.yml`, `server/ci.mjs`, `server/plan.mjs`). Each run reads `/api/pod/transcribe` and does new episodes first, then single requests, then the backfill. The five shows in `server/shows.mjs` are followed from the start, with Transcribe new episodes on.
+
+## Offline
+
+The service worker (`coi-sw.js`) keeps the app's own files, so the app starts without a connection. Episodes saved for offline play without one.
 
 ## Supported links
 
@@ -12,11 +61,13 @@ Everything runs in your browser using OpenAI's Whisper through [Transformers.js]
 - **RSS feeds**: pick an episode from the list
 - **Episode web pages**: finds the audio on the page, or its RSS feed
 - **Direct audio links** (`.mp3`, `.m4a`, ...)
-- **Local files**: under "More options"
+- **Local files**: "open an audio file" under the link field
+
+`?url=<podcast link>` opens the Transcribe section with that link filled in.
 
 ## Models
 
-Pick the size under "Model size". Sizes are what your browser downloads (once, then cached):
+Pick the size under "Model". Sizes are what your browser downloads (once, then cached):
 
 | Model | CPU | GPU | English and Danish | Norwegian |
 | --- | --- | --- | --- | --- |
@@ -47,16 +98,15 @@ It's plain static files, no build step.
 
 The workflow in `.github/workflows/pages.yml` deploys on every push to `main`. In **Settings > Pages**, set Source to "GitHub Actions". Then open `https://<user>.github.io/transcriber/`
 
-You can prefill a link with `?url=<podcast link>`.
-
 ## How downloads work
 
 Browsers only let a page read servers that allow it (CORS), and the free public CORS proxies have all shut down or started requiring keys. So the app avoids needing one:
 
 - Pocket Casts and Spotify details come from their oEmbed endpoints, which allow browser access. The episode is then looked up in Apple's podcast directory, which serves JSONP.
 - Podcast audio is often wrapped in tracking redirects (podtrac, pscrb.fm and similar), and some of those block browsers even when the real host allows them. The app then tries the real audio URL embedded in the tracking chain.
+- On a linked device, the server fetches audio whose host turns pages away.
 
-Some hosts block browsers entirely (for example Anchor, now Spotify for Creators). For those, download the episode and pick the file under "More options", or deploy the included `cors-proxy-worker.js` as a free Cloudflare Worker and paste its URL there.
+Some hosts block browsers entirely (for example Anchor, now Spotify for Creators). Without a server, open a downloaded copy, or deploy the included `cors-proxy-worker.js` as a free Cloudflare Worker and paste its URL under "CORS proxy".
 
 ## Reading and listening
 
@@ -65,16 +115,17 @@ Some hosts block browsers entirely (for example Anchor, now Spotify for Creators
 - The episode's waveform draws itself while the audio is decoded and lights up as it is transcribed. Afterwards it is a scrubber.
 - Refine on request: when a transcript is done (or reopened from the library), pick a bigger model and refine the whole thing, or select a badly transcribed passage and refine just that. The better text replaces the old window by window, and the library copy is updated.
 - Search inside the transcript (press `/`), toggle timestamps, copy, or export as `.txt`, `.srt` or `.vtt`. On phones, Save opens the share sheet.
-- Finished transcripts are kept in this browser (IndexedDB) under Recent transcripts, and nothing is uploaded anywhere.
+- Transcripts made in the browser are kept in this browser (IndexedDB) under Recent transcripts and are not uploaded.
 - If the page reloads before a transcript finishes (usually the browser running out of memory), it offers to resume from where it stopped without downloading the episode again.
 - Drop an audio file anywhere on the page, or pick one. Title, show and cover art are read from the file's ID3 tag.
 
 ## Testing
 
-- `npm test`: unit tests for MP3/WAV indexing, ID3 tags, link and feed parsing, title matching, paragraphs, waveform levels, segmentation, the streaming transcriber, subtitles and model choices. `NETWORK_TESTS=1 npm test` also checks every model file the app can request exists on Hugging Face.
+- `npm test`: unit tests for MP3/WAV indexing, ID3 tags, link and feed parsing, title matching, paragraphs, waveform levels, segmentation, the streaming transcriber, subtitles and model choices, feeds, ad breaks, the state document, the server's API and the workflow plan. `NETWORK_TESTS=1 npm test` also checks every model file the app can request exists on Hugging Face.
 - `npm run test:e2e`: loads the app in real browsers, pastes real links (Pocket Casts, NRK and a Danish show via Apple, Spotify, RSS) and waits for real Whisper output. It covers Chromium, Firefox, an iPhone profile in WebKit, WebGPU in software, a reload mid-transcript followed by resume, and memory over a long run, and checks that each transcript is in the chosen language.
+- `node tests/pod.mjs`: the podcast side end to end in a real browser, against the real server and a stand-in podcast host (`tests/pod-world.mjs`).
 
-Both run in GitHub Actions on every push to a `claude/**` branch that touches the app.
+Both `npm` runs happen in GitHub Actions on every push to a `claude/**` branch that touches the app.
 
 ## Files
 
@@ -84,6 +135,20 @@ Both run in GitHub Actions on every push to a `claude/**` branch that touches th
 - `enhance-worker.js`: the clean-up's analysis, previews and export, off the main thread
 - `lib/enhance/`: the clean-up itself (DSP, modules, analysis, encoding); `ui/studio.js` is its page
 - `lib/`: the logic both use, kept free of the DOM so it can be unit tested (MP3/WAV indexing, ID3 tags, link parsing, text cleanup, paragraphs, waveform levels, splitting audio at pauses into 30 second windows, model choices, subtitles)
-- `ui/`: the waveform canvas and the library of recent transcripts
-- `coi-sw.js`: service worker that enables multi-threaded WASM on GitHub Pages
+- `lib/feed.js`: podcast feeds and OPML
+- `lib/adbreaks.js`: ad breaks from a transcript
+- `lib/podstate.js`: the library document and how copies merge
+- `lib/playback.js`: where to resume, which ad to skip
+- `ui/pod.js`: the Listen, Up next and Settings screens
+- `ui/podstore.js`: the library in the page, synced with the server
+- `ui/player.js`: playback, the queue, Media Session, ad skipping
+- `ui/playerui.js`: the player bar and the sheet it opens into
+- `ui/downloads.js`: episodes saved for offline
+- `ui/dom.js`: DOM helpers
+- `ui/`: also the waveform canvas and the library of recent transcripts
+- `server/pod.mjs`: the library and feeds on the server (API listed at the top)
+- `server/plan.mjs`: what the shows workflow transcribes, in order
+- `manifest.webmanifest` and `icon-*.png`: the home-screen app
+- `lib/vendor/qrcode.mjs`: QR codes for linking a device (qrcode-generator, MIT)
+- `coi-sw.js`: service worker that enables multi-threaded WASM on GitHub Pages and keeps the app's files offline
 - `cors-proxy-worker.js`: optional self-hosted proxy

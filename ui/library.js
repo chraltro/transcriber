@@ -1,16 +1,27 @@
 // Finished transcripts, kept in this browser (IndexedDB) so they can be reopened later.
 // Everything degrades to "no library" where storage isn't available (some private modes).
+// The same database keeps what the podcast side has read of each followed show's feed
+// (`feeds`), so lists open at once and work offline.
 const DB = 'transcriber';
 const STORE = 'transcripts';
+const FEEDS = 'feeds';
 const KEEP = 40;
 let opening = null;
 
 function open() {
   opening ??= new Promise((resolve) => {
     try {
-      const req = indexedDB.open(DB, 1);
-      req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'id' });
-      req.onsuccess = () => resolve(req.result);
+      const req = indexedDB.open(DB, 2);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'id' });
+        if (!db.objectStoreNames.contains(FEEDS)) db.createObjectStore(FEEDS, { keyPath: 'id' });
+      };
+      req.onsuccess = () => {
+        // Another tab with a newer copy of the app may need to upgrade it.
+        req.result.onversionchange = () => { req.result.close(); opening = null; };
+        resolve(req.result);
+      };
       req.onerror = () => resolve(null);
       req.onblocked = () => resolve(null);
     } catch {
@@ -20,13 +31,13 @@ function open() {
   return opening;
 }
 
-async function run(mode, fn) {
+async function run(mode, fn, store = STORE) {
   const db = await open();
   if (!db) return null;
   return new Promise((resolve) => {
     try {
-      const tx = db.transaction(STORE, mode);
-      const req = fn(tx.objectStore(STORE));
+      const tx = db.transaction(store, mode);
+      const req = fn(tx.objectStore(store));
       tx.oncomplete = () => resolve(req ? req.result : true);
       tx.onerror = () => resolve(null);
       tx.onabort = () => resolve(null);
@@ -51,3 +62,9 @@ export async function saveEntry(entry) {
 }
 
 export const deleteEntry = (id) => run('readwrite', (s) => s.delete(id));
+
+// What was last read of a feed: { id, title, episodes, fetchedAt, ... } ('inbox' is the list
+// across all shows).
+export const getFeed = (id) => run('readonly', (s) => s.get(id), FEEDS);
+export const putFeed = (feed) => run('readwrite', (s) => s.put(feed), FEEDS);
+export const dropFeed = (id) => run('readwrite', (s) => s.delete(id), FEEDS);
