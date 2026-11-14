@@ -50,14 +50,14 @@ async function device(browser, world, name, options) {
   const refused = /Access-Control-Allow-Origin|due to access control checks/;
   page.on('pageerror', (e) => { if (refused.test(e.message)) return; errors.push(e.message); console.log(`  [page error] ${e.message} ${(e.stack || '').split('\n').slice(0, 4).join(' | ')}`); });
   page.on('requestfailed', (r) => { if (!/audio|\.wav|\.mp3|itunes/.test(r.url())) console.log(`  [request failed] ${r.url().slice(0, 120)} ${r.failure()?.errorText || ''}`); });
-  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|net::ERR_|blocked by CORS policy/.test(m.text()) && !refused.test(m.text())) errors.push(m.text()); });
+  page.on('console', (m) => { if (/^player: /.test(m.text())) console.log(`  [page] ${m.text()}`); if (m.type() === 'error' && !/Failed to load resource|net::ERR_|blocked by CORS policy/.test(m.text()) && !refused.test(m.text())) errors.push(m.text()); });
   const shot = (state) => page.screenshot({ path: join(SHOTS, `pod-${name}-${state}.png`) });
   const noSideScroll = async (state) => {
     const [w, sw] = await page.evaluate(() => [window.innerWidth, document.documentElement.scrollWidth]);
     check(sw <= w + 1, `${state}: no sideways scrolling (${sw} px of ${w})`);
   };
   const audio = () => page.evaluate(() => { const a = document.querySelector('#audio'); return { t: a.currentTime, paused: a.paused, src: a.currentSrc, rate: a.playbackRate, d: a.duration }; });
-  const playing = (min = 0.5) => page.waitForFunction((m) => { const a = document.querySelector('#audio'); return !a.paused && a.currentTime > m; }, min, { timeout: 15000 });
+  const playing = (min = 0.5, timeout = 15000) => page.waitForFunction((m) => { const a = document.querySelector('#audio'); return !a.paused && a.currentTime > m; }, min, { timeout });
   return { ctx, page, errors, shot, noSideScroll, audio, playing, mobile: !!options.isMobile };
 }
 
@@ -289,7 +289,9 @@ async function run(name, options) {
       await page.click('#row-menu button:has-text("Save for offline")');
       await page.waitForSelector('#latest-list .ep:has-text("Cranes, and the people under them") .tag:has-text("Saved")', { timeout: 30000 });
       await row('Cranes, and the people under them').locator('.ep-play').click();
-      await playing(0.3);
+      // (WebKit as built for testing now and then leaves a stored file loading: the player asks
+      // again by itself after three seconds, and the log says when it had to.)
+      await playing(0.3, 40000);
       await page.click('#pb-play');
       await page.click('#pb-open');
       await page.waitForSelector('.np .score[data-shows="loudness"]', { timeout: 30000 }).catch(() => {});

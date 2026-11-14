@@ -278,21 +278,28 @@ export class Player extends EventTarget {
 
   // A file on the device has nothing to wait for and starts at once. Now and then a browser
   // leaves one loading and never starts it (seen in Safari's engine, with a file out of the
-  // device's storage); asked once more, it plays. So one that has not moved after three seconds
-  // is loaded again and started from where it was to be, once.
+  // device's storage). What gets it going is what a listener would do: pause, and play again.
+  // So one that has not moved after three seconds is paused and started again; if that did not
+  // do it either, it is loaded afresh and started from where it was to be. Then it is left.
   watch() {
     clearTimeout(this.watching);
     const source = this.source;
-    if (!source?.own || source.asked) return;
+    if (!source?.own || source.asked > 1) return;
     const from = this.audio.currentTime;
     this.watching = setTimeout(() => {
       const a = this.audio;
       if (this.source !== source || !this.wantPlay || a.error) return;
-      if (!a.paused && a.readyState >= 3 || a.currentTime !== from) return; // it is playing, or has moved
-      source.asked = true;
-      this.wanted = this.wanted ?? this.time;
-      a.load();
-      this.begin();
+      if ((!a.paused && a.readyState >= 3) || a.currentTime !== from) return; // it is playing, or has moved
+      source.asked = (source.asked || 0) + 1;
+      console.info(`player: a file on the device had not started after three seconds (ready ${a.readyState}, network ${a.networkState}): ${source.asked === 1 ? 'paused and started again' : 'loaded afresh'}`);
+      if (source.asked === 1) {
+        a.pause();
+        setTimeout(() => { if (this.source === source && this.wantPlay) this.begin(); }, 200);
+      } else {
+        this.wanted = this.wanted ?? this.time;
+        a.load();
+        this.begin();
+      }
     }, 3000);
   }
 
