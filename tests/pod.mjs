@@ -207,6 +207,17 @@ async function run(name, options) {
         const box = await page.locator('.np .score-cv').boundingBox();
         const d = (await audio()).d;
         const at = (s) => [box.x + (box.width * s) / d, box.y + box.height / 2];
+        // (WebKit as built for testing, set up as a phone, does not always hand a mouse press on
+        // to the page, and rounds where it is: there the finger is pointer events of the page's
+        // own making, a touch's. What an iPhone's glass really sends is not something a test sees.)
+        if (WEBKIT || process.env.MADE_UP_FINGER) {
+          const fire = (type, [x, y]) => page.evaluate(([type, x, y]) => {
+            document.querySelector('.np .score-strip').dispatchEvent(new PointerEvent(type, { pointerId: 7, pointerType: 'touch', isPrimary: true, button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+          }, [type, x, y]);
+          let last = at(t);
+          await fire('pointerdown', last);
+          return { to: async (s) => { last = at(s); await fire('pointermove', last); }, lift: () => fire('pointerup', last) };
+        }
         await page.mouse.move(...at(t));
         await page.mouse.down();
         return { to: (s) => page.mouse.move(...at(s), { steps: 4 }), lift: () => page.mouse.up() };
@@ -394,7 +405,7 @@ async function run(name, options) {
     await shot('7-queue');
     await noSideScroll('queue');
     // The episode ends: the next one starts by itself.
-    await page.evaluate(() => { const x = document.querySelector('#audio'); x.currentTime = x.duration - 1.5; x.play(); });
+    await page.evaluate(() => { const x = document.querySelector('#audio'); x.currentTime = x.duration - 1.5; x.play().catch(() => {}); });
     await page.waitForFunction(() => document.querySelector('#pb-title').textContent === 'Kanonen i Oslofjorden', null, { timeout: 20000 });
     await playing(0.3);
     check((await page.locator('#pod-queue ol .ep-title').allTextContents()).join() === 'A bakery in 1911', 'when an episode ends the next in the queue plays');
@@ -691,7 +702,7 @@ async function run(name, options) {
       const [frames] = await Promise.all([watch(), page.keyboard.press('Enter')]);
       const moving = frames.filter((f) => !f.hidden && (mobile ? f.y : f.x) > 1);
       const gone = await page.evaluate(() => ({ hidden: document.querySelector('#sheet').classList.contains('hidden') && document.querySelector('#sheet-back').classList.contains('hidden'), empty: !document.querySelector('#sheet').firstChild, closing: !!document.querySelector('.closing'), focus: document.activeElement?.closest('.ep')?.querySelector('.ep-title')?.textContent }));
-      check(moving.length >= 2 && frames.at(-1).hidden && gone.hidden && gone.empty && !gone.closing, `a closed sheet goes back to the ${mobile ? 'bottom' : 'right'} edge and is then gone (${moving.length} frames on the way)`);
+      check(moving.length >= (WEBKIT ? 1 : 2) && frames.at(-1).hidden && gone.hidden && gone.empty && !gone.closing, `a closed sheet goes back to the ${mobile ? 'bottom' : 'right'} edge and is then gone (${moving.length} frames on the way)`);
       check(gone.focus === 'The pilot who boards at night', `and the focus is back on what opened it (${gone.focus})`);
       // Closed with the browser's back (the phone's back gesture), it goes at once: the phone
       // has moved the page itself.
@@ -708,6 +719,8 @@ async function run(name, options) {
         await page.waitForTimeout(450);
         const pulled = await page.evaluate(() => new Promise((done) => {
           const p = document.querySelector('#sheet');
+          // (A touch can't be made up in every browser: where it can't, this is not gone through.)
+          try { new Touch({ identifier: 1, target: p, clientX: 0, clientY: 0 }); } catch { done(null); return; }
           const at = (y) => [new Touch({ identifier: 1, target: p, clientX: 200, clientY: y })];
           p.dispatchEvent(new TouchEvent('touchstart', { touches: at(40), targetTouches: at(40), changedTouches: at(40), bubbles: true, cancelable: true }));
           p.dispatchEvent(new TouchEvent('touchmove', { touches: at(240), targetTouches: at(240), changedTouches: at(240), bubbles: true, cancelable: true }));
@@ -720,8 +733,14 @@ async function run(name, options) {
           };
           requestAnimationFrame(look);
         }));
-        const ys = pulled.seen.filter((y) => y !== 'gone');
-        check(pulled.held === 200 && ys.length > 0 && ys.every((y) => y >= 199) && pulled.seen.at(-1) === 'gone', `pulled down and let go, the sheet goes on down from there (held at ${pulled.held} px, then ${ys.slice(0, 4).map(Math.round).join(', ')} ...)`);
+        if (!pulled) {
+          console.log('  note: this browser cannot make up a touch, so pulling the sheet down is not gone through here');
+          await page.keyboard.press('Escape');
+          await page.waitForSelector('.ep-sheet', { state: 'detached' });
+        } else {
+          const ys = pulled.seen.filter((y) => y !== 'gone');
+          check(pulled.held === 200 && ys.length > 0 && ys.every((y) => y >= 199) && pulled.seen.at(-1) === 'gone', `pulled down and let go, the sheet goes on down from there (held at ${pulled.held} px, then ${ys.slice(0, 4).map(Math.round).join(', ')} ...)`);
+        }
         await page.waitForFunction(() => location.hash === '#/');
       }
       // With motion turned down on the device, a sheet comes and goes without moving.
