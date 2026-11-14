@@ -48,16 +48,30 @@ export const SHOWS = [
 // test is told the service is blocked, and where the file behind it is: tests/pod.mjs).
 export const COUNTED = 'https://dts.podtrac.com/redirect.mp3/audio.test.example';
 
+// Two episodes have chapters: one in a Podcasting 2.0 chapters file (served below; the server
+// reads it), one as times beginning lines of its notes (the page reads those). Within the five
+// minutes of audio every episode here has.
+export const CHAPTERS = {
+  'What the tide tables leave out': { file: true, list: [[0, 'Low water'], [75, 'Reading a tide table'], [150, 'Storm surges'], [225, 'What the harbour master knows']] },
+  'The ferry company that never made money': { list: [[0, 'Opening the ledger'], [80, 'The first season'], [200, 'Why the fares stayed low']] },
+};
+const chaptersFile = (list) => JSON.stringify({ version: '1.2.0', chapters: [...list.map(([startTime, title]) => ({ startTime, title })), { startTime: 160, img: '/art/harbour.svg', toc: false }] });
+
 export const guidOf = (show, i) => `${show.slug}-${show.episodes.length - i}`;
 export const episodeIdOf = (show, i) => idOf(guidOf(show, i));
 
 function feedXml(show, base, now, extra = []) {
   const items = [...extra, ...show.episodes].map(([title, daysAgo, seconds], i) => {
     const n = show.episodes.length + extra.length - i;
+    const ch = CHAPTERS[title];
+    // (Times written as feeds write them: a link around one, a dash after another.)
+    const list = ch && !ch.file
+      ? `<p>Chapters</p><p>00:00 ${ch.list[0][1]}<br>01:20 - ${ch.list[1][1]}<br><a href="${base}/${show.slug}#t=200">03:20</a> ${ch.list[2][1]}</p>`
+      : '<p>In this episode:</p><ul><li>(00:30) Where it starts</li><li>(02:10) The part with the numbers</li></ul>';
     const guid = i < extra.length ? `${show.slug}-new-${n}` : guidOf(show, i - extra.length);
     return `<item><title>${title}</title><guid isPermaLink="false">${guid}</guid><pubDate>${new Date(now - daysAgo * DAY).toUTCString()}</pubDate>
-<enclosure url="${show.slug === 'fjord' && n === 1 ? COUNTED : base}/audio/${show.slug}/${n}.wav" type="audio/wav" length="0"/><itunes:duration>${seconds}</itunes:duration><link>${base}/${show.slug}/${n}</link>
-<description><![CDATA[<p>${title}: ${show.about}</p><p>In this episode:</p><ul><li>(00:30) Where it starts</li><li>(02:10) The part with the numbers</li></ul><p>More at <a href="${base}/${show.slug}">the show's site</a>.</p><script>window.__pwned = 1</script><img src="${base}/pixel.gif" onerror="window.__pwned = 2">]]></description></item>`;
+<enclosure url="${show.slug === 'fjord' && n === 1 ? COUNTED : base}/audio/${show.slug}/${n}.wav" type="audio/wav" length="0"/><itunes:duration>${seconds}</itunes:duration><link>${base}/${show.slug}/${n}</link>${ch?.file ? `<podcast:chapters url="${base}/chapters/${show.slug}/${n}.json" type="application/json+chapters"/>` : ''}
+<description><![CDATA[<p>${title}: ${show.about}</p>${list}<p>More at <a href="${base}/${show.slug}">the show's site</a>.</p><script>window.__pwned = 1</script><img src="${base}/pixel.gif" onerror="window.__pwned = 2">]]></description></item>`;
   });
   return `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><title>${show.title}</title><link>${base}/${show.slug}</link><language>${show.lang}</language>
 <itunes:author>${show.author}</itunes:author><description>${show.about}</description><itunes:image href="${base}/art/${show.slug}.svg"/>${items.join('\n')}</channel></rss>`;
@@ -94,7 +108,13 @@ export async function startWorld({ audioSeconds = 300 } = {}) {
     const base = `http://localhost:${world.address().port}`;
     const feed = p.match(/^\/feed\/(\w+)\.xml$/);
     const show = SHOWS.find((s) => s.slug === (feed || p.match(/^\/(?:art|audio)\/(\w+)/))?.[1]);
-    if (feed && show) {
+    const chapters = p.match(/^\/chapters\/(\w+)\/(\d+)\.json$/);
+    const chaptered = chapters && SHOWS.find((s) => s.slug === chapters[1])?.episodes.find((e, i, all) => all.length - i === Number(chapters[2]));
+    if (chapters) {
+      const ch = chaptered && CHAPTERS[chaptered[0]];
+      res.writeHead(ch?.file ? 200 : 404, { 'content-type': 'application/json+chapters' });
+      res.end(ch?.file ? chaptersFile(ch.list) : undefined);
+    } else if (feed && show) {
       res.writeHead(200, { 'content-type': 'application/rss+xml; charset=utf-8' });
       res.end(feedXml(show, base, now, state.extra[show.slug] || []));
     } else if (p.startsWith('/art/') && show) {

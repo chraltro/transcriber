@@ -1,5 +1,5 @@
 // What the player looks like: the bar along the bottom, and the sheet it opens into (cover,
-// position, speed, sleep timer, ads, what is up next). The playing itself is ui/player.js.
+// chapter, position, speed, sleep timer, ads, what is up next). The playing itself is ui/player.js.
 import { h, icon, setIcon, openSheet, closeSheet, sheetOpen } from './dom.js';
 import { fmtTime } from '../lib/text.js';
 import { leftText, fmtSpeed, nextSpeed, SPEEDS } from '../lib/playback.js';
@@ -9,8 +9,9 @@ import { cutSeconds } from '../lib/quiet.js';
 const $ = (id) => document.getElementById(id);
 const IS_IOS = typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 
-// The position slider, with the ads drawn on its track. While it is dragged the clock follows
-// the thumb and the audio stays where it is; letting go moves the audio.
+// The position slider, with the ads drawn on its track as bands and the chapters as thin ticks
+// across it. While it is dragged the clock follows the thumb and the audio stays where it is;
+// letting go moves the audio.
 function scrubber(root, player, onPreview) {
   const input = root.querySelector('input');
   const ads = root.querySelector('.scrub-marks');
@@ -41,15 +42,16 @@ function scrubber(root, player, onPreview) {
       input.disabled = !(d > 0);
       if (!dragging) { input.value = d > 0 ? String(Math.round((player.time / d) * 1000)) : '0'; paint(); }
       input.setAttribute('aria-valuetext', d > 0 ? `${fmtTime(player.time)} of ${fmtTime(d)}` : '');
-      const key = d > 0 && player.breaks ? `${d}|${player.breaks.join(';')}` : '';
+      const starts = d > 0 ? player.chapters.map((c) => c.start).filter((t) => t > 0 && t < d) : [];
+      const key = d > 0 && (player.breaks || starts.length) ? `${d}|${player.breaks?.join(';') || ''}|${starts.join(',')}` : '';
       if (key === drawn) return;
       drawn = key;
-      ads.replaceChildren(...(key ? player.breaks.map(([a, b]) => {
+      ads.replaceChildren(...(key && player.breaks ? player.breaks.map(([a, b]) => {
         const band = document.createElement('i');
         band.style.left = `${(a / d) * 100}%`;
         band.style.width = `${Math.max(0.4, ((Math.min(b, d) - a) / d) * 100)}%`;
         return band;
-      }) : []));
+      }) : []), ...(key ? starts.map((t) => h('span.scrub-chapter', { style: `left: ${(t / d) * 100}%` })) : []));
     },
   };
 }
@@ -77,6 +79,8 @@ export class PlayerUI {
     player.addEventListener('rate', () => this.rate());
     player.addEventListener('ads', () => { this.ads(); this.time(); });
     player.addEventListener('quiet', () => this.trims());
+    player.addEventListener('chapters', () => { this.chapterDraw(); this.time(); });
+    player.addEventListener('chapter', () => this.chapterDraw());
     player.addEventListener('sleep', (e) => { this.sleepDraw(); if (e.detail.fired) toast('Sleep timer: paused'); });
     player.addEventListener('skipped', (e) => toast(`Skipped ${fmtTime(e.detail.seconds)} of ads`, { label: 'Undo', run: () => player.undoSkip() }));
     player.addEventListener('blocked', () => toast('Tap play once more to start'));
@@ -202,6 +206,22 @@ export class PlayerUI {
     save.classList.toggle('hidden', !offer || !limit);
   }
 
+  // The chapter being played, under the episode's title, with buttons to the one before and after.
+  chapterDraw() {
+    const row = this.sheet?.querySelector('.np-chapter');
+    if (!row) return;
+    const { player } = this;
+    const n = player.chapterCount;
+    row.classList.toggle('hidden', !n);
+    if (!n) return;
+    const i = player.chapter;
+    const title = row.querySelector('.np-chapter-title');
+    title.textContent = i >= 0 ? player.chapters[i].title : 'Before the first chapter';
+    title.dataset.index = String(i);
+    row.querySelector('.np-chapter-count').textContent = i >= 0 ? `Chapter ${i + 1} of ${n}` : `${n} chapters`;
+    row.querySelector('.np-chapter-next').disabled = i + 1 >= n;
+  }
+
   sleepDraw() {
     if (!this.sheet) return;
     const { sleep } = this.player;
@@ -235,6 +255,10 @@ export class PlayerUI {
       h('div.art.np-art'),
       h('p.eyebrow.np-show'),
       h('h2.np-title', { id: 'sheet-title' }),
+      h('div.np-chapter.hidden', {},
+        h('button.icon-btn.np-chapter-prev', { type: 'button', 'aria-label': 'Previous chapter', onclick: () => player.prevChapter() }, icon('prev')),
+        h('p', { 'aria-live': 'polite' }, h('span.np-chapter-count'), h('span.np-chapter-title')),
+        h('button.icon-btn.np-chapter-next', { type: 'button', 'aria-label': 'Next chapter', onclick: () => player.nextChapter() }, icon('next'))),
       h('div.scrub.np-scrub', {}, h('div.scrub-marks', { 'aria-hidden': 'true' }), h('input', { type: 'range', min: '0', max: '1000', value: '0', step: '1', 'aria-label': 'Position in the episode' })),
       h('div.np-clock', {}, h('span.np-cur', { text: '0:00' }), h('span.np-left')),
       h('div.np-transport', {},
@@ -311,6 +335,7 @@ export class PlayerUI {
     this.trims();
     this.sleepDraw();
     this.upNext();
+    this.chapterDraw();
     this.time();
   }
 }

@@ -5,6 +5,7 @@
 // on the device and feeds are read straight from their hosts where those allow it.
 import * as S from '../lib/podstate.js';
 import { parseFeed, episodeId, appLanguage } from '../lib/feed.js';
+import { tidy, fromNotes } from '../lib/chapters.js';
 import { getFeed, putFeed, dropFeed } from './library.js';
 
 const DOC = 'pod';
@@ -30,6 +31,7 @@ export class PodStore extends EventTarget {
     this.key = (() => { try { return localStorage.getItem(KEY) || ''; } catch { return ''; } })();
     this.server = { there: false, claimed: false, linked: false, error: '' };
     this.transcripts = new Map(); // episode id -> what the server's index says of its transcript
+    this.asked = new Map(); // "show/episode" -> { at, got }: notes and chapters asked for lately
     this.syncedAt = 0;
     this.timer = 0;
     this.due = Infinity;
@@ -314,12 +316,15 @@ export class PodStore extends EventTarget {
     const id = S.subId(feedUrl);
     if (parsed?.episodes.length || parsed?.title) {
       const notes = {};
-      const episodes = await Promise.all(parsed.episodes.map(async ({ html, guid, type, ...e }, i) => {
+      const chapters = {};
+      const episodes = await Promise.all(parsed.episodes.map(async ({ html, guid, type, psc, ...e }, i) => {
         const eid = await episodeId(guid);
         if (i < 200 && html) notes[eid] = html;
+        const own = i < 200 ? tidy(psc) : [];
+        if (own.length) chapters[eid] = own;
         return { id: eid, ...e };
       }));
-      putFeed({ id: `notes:${id}`, notes });
+      putFeed({ id: `notes:${id}`, notes, chapters });
       return { id, feedUrl, title: parsed.title || title, art: parsed.art, description: parsed.description, link: parsed.link, author: parsed.author, lang: appLanguage(parsed.language), fetchedAt: Date.now(), episodes, total: episodes.length };
     }
     const found = await this.deps.lookupApple(appleId);
@@ -405,10 +410,30 @@ export class PodStore extends EventTarget {
     return this.direct(feedUrl, hints);
   }
 
-  async notes(subId, epId) {
-    if (this.server.linked && /^[0-9a-f]{12}$/.test(subId || '') && /^[0-9a-f]{16}$/.test(epId)) {
-      try { return (await this.api('GET', `notes/${subId}/${epId}`)).html || ''; } catch {}
+  async notes(subId, epId) { return (await this.details(subId, epId)).html; }
+
+  // An episode's notes and chapters: { html, chapters: [{ start, title }] }. Chapters come from
+  // the server (the show's chapters file, or those in its feed), else from times in the notes.
+  // `duration`: the episode's length, when known, for chapters past its end to be left out. The
+  // episode sheet and the player both ask, so an answer is kept for a few minutes.
+  async details(subId, epId, duration = 0) {
+    const key = `${subId}/${epId}`;
+    const had = this.asked.get(key);
+    let job = had && Date.now() - had.at < 5 * 60e3 ? had.got : null;
+    if (!job) {
+      job = (async () => {
+        if (this.server.linked && /^[0-9a-f]{12}$/.test(subId || '') && /^[0-9a-f]{16}$/.test(epId)) {
+          // (An answer from before the server knew of chapters has only the notes.)
+          try { const got = await this.api('GET', `notes/${subId}/${epId}`); return { html: got.html || '', chapters: got.chapters || [], server: true }; } catch {}
+        }
+        const kept = await getFeed(`notes:${subId}`);
+        return { html: kept?.notes?.[epId] || '', chapters: kept?.chapters?.[epId] || [] };
+      })();
+      if (this.asked.size >= 40) this.asked.delete(this.asked.keys().next().value); // (the oldest asked)
+      this.asked.set(key, { at: Date.now(), got: job });
+      job.then((got) => { if (!got.server) this.asked.delete(key); }, () => this.asked.delete(key));
     }
-    return (await getFeed(`notes:${subId}`))?.notes?.[epId] || '';
+    const { html, chapters } = await job;
+    return { html, chapters: tidy(chapters.length ? chapters : fromNotes(html), duration) };
   }
 }

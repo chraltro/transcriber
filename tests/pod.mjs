@@ -243,6 +243,81 @@ async function run(name, options) {
     await page.waitForSelector('.ep-sheet', { state: 'detached' });
     await page.click('#pb-play');
 
+    /* ---------- chapters: from a chapters file the server reads, and from times in the notes ---------- */
+    {
+      const chapterRows = () => page.evaluate(() => [...document.querySelectorAll('.ep-sheet .chapter')].map((b) => `${b.querySelector('.chapter-time').textContent} ${b.querySelector('.chapter-title').textContent}${b.getAttribute('aria-current') === 'true' ? ' *' : ''}`));
+      await row('What the tide tables leave out').locator('.ep-main').click();
+      await page.waitForSelector('.ep-sheet .chapter-list');
+      await page.waitForSelector('.ep-sheet .notes li');
+      check((await chapterRows()).join(' | ') === '0:00 Low water | 1:15 Reading a tide table | 2:30 Storm surges | 3:45 What the harbour master knows', `an episode's chapters file is listed in its sheet, without what is kept out of the list (${(await chapterRows()).join(' | ')})`);
+      check(await page.evaluate(() => { const c = document.querySelector('.ep-sheet .chapters-box'); return c.compareDocumentPosition(document.querySelector('.ep-sheet .notes-box')) === Node.DOCUMENT_POSITION_FOLLOWING; }), 'the chapters come above the notes');
+      await page.waitForTimeout(400);
+      await shot('8b-chapters');
+      await noSideScroll('chapters');
+      await page.click('.ep-sheet .chapter:has-text("Storm surges")');
+      await playing(150);
+      a = await audio();
+      check(a.t >= 150 && a.t < 160 && (await page.locator('#pb-title').textContent()) === 'What the tide tables leave out', `tapping a chapter plays the episode from its start (${a.t.toFixed(1)} s)`);
+      await page.waitForFunction(() => document.querySelector('.ep-sheet .chapter[aria-current="true"]')?.textContent.includes('Storm surges'), null, { timeout: 5000 }).catch(() => {});
+      check((await chapterRows()).filter((r) => r.endsWith('*')).join() === '2:30 Storm surges *', `and the chapter being played is marked (${(await chapterRows()).join(' | ')})`);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.ep-sheet', { state: 'detached' });
+      const bar = await page.evaluate(() => ({ ticks: [...document.querySelectorAll('#playbar .scrub-marks .scrub-chapter')].map((t) => Math.round(parseFloat(t.style.left))), bands: document.querySelectorAll('#playbar .scrub-marks i').length }));
+      check(bar.ticks.join() === '25,50,75' && bar.bands === 0, `the chapters are ticks on the position slider, not bands (${bar.ticks.join()} %, ${bar.bands} bands)`);
+
+      // The player opened up: the chapter under the title, and the one before and after.
+      await page.click('#pb-open');
+      await page.waitForSelector('.np .np-chapter:not(.hidden)');
+      await page.click('.np-play');
+      await page.waitForFunction(() => document.querySelector('#audio').paused);
+      const np = () => page.evaluate(() => ({ title: document.querySelector('.np-chapter-title').textContent, count: document.querySelector('.np-chapter-count').textContent, t: document.querySelector('#audio').currentTime, ticks: document.querySelectorAll('.np-scrub .scrub-chapter').length }));
+      let now = await np();
+      check(now.title === 'Storm surges' && now.count === 'Chapter 3 of 4' && now.ticks === 3, `the player shows the chapter being played, and ticks for the chapters (${JSON.stringify(now)})`);
+      await page.waitForTimeout(350);
+      await page.evaluate(() => { document.querySelector('#sheet').scrollTop = 0; });
+      await shot('8c-player-chapters');
+      await noSideScroll('player with chapters');
+      await page.click('.np-chapter-next');
+      await page.waitForFunction(() => document.querySelector('.np-chapter-title').textContent === 'What the harbour master knows', null, { timeout: 5000 }).catch(() => {});
+      now = await np();
+      check(now.title === 'What the harbour master knows' && now.t >= 224.9 && now.t < 226 && await page.locator('.np-chapter-next').isDisabled(), `next chapter goes to its start, and there is none after the last (${JSON.stringify(now)})`);
+      await page.click('.np-chapter-prev');
+      await page.waitForFunction(() => document.querySelector('.np-chapter-title').textContent === 'Storm surges', null, { timeout: 5000 }).catch(() => {});
+      now = await np();
+      check(now.title === 'Storm surges' && now.t >= 149.9 && now.t < 151, `previous chapter, just after one began, goes to the one before (${JSON.stringify(now)})`);
+      // Played on into the next chapter, the player follows.
+      await page.evaluate(() => { document.querySelector('#audio').currentTime = 223; });
+      await page.click('.np-play');
+      await page.waitForFunction(() => document.querySelector('.np-chapter-title').textContent === 'What the harbour master knows', null, { timeout: 15000 }).catch(() => {});
+      now = await np();
+      check(now.title === 'What the harbour master knows' && now.t >= 224.5, `the chapter shown changes as the episode plays into the next (${now.title}, ${now.t.toFixed(1)} s)`);
+      await page.click('.np-play');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.np', { state: 'detached' });
+
+      // Times beginning lines of the notes, three or more, are chapters too.
+      await row('The ferry company that never made money').locator('.ep-main').click();
+      await page.waitForSelector('.ep-sheet .chapter-list');
+      check((await chapterRows()).join(' | ') === '0:00 Opening the ledger | 1:20 The first season | 3:20 Why the fares stayed low', `times written in the notes make chapters (${(await chapterRows()).join(' | ')})`);
+      await page.click('.ep-sheet .chapter:has-text("The first season")');
+      await playing(80);
+      a = await audio();
+      check(a.t >= 80 && a.t < 90, `and play from there (${a.t.toFixed(1)} s)`);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.ep-sheet', { state: 'detached' });
+      check((await page.locator('#playbar .scrub-marks .scrub-chapter').count()) === 2, 'with their ticks on the slider');
+      await page.click('#pb-play');
+      await page.waitForFunction(() => document.querySelector('#audio').paused);
+
+      // An episode without chapters looks as it did.
+      await row('The pilot who boards at night').locator('.ep-main').click();
+      await page.waitForSelector('.ep-sheet .notes li');
+      await page.waitForTimeout(300);
+      check(!(await page.locator('.ep-sheet .chapters-box').isVisible()) && (await page.locator('.ep-sheet .chapter').count()) === 0, 'an episode with two times in its notes has no chapters');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.ep-sheet', { state: 'detached' });
+    }
+
     /* ---------- kept on the device, and played without a connection ---------- */
     await row('A bakery in 1911').locator('.ep-more').click();
     await page.click('#row-menu button:has-text("Save for offline")');

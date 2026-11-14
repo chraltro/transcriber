@@ -698,6 +698,7 @@ export class Pod {
     this.know(ep);
     const actions = h('div.actions.sheet-actions');
     const notes = h('div.notes-box', {}, h('p.pod-none', { text: ep.summary || '' }));
+    const chapters = h('div.chapters-box.hidden');
     const draw = () => {
       const prog = store.progress(ep.id);
       const status = statusOf(prog);
@@ -727,15 +728,41 @@ export class Pod {
         ep.sub && store.show(ep.sub) ? h('a.kicker.sheet-show', { href: `#/show/${ep.sub}`, text: ep.show || 'Show' }) : h('p.kicker', { text: ep.show || 'Episode' }),
         h('button.icon-btn', { type: 'button', 'aria-label': 'Close', onclick: () => closeSheet() }, icon('x'))),
       h('div.sheet-head', {}, art, h('div', {}, h('h2', { id: 'sheet-title', text: ep.title }), h('p.sheet-meta'))),
-      actions, notes,
+      actions, chapters, notes,
       ep.link && /^https?:/.test(ep.link) ? h('a.ext', { href: ep.link, target: '_blank', rel: 'noopener noreferrer' }, icon('external'), h('span', { text: 'The episode\'s own page' })) : null);
     this.artInto(art, ep);
     this.episodeActions = draw;
-    openSheet(sheet, { name: 'episode', closed: () => { this.episodeActions = null; } });
+    // The chapter being played is marked while the sheet is open.
+    const mark = () => {
+      const at = player.item?.id === ep.id ? player.chapters[player.chapter]?.start : null;
+      for (const b of chapters.querySelectorAll('.chapter')) b.setAttribute('aria-current', String(Number(b.dataset.start) === at));
+    };
+    const events = ['item', 'chapter', 'chapters'];
+    openSheet(sheet, { name: 'episode', closed: () => { this.episodeActions = null; for (const e of events) player.removeEventListener(e, mark); } });
+    for (const e of events) player.addEventListener(e, mark);
     draw();
-    const html = await store.notes(ep.sub, ep.id).catch(() => '');
+    const got = await store.details(ep.sub, ep.id, ep.duration).catch(() => ({ html: '', chapters: [] }));
     if (!sheet.isConnected) return;
-    if (html) notes.replaceChildren(notesNode(html, { timeOf: timeIn, onTime: (t) => player.play(ep, { at: t }) }));
+    if (got.chapters.length) {
+      chapters.replaceChildren(...this.chapterList(ep, got.chapters));
+      chapters.classList.remove('hidden');
+      mark();
+    }
+    if (got.html) notes.replaceChildren(notesNode(got.html, { timeOf: timeIn, onTime: (t) => player.play(ep, { at: t }) }));
+  }
+
+  // An episode's chapters, each a button that plays it from there. A long list shows its first
+  // few until asked for the rest (or the rest when the one being played is among them).
+  chapterList(ep, list) {
+    const FEW = 8;
+    const playing = this.player.item?.id === ep.id ? this.player.chapter : -1;
+    const ol = h('ol.chapter-list', { class: list.some((c) => c.start >= 3600) ? 'chapter-list hours' : null }, list.map((c, i) => h('li', { class: list.length > FEW + 2 && i >= FEW && playing < FEW ? 'hidden' : null },
+      h('button.chapter', { type: 'button', dataset: { start: String(c.start) }, 'aria-current': 'false', onclick: () => this.player.play(ep, { at: c.start }) },
+        h('span.chapter-time', { text: fmtTime(c.start) }), h('span.chapter-title', { text: c.title })))));
+    const more = ol.querySelector('li.hidden')
+      ? h('button.btn.ghost.small.chapter-more', { type: 'button', onclick: (e) => { for (const li of ol.querySelectorAll('li.hidden')) li.classList.remove('hidden'); e.currentTarget.remove(); } }, h('span', { text: `Show all ${list.length} chapters` }))
+      : null;
+    return [h('h3', { text: 'Chapters' }), ol, more].filter(Boolean);
   }
 
   /* ---------- settings ---------- */

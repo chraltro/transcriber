@@ -10,7 +10,7 @@
 //   POST /api/pod/sync    { epoch, since, changes } -> { epoch, rev, changes }
 //   GET  /api/pod/inbox               the newest episodes of every followed show (?fresh=1 reads the feeds first)
 //   GET  /api/pod/feed/<show>         one show's episodes (?limit=50, ?fresh=1)
-//   GET  /api/pod/notes/<show>/<ep>   an episode's notes, as the feed has them
+//   GET  /api/pod/notes/<show>/<ep>   an episode's notes, as the feed has them, and its chapters
 //   GET  /api/pod/resolve?url=        any feed, read for the page (before following it)
 //   GET  /api/pod/audio?u=            an episode's audio passed through, for hosts that don't
 //                                     let pages download it (offline copies, transcribing)
@@ -27,6 +27,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { gzipSync } from 'node:zlib';
 import { parseFeed, appLanguage } from '../lib/feed.js';
+import { tidy, fromJson } from '../lib/chapters.js';
 import { emptyDoc, apply, pick, records, getRecord, subId, follow, updateShow, prune } from '../lib/podstate.js';
 import { idOf } from './shows.mjs';
 
@@ -34,6 +35,8 @@ const UA = { 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (
 const MAX_FEED_BYTES = 25e6;
 const MAX_EPISODES = 2000;
 const MAX_NOTES = 400; // episodes whose full notes are kept, newest first
+const MAX_CHAPTERS_BYTES = 200e3; // a chapters file is a few kilobytes
+const CHAPTERS_RETRY = 6 * 3600e3; // a chapters file that could not be read is tried again after this
 const INBOX_DAYS = 45;
 const INBOX_MAX = 300;
 const MAX_BODY = 4e6;
@@ -57,7 +60,7 @@ export function isPrivateHost(host) {
   return !h || h === 'localhost' || /\.(local|internal|localhost|lan|home\.arpa)$/.test(h) || !h.includes('.') || h.includes(':') || /^[\d.]+$/.test(h);
 }
 
-async function readCapped(res, max) {
+async function readCapped(res, max, what = 'Feed') {
   const reader = res.body.getReader();
   const chunks = [];
   let n = 0;
@@ -65,7 +68,7 @@ async function readCapped(res, max) {
     const { done, value } = await reader.read();
     if (done) break;
     n += value.length;
-    if (n > max) { reader.cancel().catch(() => {}); throw new Error('Feed too large'); }
+    if (n > max) { reader.cancel().catch(() => {}); throw new Error(`${what} too large`); }
     chunks.push(value);
   }
   const buf = Buffer.concat(chunks);
@@ -89,6 +92,8 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
   let saveTimer = null;
   let failures = [];
   const refreshing = new Map();
+  const fetchingChapters = new Map(); // episode -> its chapters file being read
+  let chaptersSaved = Promise.resolve(); // the files of chapters read are written one at a time
 
   const readJson = async (file, fallback) => { try { return JSON.parse(await readFile(file, 'utf8')); } catch { return fallback; } };
   const writeJson = async (file, value) => {
@@ -173,6 +178,7 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
 
   const feedFile = (id) => path.join(FEEDS, `${id}.json`);
   const notesFile = (id) => path.join(FEEDS, `${id}.notes.json`);
+  const chaptersFile = (id) => path.join(FEEDS, `${id}.chapters.json`);
   // (A show's id names its files here: it has to be the id its feed address gives.)
   const followed = () => Object.entries(state.doc.subs).filter(([k, s]) => !s.gone && /^https?:\/\//i.test(s.feedUrl || '') && k === subId(s.feedUrl) && s.id === k).map(([, s]) => s);
 
@@ -190,8 +196,10 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
     const notes = {};
     const episodes = parsed.episodes.map((e, i) => {
       const id = idOf(e.guid);
-      if (i < MAX_NOTES && e.html) notes[id] = e.html;
-      const { html, guid, type, ...rest } = e;
+      // Notes are kept as their HTML, or with the chapters the feed wrote beside them.
+      const psc = i < MAX_NOTES ? tidy(e.psc) : [];
+      if (i < MAX_NOTES && (e.html || psc.length)) notes[id] = psc.length ? { html: e.html, chapters: psc } : e.html;
+      const { html, guid, type, psc: _, ...rest } = e;
       return { id, ...rest, ...(type && !type.startsWith('audio/') ? { type } : {}) };
     });
     return {
@@ -290,6 +298,38 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
         log(`pod: couldn't look up ${show.name}: ${err.message}`);
       }
     }
+  }
+
+  // An episode's Podcasting 2.0 chapters file, read once and kept (a file that could not be read
+  // is tried again some hours later). The page can't read it itself: its hosts don't let pages.
+  async function chaptersOf(show, epId, url) {
+    const kept = (await readJson(chaptersFile(show), {}))[epId];
+    if (kept?.url === url && (kept.chapters || now() - (kept.at || 0) < CHAPTERS_RETRY)) return kept.chapters || [];
+    const key = `${show}/${epId}`;
+    if (fetchingChapters.has(key)) return fetchingChapters.get(key);
+    const job = (async () => {
+      let entry;
+      try {
+        const res = await outside(url, { headers: { ...UA, accept: 'application/json+chapters, application/json, */*' }, signal: AbortSignal.timeout(15000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await readCapped(res, MAX_CHAPTERS_BYTES, 'Chapters file');
+        let json;
+        try { json = JSON.parse(text); } catch { throw new Error('Chapters file is not JSON'); }
+        entry = { url, at: now(), chapters: fromJson(json) };
+      } catch (err) {
+        log(`pod: chapters of ${epId}: ${err.message}`);
+        entry = { url, at: now(), failed: err.message };
+      }
+      chaptersSaved = chaptersSaved.then(async () => {
+        const all = await readJson(chaptersFile(show), {});
+        all[epId] = entry;
+        await writeJson(chaptersFile(show), all);
+      }).catch(() => {});
+      await chaptersSaved;
+      return entry.chapters || [];
+    })().finally(() => fetchingChapters.delete(key));
+    fetchingChapters.set(key, job);
+    return job;
   }
 
   async function buildInbox() {
@@ -391,8 +431,18 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
 
     const notesMatch = route.match(/^notes\/([0-9a-f]{12})\/([0-9a-f]{16})$/);
     if (notesMatch && method === 'GET') {
-      const notes = await readJson(notesFile(notesMatch[1]), {});
-      return send(req, res, 200, { html: notes[notesMatch[2]] || '' });
+      const [, show, epId] = notesMatch;
+      const kept = (await readJson(notesFile(show), {}))[epId];
+      const html = (typeof kept === 'string' ? kept : kept?.html) || '';
+      // Chapters: the show's own chapters file first, then those written into the feed. (Times
+      // in the notes are read by the page, which has the notes.)
+      let chapters = Array.isArray(kept?.chapters) ? kept.chapters : [];
+      const url = followed().some((s) => s.id === show) ? (await readJson(feedFile(show), null))?.episodes?.find((e) => e.id === epId)?.chapters : '';
+      if (/^https?:\/\//i.test(url || '')) {
+        const got = await chaptersOf(show, epId, url).catch(() => []);
+        if (got.length) chapters = got;
+      }
+      return send(req, res, 200, { html, chapters });
     }
 
     if (route === 'resolve' && method === 'GET') {

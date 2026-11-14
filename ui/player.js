@@ -1,12 +1,14 @@
 // The player: the one audio element everything plays through, whether an episode from a
 // followed show, a link that was pasted, or the audio under an open transcript. It remembers
 // where each episode was left, moves on through the queue, answers the lock screen's and the
-// headphones' buttons (Media Session), and jumps over the ads a transcript has marked.
+// headphones' buttons (Media Session), jumps over the ads a transcript has marked, and knows the
+// episode's chapters (lib/chapters.js), which are only ever jumped to by the listener.
 // What it decides (where to resume, which ad to skip) is in lib/playback.js.
 import { resumeAt, rewindFor, finished, skipAt } from '../lib/playback.js';
 import { breakAt } from '../lib/breaks.js';
 import { cutsFor, cutIndex } from '../lib/quiet.js';
 import { directUrl } from '../lib/direct.js';
+import { chapterAt } from '../lib/chapters.js';
 
 const IS_IOS = typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 const NOW = 'pod-now';
@@ -49,6 +51,9 @@ export class Player extends EventTarget {
     this.inBreak = -1;
     this.keep = -1;
     this.lastSkip = null;
+    this.chapters = []; // [{ start, title }] of the episode in the player
+    this.chapter = -1; // the one being played, or -1 before the first
+    this.chaptersOf = null; // the episode they are of
     this.wanted = null; // a position to go to once the audio can
     this.known = 0; // the length, before the audio says
     this.at = 0; // the position, when no audio is loaded
@@ -82,6 +87,7 @@ export class Player extends EventTarget {
         if (this.seekCost > this.cutCost * 1.6 || this.seekCost < this.cutCost * 0.5) this.recut();
       }
       this.position();
+      this.chapterCheck();
       this.emit('time');
     });
     on('ratechange', () => { this.position(); this.emit('rate'); if (this.quiet && Math.abs(this.rate - this.cutRate) > 0.01) this.recut(); });
@@ -215,6 +221,7 @@ export class Player extends EventTarget {
     this.at = this.wanted;
     this.known = progress?.d || item.duration || 0;
     this.pausedAt = 0;
+    if (this.chaptersOf !== item.id) this.loadChapters();
     try {
       const { file, blob, ...plain } = item;
       if (plain.art?.startsWith('data:')) plain.art = '';
@@ -233,6 +240,7 @@ export class Player extends EventTarget {
     this.item = item;
     this.at = progress && !progress.done ? progress.p : 0;
     this.known = progress?.d || item.duration || 0;
+    this.loadChapters();
     this.emit('item');
     this.emit('time');
   }
@@ -287,6 +295,7 @@ export class Player extends EventTarget {
     this.breaks = null;
     this.quiet = null;
     this.cuts = [];
+    this.setChapters(null, []);
     this.fine();
     this.busy = false;
     try { localStorage.removeItem(NOW); } catch {}
@@ -304,6 +313,7 @@ export class Player extends EventTarget {
       if (again || to < 1) this.wanted = null;
     }
     this.position();
+    this.chapterCheck();
     this.emit('time');
   }
 
@@ -353,10 +363,11 @@ export class Player extends EventTarget {
     const to = Math.max(0, this.duration ? Math.min(t, this.duration - 0.25) : t);
     if (user && this.breaks) this.keep = breakAt(this.breaks, to); // went into an ad on purpose
     this.pausedAt = 0; // a spot chosen on purpose is played from exactly there, however long the pause was
-    if (!this.source) { this.at = to; this.emit('time'); return; }
-    if (this.audio.readyState < 1) { this.wanted = to; this.emit('time'); return; }
+    if (!this.source) { this.at = to; this.chapterCheck(); this.emit('time'); return; }
+    if (this.audio.readyState < 1) { this.wanted = to; this.chapterCheck(); this.emit('time'); return; }
     this.wanted = null;
     this.audio.currentTime = to;
+    this.chapterCheck();
     this.emit('time');
   }
 
@@ -387,6 +398,54 @@ export class Player extends EventTarget {
     this.play(this.store.decorate(next));
     return true;
   }
+
+  /* ---------- chapters ---------- */
+
+  async loadChapters() {
+    const item = this.item;
+    this.setChapters(item?.id ?? null, []);
+    if (!item?.sub) return;
+    let list = [];
+    try { list = (await this.store.details(item.sub, item.id)).chapters; } catch {}
+    if (this.item?.id === item.id && list.length) this.setChapters(item.id, list);
+  }
+
+  setChapters(of, list) {
+    const had = this.chapters.length;
+    this.chaptersOf = of;
+    this.chapters = list;
+    this.chapter = chapterAt(list, this.time);
+    if (had || list.length) this.emit('chapters');
+  }
+
+  // The chapter playing at `t` (an index into this.chapters, or -1).
+  chapterAt(t = this.time) { return chapterAt(this.chapters, t); }
+
+  chapterCheck() {
+    const i = this.chapterAt();
+    if (i !== this.chapter) { this.chapter = i; this.emit('chapter'); }
+  }
+
+  // Chapters that start inside the audio as it is (a feed's chapters can run past the copy played).
+  get chapterCount() {
+    const d = this.duration;
+    return d > 0 ? this.chapters.filter((c) => c.start < d).length : this.chapters.length;
+  }
+
+  goChapter(i) {
+    const c = this.chapters[i];
+    if (c && i < this.chapterCount) this.seek(c.start, { user: true });
+  }
+
+  // Back to the start of this chapter, or to the one before when it has only just begun.
+  prevChapter() {
+    const i = this.chapter;
+    if (i >= 0 && this.time - this.chapters[i].start > 3) this.goChapter(i);
+    else if (i > 0) this.goChapter(i - 1);
+    else this.seek(0, { user: true });
+  }
+
+  nextChapter() { this.goChapter(this.chapter + 1); }
 
   /* ---------- speed, sleep, volume ---------- */
 
@@ -550,6 +609,7 @@ export class Player extends EventTarget {
       }
       if (now !== this.inBreak) { this.inBreak = now; this.emit('ads'); }
     }
+    this.chapterCheck();
     if (this.sleep?.at && Date.now() >= this.sleep.at) {
       this.sleep = null;
       this.audio.pause();

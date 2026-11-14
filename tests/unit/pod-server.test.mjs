@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdtemp, rm, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { gunzipSync } from 'node:zlib';
@@ -21,7 +21,13 @@ async function serve(opts = {}) {
   const feeds = {
     'https://feeds.example/a': () => feedXml('Alpha', [item(1, web.clock - 3 * 864e5), item(2, web.clock - 864e5), ...(web.extra ? [item(3, web.clock)] : [])]),
     'https://feeds.example/b': () => feedXml('Beta', [item(7, web.clock - 2 * 864e5, '<p>Long <a href="https://x.example">notes</a></p>'), item(8, web.clock - 100 * 864e5), item(9, web.clock - 101 * 864e5), item(10, web.clock - 102 * 864e5), item(11, web.clock - 103 * 864e5)]),
+    // Chapters: in a file of their own (good, on a private host, too large, not JSON), and in the feed.
+    'https://feeds.example/c': () => feedXml('Gamma', [
+      ...[20, 21, 22].map((n) => item(n, web.clock - n * 3600e3).replace('</item>', `<podcast:chapters url="${chapterFiles[n]}" type="application/json+chapters"/></item>`)),
+      item(23, web.clock - 23 * 3600e3).replace('</item>', `<podcast:chapters url="${chapterFiles[23]}" type="application/json+chapters"/><psc:chapters><psc:chapter start="00:00:00.000" title="Hello"/><psc:chapter start="00:05:30.000" title="From the feed"/></psc:chapters></item>`),
+    ]),
   };
+  const chapterFiles = { 20: 'https://chapters.example/20.json', 21: 'https://inside.example/21.json', 22: 'https://chapters.example/22.json', 23: 'https://chapters.example/23.json' };
   const fetchImpl = async (url, init = {}) => {
     web.hits[url] = (web.hits[url] || 0) + 1;
     if (url === 'https://cdn.example/hop') return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data' } });
@@ -34,6 +40,10 @@ async function serve(opts = {}) {
       }
       return new Response(bytes, { status: 200, headers: { 'content-type': 'audio/mpeg', 'content-length': '10' } });
     }
+    if (url === chapterFiles[20]) return new Response(JSON.stringify({ version: '1.2.0', chapters: [{ startTime: 0, title: 'Intro' }, { startTime: 95.5, title: 'The news' }, { startTime: 200, img: 'x.jpg', toc: false }, { startTime: 610, title: 'Mail' }] }), { headers: { 'content-type': 'application/json+chapters' } });
+    if (url === chapterFiles[21]) return new Response('{"chapters":[]}');
+    if (url === chapterFiles[22]) return new Response(JSON.stringify({ chapters: Array.from({ length: 6000 }, (_, i) => ({ startTime: i, title: `Chapter number ${i} of very many` })) }));
+    if (url === chapterFiles[23]) return new Response('<html>Not found</html>', { headers: { 'content-type': 'text/html' } });
     if (web.broken || !feeds[url]) return new Response('nope', { status: 500 });
     const body = feeds[url]();
     const etag = `"${body.length}"`;
@@ -191,6 +201,43 @@ test('followed shows are read on the server: inbox, one show, notes, and again o
     await s.pod.refreshAll();
     assert.deepEqual((await readdir(path.join(s.dir, 'pod', 'feeds'))).filter((f) => f.startsWith(B)), []);
     assert.equal((await s.call('GET', '/api/pod/feed/../../auth')).status, 404);
+  } finally { await s.close(); }
+});
+
+test("an episode's chapters come with its notes: its chapters file read once and kept, else the feed's own", async () => {
+  const s = await serve({ key: KEY });
+  try {
+    const C = subId('https://feeds.example/c');
+    await s.call('POST', '/api/pod/sync', { changes: { subs: { [C]: sub('https://feeds.example/c', 'Gamma', 100) } } });
+    const feed = await s.call('GET', `/api/pod/feed/${C}`);
+    assert.equal(feed.json.episodes.find((e) => e.id === idOf('g20')).chapters, 'https://chapters.example/20.json');
+    assert.equal(feed.json.episodes[0].psc, undefined, 'chapters themselves are not in the list of episodes');
+    const notes = (n) => s.call('GET', `/api/pod/notes/${C}/${idOf(`g${n}`)}`);
+    const want = [{ start: 0, title: 'Intro' }, { start: 95.5, title: 'The news' }, { start: 610, title: 'Mail' }];
+    const first = await notes(20);
+    assert.equal(first.json.html, '<p>Notes for 20</p>');
+    assert.deepEqual(first.json.chapters, want);
+    assert.deepEqual((await notes(20)).json.chapters, want);
+    assert.equal(s.web.hits['https://chapters.example/20.json'], 1, 'read once');
+    assert.ok((await readdir(path.join(s.dir, 'pod', 'feeds'))).includes(`${C}.chapters.json`), 'and kept');
+    // Asked for twice at once, it is still read once.
+    s.web.clock += 7 * 3600e3;
+    await Promise.all([notes(23), notes(23)]);
+    assert.equal(s.web.hits['https://chapters.example/23.json'], 1);
+    // A host inside this network is never asked; a file too large or not JSON gives nothing.
+    assert.deepEqual((await notes(21)).json.chapters, []);
+    assert.equal(s.web.hits['https://inside.example/21.json'], undefined, 'never fetched');
+    assert.deepEqual((await notes(22)).json.chapters, []);
+    const kept = JSON.parse(await readFile(path.join(s.dir, 'pod', 'feeds', `${C}.chapters.json`), 'utf8'));
+    assert.deepEqual([21, 22, 23].map((n) => kept[idOf(`g${n}`)].failed), ['Not a public host', 'Chapters file too large', 'Chapters file is not JSON']);
+    // ...and the chapters written into the feed stand in.
+    assert.deepEqual((await notes(23)).json.chapters, [{ start: 0, title: 'Hello' }, { start: 330, title: 'From the feed' }]);
+    assert.equal(s.web.hits['https://chapters.example/23.json'], 1, 'a file that could not be read is not asked for again at once');
+    s.web.clock += 7 * 3600e3;
+    await notes(23);
+    assert.equal(s.web.hits['https://chapters.example/23.json'], 2, 'but some hours later');
+    // Notes kept before chapters were (only the HTML), and an episode with none, still answer.
+    assert.deepEqual((await s.call('GET', `/api/pod/notes/${C}/${idOf('nope')}`)).json, { html: '', chapters: [] });
   } finally { await s.close(); }
 });
 
