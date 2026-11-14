@@ -345,7 +345,9 @@ const enhance = createEnhance({ dataDir: DATA, authorized: (req) => authorized(r
 const pod = createPod({ dataDir: DATA, log, findFeed, seeds: process.env.POD_SEED === '0' ? [] : SHOWS, key: process.env.SYNC_KEY || '', pollMinutes: POLL_MIN, allowPrivate: process.env.POD_ALLOW_PRIVATE === '1', freshSeconds: Number(process.env.POD_FRESH_SECONDS ?? 120),
   transcribed: async () => new Set((await readIndex()).entries.map((e) => e.id)),
   workflow: async (req) => (req.headers.authorization ? authorized(req, WORKFLOW) : false),
-  lookup: async (host) => (await dnsLookup(host, { all: true })).map((a) => a.address) });
+  lookup: async (host) => (await dnsLookup(host, { all: true })).map((a) => a.address),
+  // (Push services want to know who sends: the site, unless PUSH_SUBJECT names a mailto: address.)
+  pushSubject: process.env.PUSH_SUBJECT || SITE_URL });
 
 const server = http.createServer(async (req, res) => {
   try {

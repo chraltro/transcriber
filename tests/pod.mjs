@@ -7,6 +7,8 @@ import { chromium, webkit, devices } from 'playwright';
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startWorld, SHOWS, episodeIdOf } from './pod-world.mjs';
+import { makeKeys, decrypt } from '../server/push.mjs';
+import { subId } from '../lib/podstate.js';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const SHOTS = join(ROOT, 'ui-shots');
@@ -99,7 +101,7 @@ async function run(name, options) {
     await page.click('#show-head .btn.primary');
     await page.waitForSelector('#show-head .btn:has-text("Following")');
     // Its new episodes transcribed on the server, and the last three as well.
-    await page.click('#show-head .show-opts .switch');
+    await page.click('#show-head .show-opts .switch:has-text("Transcribe new episodes")');
     await page.click('#show-head .backfill label:has-text("3")');
     await page.waitForTimeout(400);
     await shot('3-show');
@@ -406,6 +408,51 @@ async function run(name, options) {
     await page.waitForSelector('#latest-list .ep:first-child:has-text("Coal, 1926")', { timeout: 15000 });
     check(true, 'a new episode turns up at the top');
 
+    /* ---------- told about a new episode ---------- */
+    // The browser's push manager is stood in for: subscribing gives keys made here and the
+    // world's push service, which keeps what the server sends it.
+    {
+      const phone = { ...makeKeys(), auth: Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('base64url') };
+      await A.ctx.addInitScript(({ endpoint, p256dh, auth }) => {
+        const kept = () => { try { return JSON.parse(sessionStorage.getItem('fake-push') || 'null'); } catch { return null; } };
+        const sub = () => kept() && { endpoint, expirationTime: null, options: { userVisibleOnly: true, applicationServerKey: new Uint8Array(kept()).buffer }, toJSON: () => ({ endpoint, expirationTime: null, keys: { p256dh, auth } }), unsubscribe: async () => { sessionStorage.removeItem('fake-push'); return true; } };
+        const pushManager = { getSubscription: async () => sub(), subscribe: async (o) => { sessionStorage.setItem('fake-push', JSON.stringify([...new Uint8Array(o.applicationServerKey)])); return sub(); } };
+        Object.defineProperty(Notification, 'permission', { get: () => sessionStorage.getItem('fake-permission') || 'default' });
+        Notification.requestPermission = async () => { sessionStorage.setItem('fake-permission', 'granted'); return 'granted'; };
+        navigator.serviceWorker.getRegistration = async () => ({ scope: `${location.origin}/`, pushManager });
+      }, { endpoint: world.pushUrl('phone'), p256dh: phone.publicKey, auth: phone.auth });
+      await page.click(mobile ? '#tabbar [data-nav=settings]' : '#nav [data-nav=settings]');
+      await page.reload();
+      await page.waitForSelector('#settings-notify input:not([disabled])', { timeout: 15000 });
+      check(!(await page.locator('#settings-notify input').isChecked()), 'notifications start off');
+      await page.click('#settings-notify .switch');
+      await page.waitForSelector('#settings-notify .actions:not(.hidden)', { timeout: 10000 });
+      const key = await page.evaluate(() => localStorage.getItem('pod-key'));
+      const known = await (await fetch(`${world.base}/api/pod/push?endpoint=${encodeURIComponent(world.pushUrl('phone'))}`, { headers: { authorization: `Bearer ${key}` } })).json();
+      check(known.known === true, 'switched on, the device is signed up with the server');
+      await page.waitForTimeout(2700); // (the toast gone)
+      await page.locator('#settings-notify').scrollIntoViewIfNeeded();
+      await shot('12-notify');
+      await noSideScroll('notifications');
+      const told = async (n) => {
+        for (let i = 0; i < 100 && world.state.pushes.length < n; i++) await new Promise((r) => setTimeout(r, 150));
+        return world.state.pushes.map((m) => ({ ...m, json: JSON.parse(decrypt(m.body, phone)) }));
+      };
+      await page.click('#settings-notify button:has-text("Send a test notification")');
+      let got = await told(1);
+      check(got.length === 1 && got[0].json.tag === 'test', `a test notification reaches the push service (${got.map((m) => m.json.body).join(' | ')})`);
+      world.publish('harbour', 'Night shift at the grain terminal', 2400, Date.now());
+      await page.click(mobile ? '#tabbar [data-nav=listen]' : '#nav [data-nav=listen]');
+      await page.click('#latest-refresh');
+      await page.waitForSelector('#latest-list .ep:first-child:has-text("Night shift at the grain terminal")', { timeout: 15000 });
+      got = await told(2);
+      const m = got[1];
+      check(got.length === 2 && m.headers['content-encoding'] === 'aes128gcm' && /^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]{87}$/.test(m.headers.authorization) && Number(m.headers.ttl) > 0, `the new episode is sent to the device's push service, encrypted and signed (${got.length} messages)`);
+      check(m?.json.title === 'Harbour Hours' && m.json.body === 'Night shift at the grain terminal' && m.json.url === `#/show/${subId(world.feedUrl('harbour'))}` && m.json.tag === m.json.episode, `and it says which show and episode, and where to open (${JSON.stringify(m?.json)})`);
+      await page.waitForTimeout(1500);
+      check(world.state.pushes.length === 2, 'one message for the episode, none for the one dated before the show was followed');
+    }
+
     /* ---------- the transcript, joined to the player ---------- */
     await page.click('#latest-filter label:has-text("All")');
     await row('Why every container').locator('.ep-more').click();
@@ -551,6 +598,32 @@ async function offline() {
     await page.waitForTimeout(1500);
     missing = await unkept();
     check(!missing.length, `after one more start, every file of the app is still kept${missing.length ? ` (not: ${missing.join(', ')})` : ''}`);
+    // A push message reaches the worker (Chromium hands one over through its debugging protocol)
+    // and is shown as a notification, with the app's icon and where a tap goes.
+    if (!WEBKIT) {
+      await ctx.grantPermissions(['notifications'], { origin: world.base });
+      const cdp = await ctx.newCDPSession(page);
+      const regs = [];
+      cdp.on('ServiceWorker.workerRegistrationUpdated', (e) => regs.push(...e.registrations));
+      await cdp.send('ServiceWorker.enable');
+      for (let i = 0; i < 20 && !regs.some((r) => !r.isDeleted); i++) await page.waitForTimeout(100);
+      const msg = { title: 'Harbour Hours', body: 'Night shift at the grain terminal', tag: 'e1', url: '#/show/abc123abc123', episode: 'e1' };
+      await cdp.send('ServiceWorker.deliverPushMessage', { origin: world.base, registrationId: regs.find((r) => !r.isDeleted)?.registrationId || '0', data: JSON.stringify(msg) });
+      let shown = [];
+      for (let i = 0; i < 25 && !shown.length; i++) {
+        await page.waitForTimeout(200);
+        shown = await page.evaluate(async () => (await (await navigator.serviceWorker.ready).getNotifications()).map((n) => ({ title: n.title, body: n.body, tag: n.tag, icon: n.icon, url: n.data?.url })));
+      }
+      check(shown.length === 1 && shown[0].title === msg.title && shown[0].body === msg.body && shown[0].tag === 'e1' && shown[0].icon.endsWith('/icon-192.png') && shown[0].url === msg.url, `the worker shows a pushed message as a notification (${JSON.stringify(shown)})`);
+      await cdp.detach();
+      // A tap with the app open: the worker tells the page where to go (what its click handler
+      // sends; a real tap can't be made here).
+      const sw = ctx.serviceWorkers()[0];
+      await sw?.evaluate(async () => { for (const c of await self.clients.matchAll({ type: 'window' })) c.postMessage({ type: 'open', hash: '#/settings' }); });
+      await page.waitForSelector('#pod-settings:not(.hidden)', { timeout: 5000 }).catch(() => {});
+      check(!!sw && (await page.evaluate(() => location.hash)) === '#/settings', 'told by the worker, the open app goes to the address');
+      await page.evaluate(() => { location.hash = '#/'; });
+    }
     // (WebKit as the test browser builds it fails every load while "offline", its own worker's
     // answers included, so there the server is taken away instead.)
     if (WEBKIT) await world.stopApp(); else await ctx.setOffline(true);

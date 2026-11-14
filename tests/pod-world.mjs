@@ -100,7 +100,7 @@ function transcript(show, seconds) {
 export async function startWorld({ audioSeconds = 300 } = {}) {
   const now = Date.now();
   const audio = wav(audioSeconds);
-  const state = { extra: {}, hits: {} };
+  const state = { extra: {}, hits: {}, pushes: [] };
   const world = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
     const p = url.pathname;
@@ -133,6 +133,11 @@ export async function startWorld({ audioSeconds = 300 } = {}) {
         res.writeHead(200, { ...headers, 'content-length': audio.length });
         res.end(req.method === 'HEAD' ? undefined : audio);
       }
+    } else if (p.startsWith('/push/') && req.method === 'POST') {
+      // A browser's push service: it keeps what it is sent, as it arrived.
+      const chunks = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => { state.pushes.push({ path: p, headers: req.headers, body: Buffer.concat(chunks) }); res.writeHead(201); res.end(); });
     } else {
       res.writeHead(404);
       res.end();
@@ -175,8 +180,10 @@ export async function startWorld({ audioSeconds = 300 } = {}) {
   return {
     base, worldBase, data, logs, state, audio, transcribed: id,
     feedUrl: (slug) => `${worldBase}/feed/${slug}.xml`,
-    // A new episode comes out.
-    publish: (slug, title, seconds = 1800) => { (state.extra[slug] ||= []).unshift([title, 0, seconds]); },
+    // Where the stand-in push service takes messages for a device.
+    pushUrl: (device) => `${worldBase}/push/${device}`,
+    // A new episode comes out (dated when the world started, unless `at` says otherwise).
+    publish: (slug, title, seconds = 1800, at = now) => { (state.extra[slug] ||= []).unshift([title, (now - at) / DAY, seconds]); },
     // The app's server goes away (the page is then on its own).
     stopApp: () => new Promise((resolve) => { app.once('exit', resolve); app.kill(); }),
     close: async () => { app.kill(); world.close(); await rm(data, { recursive: true, force: true }); },

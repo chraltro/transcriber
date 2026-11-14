@@ -1301,6 +1301,8 @@ body.has-player { --bar: 72px; }
 .link-box .actions { margin-top: 12px; }
 .qr { width: 148px; aspect-ratio: 1; border-radius: var(--r-sm); overflow: hidden; background: #fff; }
 .qr svg { display: block; width: 100%; height: 100%; }
+.notify-body { display: grid; gap: 10px; justify-items: start; padding: 0 22px 22px; }
+.notify-body .switch { padding: 0; }
 
 /* ---------- the menu behind a row's three dots ---------- */
 
@@ -1503,6 +1505,7 @@ a.sheet-show:hover { color: var(--text); }
   .found { grid-template-columns: 48px minmax(0, 1fr) auto; gap: 12px; padding: 10px 16px; }
   .found .art { --size: 48px; width: 48px; }
   #pod-settings .settings-body { padding: 0 16px 18px; }
+  .notify-body { padding: 0 16px 18px; }
   .link-box { grid-template-columns: minmax(0, 1fr); padding: 4px 16px 18px; }
   .link-form { padding: 16px; }
   .sheet-pane { left: 0; width: 100%; border-left: 0; padding: calc(12px + env(safe-area-inset-top)) 18px calc(26px + env(safe-area-inset-bottom)); animation-name: sheet-up; }

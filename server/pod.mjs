@@ -17,6 +17,10 @@
 //   GET  /api/pod/transcribe          what to transcribe: shows as their episodes come out, how far
 //                                     back to go for each, and single episodes that were asked for
 //                                     (the workflow reads it)
+//   GET  /api/pod/push?endpoint=      the server's public key for push, and whether it knows that device
+//   POST /api/pod/push { subscription }  a device asks to be told of new episodes (server/push.mjs)
+//   DELETE /api/pod/push?endpoint=    and no longer
+//   POST /api/pod/push/test { endpoint }  a notification to that device now
 //
 // Everything but status, claim and link needs the key in an Authorization header (transcribe
 // also answers the workflow, which proves itself with GitHub's token). The cookie that claim and
@@ -30,6 +34,7 @@ import { parseFeed, appLanguage } from '../lib/feed.js';
 import { tidy, fromJson } from '../lib/chapters.js';
 import { emptyDoc, apply, pick, records, getRecord, subId, follow, updateShow, prune } from '../lib/podstate.js';
 import { idOf } from './shows.mjs';
+import { createPusher, newEpisodes } from './push.mjs';
 
 const UA = { 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36' };
 const MAX_FEED_BYTES = 25e6;
@@ -81,7 +86,8 @@ async function readCapped(res, max, what = 'Feed') {
 // transcribed(): the ids of the episodes the library already has a transcript of.
 // workflow(req): is this request from the transcribing workflow (server/oidc.mjs)?
 // lookup(host): the addresses a name stands for, so one that points into this network is refused.
-export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findFeed = null, seeds = [], key: fixedKey = '', pollMinutes = 30, now = () => Date.now(), allowPrivate = false, freshSeconds = 120, transcribed = async () => new Set(), workflow = async () => false, lookup = null }) {
+// pushSubject: who sends notifications, as push services are told (the site's address).
+export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findFeed = null, seeds = [], key: fixedKey = '', pollMinutes = 30, now = () => Date.now(), allowPrivate = false, freshSeconds = 120, transcribed = async () => new Set(), workflow = async () => false, lookup = null, pushSubject = '' }) {
   const DIR = path.join(dataDir, 'pod');
   const FEEDS = path.join(DIR, 'feeds');
   const STATE = path.join(DIR, 'state.json');
@@ -94,6 +100,7 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
   const refreshing = new Map();
   const fetchingChapters = new Map(); // episode -> its chapters file being read
   let chaptersSaved = Promise.resolve(); // the files of chapters read are written one at a time
+  const pusher = createPusher({ dir: DIR, fetchImpl, now, log, allowPrivate, subject: pushSubject });
 
   const readJson = async (file, fallback) => { try { return JSON.parse(await readFile(file, 'utf8')); } catch { return fallback; } };
   const writeJson = async (file, value) => {
@@ -226,6 +233,7 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
         await writeJson(feedFile(sub.id), got.feed);
         await writeJson(notesFile(sub.id), got.notes);
         inbox = null;
+        announce(sub.id, before, got.feed);
         // What the feed says about the show fills in what the listener's copy lacks, and only
         // that. It is dated just after the record it adds to, so an edit made on a device that
         // was offline meanwhile still wins (and what was filled in is filled in again).
@@ -251,6 +259,19 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
     return job;
   }
 
+  // Episodes that came out since a show's feed was last read are told to the listener's devices,
+  // unless the show's switch for it is off (server/push.mjs decides which are worth it).
+  function announce(id, before, feed) {
+    const cur = state.doc.subs[id];
+    if (!cur || cur.gone || cur.notify === false) return;
+    let told = 0;
+    for (const e of newEpisodes(before?.episodes, feed.episodes, { since: cur.addedAt || 0, now: now() })) {
+      const payload = { title: String(cur.title || feed.title || 'New episode').slice(0, 120), body: String(e.title || '').slice(0, 240), tag: e.id, url: `#/show/${id}`, episode: e.id };
+      if (pusher.tell(e.id, { payload, topic: e.id, ttl: 2 * 86400 })) told++;
+    }
+    if (told) pusher.flushSoon();
+  }
+
   // The listener asked for what is new: every feed not read in the last minutes is read now,
   // a few at a time.
   async function refreshStale() {
@@ -264,6 +285,9 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
       }
     };
     await Promise.all(Array.from({ length: Math.min(4, subs.length) }, worker));
+    // (Not waited for: the listener asked for what is new, and a push service that is slow to
+    // answer must not keep them waiting. flush() looks after its own failures.)
+    pusher.flush();
   }
 
   async function refreshAll() {
@@ -278,6 +302,7 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
     // Feeds of shows no longer followed.
     const keep = new Set(followed().map((s) => s.id));
     for (const f of await readdir(FEEDS).catch(() => [])) if (!keep.has(f.split('.')[0])) await rm(path.join(FEEDS, f), { force: true });
+    await pusher.flush();
   }
 
   // The shows the server already transcribes are followed from the start.
@@ -429,6 +454,25 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
       return send(req, res, 200, { ...out, total: feed.episodes.length, episodes: limit ? feed.episodes.slice(0, limit) : feed.episodes });
     }
 
+    // Notifications: a device signs up with what its browser's push service gave it.
+    if (route === 'push' && method === 'GET') return send(req, res, 200, { key: pusher.publicKey, known: pusher.knows(url.searchParams.get('endpoint') || '') });
+    if (route === 'push' && method === 'POST') {
+      let msg;
+      try { msg = await body(req); } catch { return fail(req, res, 400, 'Bad request'); }
+      if (!(await pusher.add(msg?.subscription))) return fail(req, res, 400, 'That is not a push service this server sends to');
+      return send(req, res, 200, { saved: true });
+    }
+    if (route === 'push' && method === 'DELETE') return send(req, res, 200, { removed: await pusher.remove(url.searchParams.get('endpoint') || '') });
+    if (route === 'push/test' && method === 'POST') {
+      let msg;
+      try { msg = await body(req); } catch { return fail(req, res, 400, 'Bad request'); }
+      const got = await pusher.test(String(msg?.endpoint || ''));
+      if (!got) return fail(req, res, 404, 'The server does not know this device. Switch notifications off and on again.');
+      if (got === 'gone') return fail(req, res, 410, 'The push service no longer knows this device. Switch notifications off and on again.');
+      if (got === 'failed') return fail(req, res, 502, 'The push service did not take the message. Try again in a minute.');
+      return send(req, res, 200, { sent: true });
+    }
+
     const notesMatch = route.match(/^notes\/([0-9a-f]{12})\/([0-9a-f]{16})$/);
     if (notesMatch && method === 'GET') {
       const [, show, epId] = notesMatch;
@@ -483,6 +527,7 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
 
   async function init() {
     await mkdir(FEEDS, { recursive: true });
+    await pusher.init();
     auth = await readJson(AUTH, null);
     const saved = await readJson(STATE, null);
     if (saved?.doc) state = { ...state, ...saved, doc: { ...emptyDoc(), ...saved.doc } };

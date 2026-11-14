@@ -6,6 +6,7 @@ import { statusOf, fractionOf } from '../lib/podstate.js';
 import { leftText, lengthText, timeIn, fmtSpeed } from '../lib/playback.js';
 import { parseOpml, toOpml } from '../lib/feed.js';
 import { CHOICES } from '../lib/autosave.js';
+import { notifyCard } from './notify.js';
 
 const $ = (id) => document.getElementById(id);
 const PAGE = 60;
@@ -520,6 +521,9 @@ export class Pod {
             latest ? h('button.btn.ghost', { type: 'button', onclick: () => this.playOrPause(store.decorate(latest, id)) }, icon('play'), h('span', { text: 'Play the latest' })) : null))),
       followed && store.server.linked ? h('div.show-opts', {},
         h('label.switch.setting', {},
+          h('input', { type: 'checkbox', checked: followed.notify !== false, onchange: (e) => { store.updateShow(id, { notify: e.target.checked }); this.toast(e.target.checked ? 'You will be told about new episodes' : 'No more notifications for this show'); } }),
+          h('span.track', {}, h('span.knob')), h('span.switch-label', { text: 'Tell me about new episodes' })),
+        h('label.switch.setting', {},
           h('input', { type: 'checkbox', checked: !!followed.transcribe, onchange: (e) => { store.updateShow(id, { transcribe: e.target.checked }); this.toast(e.target.checked ? 'New episodes will be transcribed' : 'New episodes are no longer transcribed'); } }),
           h('span.track', {}, h('span.knob')), h('span.switch-label', { text: 'Transcribe new episodes' })),
         h('fieldset.segmented.backfill', {}, h('legend', { text: 'And the last' }),
@@ -883,6 +887,6 @@ export class Pod {
       h('div.pod-head', {}, h('div', {}, h('p.kicker', { text: 'iPhone and iPad' }), h('h2', { text: 'Put it on the home screen' }))),
       h('p.hint', { text: 'In Safari, tap Share, then Add to Home Screen. It then opens like an app, keeps playing with the screen locked, and what it stores is not cleared after a week away. Link it once more from inside the app if it starts out empty.' })) : null;
 
-    root.replaceChildren(...[playback, library, storage, shows, install].filter(Boolean));
+    root.replaceChildren(...[playback, notifyCard(this), library, storage, shows, install].filter(Boolean));
   }
 }

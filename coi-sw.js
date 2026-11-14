@@ -139,3 +139,32 @@ if (typeof window === 'undefined') {
     }).catch((err) => console.warn('COI service worker failed to register:', err));
   })();
 }
+
+// Notifications (server/push.mjs sends them). Every message is shown: an iPhone withdraws the
+// subscription of an app that receives one and shows nothing. A tap brings the app to the front
+// on the show's page, in a window that is already open where there is one (ui/notify.js).
+if (typeof window === 'undefined') {
+  const base = self.registration.scope;
+  self.addEventListener('push', (e) => {
+    let msg = {};
+    try { msg = e.data?.json() || {}; } catch { msg = { body: e.data?.text() || '' }; }
+    e.waitUntil(self.registration.showNotification(String(msg.title || 'Transcriber'), {
+      body: String(msg.body || ''), tag: msg.tag ? String(msg.tag) : undefined, icon: new URL('icon-192.png', base).href,
+      data: { url: String(msg.url || ''), episode: msg.episode || '' },
+    }));
+  });
+  self.addEventListener('notificationclick', (e) => {
+    e.notification.close();
+    const hash = /^#\/[\w/-]*$/.test(e.notification.data?.url || '') ? e.notification.data.url : '#/';
+    e.waitUntil((async () => {
+      const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      const win = wins.find((c) => c.url.startsWith(base));
+      if (win) {
+        await win.focus().catch(() => {});
+        win.postMessage({ type: 'open', hash });
+        return;
+      }
+      await self.clients.openWindow(base + hash);
+    })());
+  });
+}
