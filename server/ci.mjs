@@ -70,7 +70,8 @@ const index = await indexRes.json();
 let shows = SHOWS.map((s) => ({ ...s, fresh: true, backfill: 0 }));
 let asked = [];
 try {
-  const listed = await (await fetch(`${SITE}/api/pod/transcribe`, { cache: 'no-store' })).json();
+  const proof = process.env.ACTIONS_ID_TOKEN_REQUEST_URL ? { authorization: `Bearer ${await oidcToken()}` } : {};
+  const listed = await (await fetch(`${SITE}/api/pod/transcribe`, { cache: 'no-store', headers: proof })).json();
   if (listed.ready && Array.isArray(listed.shows)) {
     shows = listed.shows.slice(0, 20).map((s) => ({ name: s.name, feedUrl: s.feedUrl, lang: s.lang, fresh: s.fresh !== false, backfill: Number(s.backfill) || 0 }));
     asked = Array.isArray(listed.episodes) ? listed.episodes : [];

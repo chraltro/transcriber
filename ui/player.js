@@ -44,6 +44,8 @@ export class Player extends EventTarget {
     this.ready = null; // the next episode's audio, looked up ahead of time
     this.seq = 0;
     this.unlocked = false;
+    this.wantPlay = false; // the listener's last word: play, or pause
+    this.preparing = null;
     this.pausedAt = 0;
     this.savedAt = 0;
     this.busy = false;
@@ -125,6 +127,7 @@ export class Player extends EventTarget {
 
   // Plays `item` ({ id, title, show, art, url, ... }), from `at` seconds or from where it was left.
   async play(item, { at = null } = {}) {
+    this.wantPlay = true;
     if (this.item?.id === item.id && this.source && !this.audio.error) {
       if (at != null) this.seek(at, { user: true });
       return this.resume();
@@ -135,7 +138,9 @@ export class Player extends EventTarget {
     if (this.ready?.id === item.id) { source = this.ready.source; this.ready = null; } else source = this.quick(item);
     if (!source) {
       // Storage has to be asked: hold the tap's permission to play with a moment of silence.
+      // (It loops, and ending is ignored while there is no episode: it is not an episode.)
       if (!this.unlocked) {
+        this.audio.loop = true;
         this.audio.src = this.hush ||= silence();
         this.audio.play().catch(() => {});
       } else this.audio.pause();
@@ -156,11 +161,14 @@ export class Player extends EventTarget {
     this.release();
     this.source = source;
     this.setItem(item, at);
+    this.audio.loop = false;
     this.audio.src = source.src;
     this.applyRate();
     this.metadata();
     this.loadAds();
     this.prepare();
+    // Paused while it was being found: it is in the player, and stays quiet.
+    if (!this.wantPlay) { this.busy = false; this.state(); return false; }
     return this.begin();
   }
 
@@ -198,6 +206,7 @@ export class Player extends EventTarget {
   }
 
   begin() {
+    this.wantPlay = true;
     this.busy = true;
     this.emit('state');
     const p = this.audio.play();
@@ -225,8 +234,13 @@ export class Player extends EventTarget {
     return this.begin();
   }
 
-  pause() { this.audio.pause(); }
-  toggle() { return this.playing || (this.busy && !this.audio.paused) ? this.pause() : this.resume(); }
+  pause() {
+    this.wantPlay = false;
+    this.audio.pause();
+    if (this.busy && !this.source) { this.busy = false; this.emit('state'); }
+  }
+
+  toggle() { return this.playing || (this.busy && this.wantPlay) ? this.pause() : this.resume(); }
 
   // Takes the episode out of the player.
   stop() {
@@ -260,7 +274,7 @@ export class Player extends EventTarget {
 
   ended() {
     const item = this.item;
-    if (!item) return;
+    if (!item || !this.source) return;
     this.store.setProgress(item, { p: this.duration, d: this.duration, done: true });
     this.store.queueRemove(item.id);
     if (this.downloads.has(item.id) && !this.store.settings.keepDownloads) this.downloads.remove(item.id);
@@ -293,6 +307,7 @@ export class Player extends EventTarget {
   seek(t, { user = false } = {}) {
     const to = Math.max(0, this.duration ? Math.min(t, this.duration - 0.25) : t);
     if (user && this.breaks) this.keep = breakAt(this.breaks, to); // went into an ad on purpose
+    this.pausedAt = 0; // a spot chosen on purpose is played from exactly there, however long the pause was
     if (!this.source) { this.at = to; this.emit('time'); return; }
     if (this.audio.readyState < 1) { this.wanted = to; this.emit('time'); return; }
     this.wanted = null;
@@ -492,11 +507,14 @@ export class Player extends EventTarget {
   // time to ask storage (a phone in a pocket gives a page a moment, not more).
   async prepare() {
     const next = this.store.queue.find((e) => e.id !== this.item?.id);
-    if (!next || this.ready?.id === next.id) return;
+    if (!next || this.ready?.id === next.id || this.preparing === next.id) return;
     if (this.ready) { this.release(this.ready.source); this.ready = null; }
+    this.preparing = next.id;
     const item = this.store.decorate(next);
     const source = await this.resolve(item).catch(() => null);
-    if (source && this.store.queue.find((e) => e.id !== this.item?.id)?.id === next.id) this.ready = { id: next.id, source };
+    if (this.preparing === next.id) this.preparing = null;
+    const still = this.store.queue.find((e) => e.id !== this.item?.id)?.id === next.id;
+    if (source && still && !this.ready) this.ready = { id: next.id, source };
     else this.release(source);
   }
 }

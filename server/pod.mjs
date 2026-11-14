@@ -18,8 +18,9 @@
 //                                     back to go for each, and single episodes that were asked for
 //                                     (the workflow reads it)
 //
-// Everything but status, claim, link and transcribe needs the key: in an Authorization header
-// or in the cookie that claim and link set. There are no accounts; the key is the library.
+// Everything but status, claim and link needs the key in an Authorization header (transcribe
+// also answers the workflow, which proves itself with GitHub's token). The cookie that claim and
+// link set only gets a device its key back. There are no accounts; the key is the library.
 import { createHash, timingSafeEqual, randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename, rm, readdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -41,10 +42,19 @@ const sha = (s) => createHash('sha256').update(String(s)).digest();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Hosts the pass-through never fetches: this machine and private networks.
+export function isPrivateAddress(ip) {
+  const a = String(ip || '').toLowerCase().replace(/^\[|\]$/g, '');
+  const mapped = a.match(/^::ffff:(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/);
+  if (mapped) return isPrivateAddress(mapped[1] || [parseInt(mapped[2], 16) >> 8, parseInt(mapped[2], 16) & 255, parseInt(mapped[3], 16) >> 8, parseInt(mapped[3], 16) & 255].join('.'));
+  if (a.includes(':')) return a === '::' || a === '::1' || /^f[cd]/.test(a) || /^fe[89ab]/.test(a);
+  return /^(127|10|0)\./.test(a) || /^192\.168\./.test(a) || /^169\.254\./.test(a) || /^172\.(1[6-9]|2\d|3[01])\./.test(a) || /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(a);
+}
+
+// A host by its name: podcasts are served from names, so an address written out is refused
+// along with this machine's own names.
 export function isPrivateHost(host) {
-  const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '');
-  return !h || h === 'localhost' || /\.(local|internal|localhost)$/.test(h) || /^(127|10|0)\./.test(h) || /^192\.168\./.test(h)
-    || /^169\.254\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || h === '::1' || /^f[cd][0-9a-f]{2}:/.test(h) || /^fe80:/.test(h);
+  const h = String(host || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  return !h || h === 'localhost' || /\.(local|internal|localhost|lan|home\.arpa)$/.test(h) || !h.includes('.') || h.includes(':') || /^[\d.]+$/.test(h);
 }
 
 async function readCapped(res, max) {
@@ -66,7 +76,9 @@ async function readCapped(res, max) {
 // seeds: shows followed from the start ([{ name, appleId }], server/shows.mjs).
 // freshSeconds: a feed read this recently is not read again when the app asks for what is new.
 // transcribed(): the ids of the episodes the library already has a transcript of.
-export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findFeed = null, seeds = [], key: fixedKey = '', pollMinutes = 30, now = () => Date.now(), allowPrivate = false, freshSeconds = 120, transcribed = async () => new Set() }) {
+// workflow(req): is this request from the transcribing workflow (server/oidc.mjs)?
+// lookup(host): the addresses a name stands for, so one that points into this network is refused.
+export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findFeed = null, seeds = [], key: fixedKey = '', pollMinutes = 30, now = () => Date.now(), allowPrivate = false, freshSeconds = 120, transcribed = async () => new Set(), workflow = async () => false, lookup = null }) {
   const DIR = path.join(dataDir, 'pod');
   const FEEDS = path.join(DIR, 'feeds');
   const STATE = path.join(DIR, 'state.json');
@@ -100,7 +112,31 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
     const want = keyHash();
     return !!want && !!key && timingSafeEqual(sha(key), want);
   };
+  // The cookie only ever gets a device its key back (and says whether it is linked): a browser
+  // sends cookies along with requests other sites start, and those must not reach anything else.
+  const bearer = (req) => req.headers.authorization?.replace(/^Bearer\s+/i, '') || '';
   const linked = (req) => right(offered(req));
+  const keyed = (req) => right(bearer(req));
+
+  // Fetches something from the outside world for the listener: only public hosts, by name, and
+  // every hop of a redirect is checked again.
+  async function outside(target, init = {}) {
+    let url = String(target);
+    for (let hop = 0; hop < 6; hop++) {
+      const u = new URL(url);
+      if (!/^https?:$/.test(u.protocol)) throw new Error('Not a web address');
+      if (!allowPrivate) {
+        if (isPrivateHost(u.hostname)) throw new Error('Not a public host');
+        if (lookup && (await lookup(u.hostname)).some(isPrivateAddress)) throw new Error('Not a public host');
+      }
+      const res = await fetchImpl(url, { ...init, redirect: 'manual' });
+      const next = res.status >= 300 && res.status < 400 && res.headers.get('location');
+      if (!next) return res;
+      res.body?.cancel?.().catch(() => {});
+      url = new URL(next, url).href;
+    }
+    throw new Error('Too many redirects');
+  }
   const setCookie = (req, res, key) => {
     const secure = req.headers['x-forwarded-proto'] === 'https' || req.socket?.encrypted ? '; Secure' : '';
     res.setHeader('set-cookie', `${COOKIE}=${key ? encodeURIComponent(key) : ''}; Path=/; Max-Age=${key ? 315360000 : 0}; HttpOnly; SameSite=Lax${secure}`);
@@ -137,7 +173,8 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
 
   const feedFile = (id) => path.join(FEEDS, `${id}.json`);
   const notesFile = (id) => path.join(FEEDS, `${id}.notes.json`);
-  const followed = () => Object.values(state.doc.subs).filter((s) => !s.gone && /^https?:\/\//i.test(s.feedUrl || ''));
+  // (A show's id names its files here: it has to be the id its feed address gives.)
+  const followed = () => Object.entries(state.doc.subs).filter(([k, s]) => !s.gone && /^https?:\/\//i.test(s.feedUrl || '') && k === subId(s.feedUrl) && s.id === k).map(([, s]) => s);
 
   // A feed from anywhere, as the app wants it. `before`: what was cached, for a conditional
   // request. -> { unchanged: true } or { feed, notes }.
@@ -145,7 +182,7 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
     const headers = { ...UA, accept: 'application/rss+xml, application/xml, text/xml, */*' };
     if (before?.etag) headers['if-none-match'] = before.etag;
     else if (before?.lastModified) headers['if-modified-since'] = before.lastModified;
-    const res = await fetchImpl(feedUrl, { headers, redirect: 'follow', signal: AbortSignal.timeout(60000) });
+    const res = await outside(feedUrl, { headers, signal: AbortSignal.timeout(60000) });
     if (res.status === 304) return { unchanged: true };
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const parsed = parseFeed(await readCapped(res, MAX_FEED_BYTES), { maxEpisodes: MAX_EPISODES });
@@ -181,14 +218,16 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
         await writeJson(feedFile(sub.id), got.feed);
         await writeJson(notesFile(sub.id), got.notes);
         inbox = null;
-        // What the feed says about the show fills in what the listener's copy lacks.
+        // What the feed says about the show fills in what the listener's copy lacks, and only
+        // that. It is dated just after the record it adds to, so an edit made on a device that
+        // was offline meanwhile still wins (and what was filled in is filled in again).
         const cur = state.doc.subs[sub.id];
         const patch = {};
         if (cur && !cur.gone) {
           if (got.feed.title && (!cur.title || cur.title === cur.feedUrl)) patch.title = got.feed.title;
-          if (got.feed.art && cur.art !== got.feed.art) patch.art = got.feed.art;
+          if (got.feed.art && !cur.art) patch.art = got.feed.art;
           if (got.feed.lang && !cur.lang) patch.lang = got.feed.lang;
-          if (Object.keys(patch).length) { const k = updateShow(state.doc, sub.id, patch, now()); if (k) { state.revs[k] = ++state.rev; save(); } }
+          if (Object.keys(patch).length) { const k = updateShow(state.doc, sub.id, patch, cur.at + 1); if (k) { state.revs[k] = ++state.rev; save(); } }
         }
         return got.feed;
       } catch (err) {
@@ -274,6 +313,8 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
 
     if (route === 'status' && method === 'GET') return send(req, res, 200, { claimed: !!keyHash(), linked: linked(req) });
     if (route === 'transcribe' && method === 'GET') {
+      // It says what is listened to: for the workflow (which proves itself) and the listener.
+      if (!keyed(req) && !(await Promise.resolve().then(() => workflow(req)).catch(() => false))) return fail(req, res, 401, 'For the transcribing workflow');
       // Shows whose new episodes are transcribed (`fresh`) and how many of their latest to go
       // back for (`backfill`); and single episodes that were asked for and aren't there yet.
       const have = await transcribed().catch(() => new Set());
@@ -304,9 +345,10 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
     }
     if (route === 'unlink' && method === 'POST') { setCookie(req, res, ''); return send(req, res, 200, { linked: false }); }
 
-    if (!linked(req)) return fail(req, res, 401, 'This device is not linked to the library');
-
-    if (route === 'key' && method === 'GET') return send(req, res, 200, { key: offered(req) });
+    if (route === 'key' && method === 'GET') {
+      return linked(req) ? send(req, res, 200, { key: offered(req) }) : fail(req, res, 401, 'This device is not linked to the library');
+    }
+    if (!keyed(req)) return fail(req, res, 401, 'This device is not linked to the library');
 
     if (route === 'sync' && method === 'POST') {
       let msg;
@@ -335,8 +377,8 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
 
     const feedMatch = route.match(/^feed\/([0-9a-f]{12})$/);
     if (feedMatch && method === 'GET') {
-      const sub = state.doc.subs[feedMatch[1]];
-      if (!sub || sub.gone) return fail(req, res, 404, 'Not a followed show');
+      const sub = followed().find((x) => x.id === feedMatch[1]);
+      if (!sub) return fail(req, res, 404, 'Not a followed show');
       let feed = await readJson(feedFile(sub.id), null);
       const stale = !feed || (url.searchParams.get('fresh') === '1' && now() - (feed.fetchedAt || 0) > freshSeconds * 1000);
       if (stale) {
@@ -357,7 +399,7 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
       const feedUrl = String(url.searchParams.get('url') || '').trim();
       let host = '';
       try { host = new URL(feedUrl).hostname; } catch {}
-      if (!/^https?:\/\//i.test(feedUrl) || (!allowPrivate && isPrivateHost(host))) return fail(req, res, 400, 'Needs a feed address');
+      if (!/^https?:\/\//i.test(feedUrl) || !host || (!allowPrivate && isPrivateHost(host))) return fail(req, res, 400, 'Needs a feed address');
       try {
         const { feed } = await readFeed(feedUrl);
         const { etag, lastModified, ...out } = feed;
@@ -377,7 +419,7 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
       const ctl = new AbortController();
       res.on('close', () => ctl.abort());
       let up;
-      try { up = await fetchImpl(target, { method, headers, redirect: 'follow', signal: ctl.signal }); } catch (err) { return fail(req, res, 502, `Couldn't reach the audio (${err.message})`); }
+      try { up = await outside(target, { method, headers, signal: ctl.signal }); } catch (err) { return fail(req, res, 502, `Couldn't reach the audio (${err.message})`); }
       const out = { 'cache-control': 'no-store' };
       for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges']) if (up.headers.get(h)) out[h] = up.headers.get(h);
       res.writeHead(up.status, out);

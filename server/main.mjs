@@ -16,6 +16,7 @@ import { findFeed, readFeed } from './feeds.mjs';
 import { transcribeEpisode } from './transcribe.mjs';
 import { MODELS, dtypeFor } from '../lib/models.js';
 import { promisify } from 'node:util';
+import { lookup as dnsLookup } from 'node:dns/promises';
 import zlib from 'node:zlib';
 import { SHOWS, idOf, metaOf, markdownOf, adsOf } from './shows.mjs';
 import { verifyGithubToken } from './oidc.mjs';
@@ -41,11 +42,21 @@ const log = (...a) => console.log(new Date().toISOString(), ...a);
 async function readJson(file, fallback) {
   try { return JSON.parse(await readFile(file, 'utf8')); } catch { return fallback; }
 }
+let writes = 0;
 async function writeJson(file, value) {
-  const tmp = `${file}.tmp`;
+  const tmp = `${file}.${process.pid}.${++writes}.tmp`;
   await writeFile(tmp, JSON.stringify(value));
   await rename(tmp, file);
 }
+
+// The library index is read, changed and written by several things (uploads, the ad marks,
+// pruning): one at a time, so none writes over another's change.
+let indexTurn = Promise.resolve();
+const withIndex = (fn) => {
+  const run = indexTurn.then(fn, fn);
+  indexTurn = run.catch(() => {});
+  return run;
+};
 
 /* ---------- state ---------- */
 
@@ -60,12 +71,14 @@ async function readIndex() {
   return index;
 }
 
-async function addToIndex(entry) {
-  const index = await readIndex();
+function addToIndex(entry) {
   // Where the ads are goes into the index, so the player can skip them without the transcript.
   const meta = metaOf({ ...entry, ads: adsOf(entry), adsV: ADS_VERSION });
-  index.entries = [meta, ...index.entries.filter((e) => e.id !== entry.id)].sort((a, b) => b.createdAt - a.createdAt);
-  await writeJson(path.join(LIB, 'index.json'), index);
+  return withIndex(async () => {
+    const index = await readIndex();
+    index.entries = [meta, ...index.entries.filter((e) => e.id !== entry.id)].sort((a, b) => b.createdAt - a.createdAt);
+    await writeJson(path.join(LIB, 'index.json'), index);
+  });
 }
 
 async function writeStatus() {
@@ -184,17 +197,21 @@ async function work() {
 // Audio older than AUDIO_DAYS goes (the transcript stays; the app then plays the original link).
 async function pruneAudio() {
   const index = await readIndex();
-  let changed = false;
+  const gone = new Set();
   for (const meta of index.entries) {
     if (!meta.audio || Date.now() - (meta.transcribedAt || 0) < AUDIO_DAYS * 864e5) continue;
     await rm(path.join(LIB, path.basename(meta.audio)), { force: true });
     const file = path.join(LIB, `${meta.id}.json`);
     const entry = await readJson(file, null);
     if (entry) { delete entry.audio; await writeJson(file, entry); }
-    delete meta.audio;
-    changed = true;
+    gone.add(meta.id);
   }
-  if (changed) await writeJson(path.join(LIB, 'index.json'), index);
+  if (!gone.size) return;
+  await withIndex(async () => {
+    const fresh = await readIndex();
+    for (const meta of fresh.entries) if (gone.has(meta.id)) delete meta.audio;
+    await writeJson(path.join(LIB, 'index.json'), fresh);
+  });
 }
 
 
@@ -213,10 +230,12 @@ async function markAds() {
   }
   if (!changed) return;
   // Uploads may have come in meanwhile: only the ads are carried over.
-  const fresh = await readIndex();
-  const mine = new Map(index.entries.map((m) => [m.id, m]));
-  for (const meta of fresh.entries) if (meta.adsV !== ADS_VERSION && mine.get(meta.id)?.adsV === ADS_VERSION) Object.assign(meta, { ads: mine.get(meta.id).ads, adsV: ADS_VERSION });
-  await writeJson(path.join(LIB, 'index.json'), fresh);
+  await withIndex(async () => {
+    const fresh = await readIndex();
+    const mine = new Map(index.entries.map((m) => [m.id, m]));
+    for (const meta of fresh.entries) if (meta.adsV !== ADS_VERSION && mine.get(meta.id)?.adsV === ADS_VERSION) Object.assign(meta, { ads: mine.get(meta.id).ads, adsV: ADS_VERSION });
+    await writeJson(path.join(LIB, 'index.json'), fresh);
+  });
   log(`ads: marked in ${changed} transcript${changed === 1 ? '' : 's'}`);
 }
 
@@ -306,7 +325,9 @@ const enhance = createEnhance({ dataDir: DATA, authorized: (req) => authorized(r
 // The podcast side: followed shows, positions and queue in step across devices, feeds read here
 // (server/pod.mjs). SYNC_KEY fixes the library's key; without it the first device to ask sets it.
 const pod = createPod({ dataDir: DATA, log, findFeed, seeds: SHOWS, key: process.env.SYNC_KEY || '', pollMinutes: POLL_MIN, allowPrivate: process.env.POD_ALLOW_PRIVATE === '1', freshSeconds: Number(process.env.POD_FRESH_SECONDS ?? 120),
-  transcribed: async () => new Set((await readIndex()).entries.map((e) => e.id)) });
+  transcribed: async () => new Set((await readIndex()).entries.map((e) => e.id)),
+  workflow: async (req) => (req.headers.authorization ? authorized(req, WORKFLOW) : false),
+  lookup: async (host) => (await dnsLookup(host, { all: true })).map((a) => a.address) });
 
 const server = http.createServer(async (req, res) => {
   try {

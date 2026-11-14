@@ -59,8 +59,11 @@ async function run(name, options) {
     /* ---------- a first visit: nothing followed, and the library becomes this device's ---------- */
     await page.goto(world.base);
     await page.waitForSelector('#show-grid .pod-empty');
+    await page.waitForSelector('#home-link:not(.hidden) .btn.primary');
+    check(await page.evaluate(() => !localStorage.getItem('pod-key')) && !(await (await fetch(`${world.base}/api/pod/status`)).json()).claimed, 'opening the page does not take the library');
+    await page.click('#home-link .btn.primary');
     await page.waitForFunction(() => /In step|Linked/.test(document.querySelector('#top-status').textContent), null, { timeout: 10000 });
-    check(await page.evaluate(() => (localStorage.getItem('pod-key') || '').length >= 20), 'the first device gets the key to the library');
+    check(await page.evaluate(() => (localStorage.getItem('pod-key') || '').length >= 20 && document.querySelector('#home-link').classList.contains('hidden')), 'a tap starts it, and this device holds its key');
     await shot('1-empty');
     await noSideScroll('empty');
 
@@ -95,7 +98,8 @@ async function run(name, options) {
     await page.waitForSelector('.ep-sheet', { state: 'detached' });
     await page.waitForSelector('#show-list .ep:has-text("Kaldtvannskorallene") .tag:has-text("Transcript asked for")');
     await page.waitForTimeout(2200);
-    const todo = await (await fetch(`${world.base}/api/pod/transcribe`)).json();
+    check((await fetch(`${world.base}/api/pod/transcribe`)).status === 401, 'what is to be transcribed is not for everyone to read');
+    const todo = await (await fetch(`${world.base}/api/pod/transcribe`, { headers: { authorization: `Bearer ${await page.evaluate(() => localStorage.getItem('pod-key'))}` } })).json();
     const fjord = todo.shows.find((s) => s.name === 'Fjordfunn');
     check(fjord?.fresh === true && fjord.backfill === 3 && fjord.lang === 'norwegian', `the workflow is told to transcribe the show's new episodes and its last three (${JSON.stringify(fjord)})`);
     check(todo.episodes.length === 1 && todo.episodes[0].title === 'Kaldtvannskorallene' && todo.episodes[0].feedUrl === world.feedUrl('fjord'), `and the one episode that was asked for (${todo.episodes.map((e) => e.title).join()})`);

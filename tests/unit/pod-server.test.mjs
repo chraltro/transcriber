@@ -5,7 +5,7 @@ import { mkdtemp, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import { createPod, isPrivateHost } from '../../server/pod.mjs';
+import { createPod, isPrivateHost, isPrivateAddress } from '../../server/pod.mjs';
 import { subId } from '../../lib/podstate.js';
 import { idOf } from '../../server/shows.mjs';
 
@@ -24,6 +24,7 @@ async function serve(opts = {}) {
   };
   const fetchImpl = async (url, init = {}) => {
     web.hits[url] = (web.hits[url] || 0) + 1;
+    if (url === 'https://cdn.example/hop') return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data' } });
     if (url.startsWith('https://cdn.example/')) {
       const bytes = Buffer.from('0123456789');
       const range = init.headers?.range?.match(/bytes=(\d+)-(\d*)/);
@@ -39,7 +40,12 @@ async function serve(opts = {}) {
     if (init.headers?.['if-none-match'] === etag) return new Response(null, { status: 304 });
     return new Response(body, { status: 200, headers: { etag } });
   };
-  const pod = createPod({ dataDir: dir, log: () => {}, fetchImpl, now: () => web.clock, findFeed: async (s) => `https://feeds.example/${s.appleId}`, ...opts });
+  const pod = createPod({
+    dataDir: dir, log: () => {}, fetchImpl, now: () => web.clock, findFeed: async (s) => `https://feeds.example/${s.appleId}`,
+    workflow: async (req) => req.headers.authorization === 'Bearer the-workflow',
+    lookup: async (host) => (host === 'inside.example' ? ['10.0.0.7'] : ['93.184.216.34']),
+    ...opts,
+  });
   await pod.init();
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
@@ -79,6 +85,10 @@ test('the first device claims the library; others need its key', async () => {
     // A device that only has the cookie (a web app added to the home screen) can ask for the key.
     assert.deepEqual((await s.call('GET', '/api/pod/key', null, { cookie: 'pod_key=' + KEY })).json, { key: KEY });
     assert.equal((await s.call('GET', '/api/pod/inbox', null, { cookie: 'other=1; pod_key=nope' })).status, 401);
+    // The cookie gets a device its key and nothing else: a request another site starts carries it too.
+    assert.equal((await s.call('GET', '/api/pod/inbox', null, { cookie: 'pod_key=' + KEY })).status, 401);
+    assert.equal((await s.call('GET', `/api/pod/audio?u=${encodeURIComponent('https://cdn.example/1.mp3')}`, null, { cookie: 'pod_key=' + KEY })).status, 401);
+    assert.deepEqual((await s.call('GET', '/api/pod/status', null, { cookie: 'pod_key=' + KEY })).json, { claimed: true, linked: true });
     assert.match((await s.call('POST', '/api/pod/unlink', null, none)).headers.get('set-cookie'), /Max-Age=0/);
     for (let i = 0; i < 20; i++) await s.call('POST', '/api/pod/link', { key: `wrong-${i}-wrong-wrong-wrong` }, none);
     assert.equal((await s.call('POST', '/api/pod/link', { key: KEY }, none)).status, 429, 'guessing is slowed down');
@@ -122,6 +132,13 @@ test('two devices stay in step, each getting only what it has not seen', async (
     assert.equal(moved.json.changes.progress.ep1.p, 300);
     assert.ok(moved.json.changes.subs[A]);
     assert.equal((await s.call('POST', '/api/pod/sync', '{not json')).status, 200, 'a string body is just no changes');
+    // A record has to be filed under its own id, and a show under the id of its feed: the id
+    // names files on the server.
+    await s.call('POST', '/api/pod/sync', { changes: { subs: { abc: { id: '../../escaped', feedUrl: 'https://feeds.example/b', title: 'x', at: 9e12 }, abcdef012345: { id: 'abcdef012345', feedUrl: 'https://feeds.example/b', title: 'y', at: 9e12 } } } });
+    await s.pod.refreshAll();
+    assert.equal(s.pod.doc.subs.abc, undefined);
+    assert.deepEqual((await readdir(s.dir)).sort(), ['pod'], 'nothing written outside its folder');
+    assert.deepEqual((await readdir(path.join(s.dir, 'pod', 'feeds'))).filter((f) => !f.startsWith(A)), [], 'and nothing for a show whose id is not its feed\'s');
   } finally { await s.close(); }
 });
 
@@ -188,9 +205,10 @@ test('a feed from anywhere can be looked at before it is followed', async () => 
     assert.equal((await s.call('GET', `/api/pod/resolve?url=${encodeURIComponent('http://127.0.0.1:3000/x')}`)).status, 400);
     assert.equal((await s.call('GET', `/api/pod/resolve?url=${encodeURIComponent('https://feeds.example/missing')}`)).status, 502);
     assert.equal((await s.call('GET', `/api/pod/resolve?url=${encodeURIComponent('https://feeds.example/b')}`, null, {})).status, 401);
-    assert.equal(isPrivateHost('192.168.1.5'), true);
-    assert.equal(isPrivateHost('172.20.0.1'), true);
+    for (const h of ['192.168.1.5', '172.20.0.1', 'localhost', 'localhost.', '[::ffff:7f00:1]', '[::]', 'intranet', 'db.internal', '2130706433']) assert.equal(isPrivateHost(h), true, h);
     assert.equal(isPrivateHost('feeds.megaphone.fm'), false);
+    for (const a of ['127.0.0.1', '10.1.2.3', '169.254.169.254', '::1', '::ffff:127.0.0.1', '::ffff:7f00:1', 'fd00::1', 'fe80::1', '100.64.0.1']) assert.equal(isPrivateAddress(a), true, a);
+    for (const a of ['93.184.216.34', '2606:2800:220:1::1', '172.32.0.1']) assert.equal(isPrivateAddress(a), false, a);
   } finally { await s.close(); }
 });
 
@@ -207,23 +225,33 @@ test('audio is passed through with byte ranges, for the key holder only', async 
     assert.equal(await part.text(), '2345');
     assert.equal((await fetch(`${s.base}/api/pod/audio?u=${u}`)).status, 401);
     assert.equal((await s.call('GET', `/api/pod/audio?u=${encodeURIComponent('http://localhost/x.mp3')}`)).status, 400);
+    // A public address that sends the request on into this network, or a name that stands for
+    // an address in it, is refused.
+    assert.equal((await s.call('GET', `/api/pod/audio?u=${encodeURIComponent('https://cdn.example/hop')}`)).status, 502);
+    assert.equal((await s.call('GET', `/api/pod/audio?u=${encodeURIComponent('https://inside.example/x.mp3')}`)).status, 502);
+    assert.equal(s.web.hits['https://inside.example/x.mp3'], undefined, 'never fetched');
   } finally { await s.close(); }
 });
 
 test('the built-in shows are followed from the start and listed for the transcribing', async () => {
   const s = await serve({ key: KEY, seeds: [{ name: 'Alpha Show', appleId: 'a' }, { name: 'Beta Show', appleId: 'b' }] });
   try {
-    assert.equal((await s.call('GET', '/api/pod/transcribe', null, {})).json.ready, false);
+    const ci = { authorization: 'Bearer the-workflow' };
+    assert.equal((await s.call('GET', '/api/pod/transcribe', null, {})).status, 401, 'what is listened to is not for everyone');
+    assert.equal((await s.call('GET', '/api/pod/transcribe', null, ci)).json.ready, false);
     await s.pod.refreshAll();
-    const list = await s.call('GET', '/api/pod/transcribe', null, {});
+    const list = await s.call('GET', '/api/pod/transcribe', null, ci);
     assert.equal(list.json.ready, true);
     assert.deepEqual(list.json.shows.map((x) => x.feedUrl).sort(), ['https://feeds.example/a', 'https://feeds.example/b']);
     assert.equal(list.json.shows[0].lang, 'english');
     // Switched off in the app, a show is no longer transcribed, and it is not followed again.
     const cur = s.pod.doc.subs[A];
-    await s.call('POST', '/api/pod/sync', { changes: { subs: { [A]: { ...cur, transcribe: false, at: s.web.clock + 1 } } } });
+    await s.call('POST', '/api/pod/sync', { changes: { subs: { [A]: { ...cur, transcribe: false, backfill: 0, at: s.web.clock + 1000 } }, wants: { [idOf('g7')]: { id: idOf('g7'), feedUrl: 'https://feeds.example/b', title: 'Episode 7', at: s.web.clock }, [idOf('g8')]: { id: idOf('g8'), feedUrl: 'https://feeds.example/b', title: 'Episode 8', gone: true, at: s.web.clock } } } });
     await s.pod.refreshAll();
-    assert.deepEqual((await s.call('GET', '/api/pod/transcribe', null, {})).json.shows.map((x) => x.feedUrl), ['https://feeds.example/b']);
+    const after = (await s.call('GET', '/api/pod/transcribe')).json;
+    assert.deepEqual(after.shows.map((x) => x.feedUrl), ['https://feeds.example/b']);
+    assert.deepEqual(after.shows[0], { name: 'Beta Show', feedUrl: 'https://feeds.example/b', lang: 'english', fresh: true, backfill: 0 });
+    assert.deepEqual(after.episodes, [{ id: idOf('g7'), feedUrl: 'https://feeds.example/b', title: 'Episode 7' }], 'an episode asked for, not the one withdrawn');
     // Large answers are compressed for those who ask.
     const res = await fetch(`${s.base}/api/pod/feed/${B}`, { headers: { authorization: `Bearer ${KEY}`, 'accept-encoding': 'identity' } });
     assert.equal(res.headers.get('content-encoding'), null);

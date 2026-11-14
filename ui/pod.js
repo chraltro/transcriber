@@ -104,7 +104,8 @@ export class Pod {
     const text = navigator.onLine === false ? 'Offline'
       : !server.there ? 'Kept in this browser'
         : server.offline ? 'Server not answering'
-          : !server.linked ? 'Not linked to your library'
+          : !server.claimed ? 'No library yet'
+            : !server.linked ? 'Not linked to your library'
             : server.error ? 'Not in step with the server'
               : this.store.syncedAt ? `In step ${new Date(this.store.syncedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : 'Linked';
     const titles = { home: ['Listen', 'New episodes'], queue: ['Listen', 'Up next'], add: ['Listen', 'Find a show'], settings: ['Listen', 'Settings'], show: ['Listen / Show', this.showTitle || 'Show'] };
@@ -305,10 +306,33 @@ export class Pod {
     const box = $('home-link');
     if (!box) return;
     const { server } = this.store;
-    const show = server.there && server.claimed && !server.linked && !server.offline;
-    box.classList.toggle('hidden', !show);
-    if (!show || box.firstChild) return;
-    box.append(this.linkForm('Your shows and positions live on the server, and this device has not joined them yet. On a device that has, open Settings and copy the link, then paste it here.'));
+    const mode = !server.there || server.linked || server.offline ? '' : server.claimed ? 'link' : 'start';
+    box.classList.toggle('hidden', !mode);
+    if (box.dataset.mode === mode) return;
+    box.dataset.mode = mode;
+    box.replaceChildren();
+    if (mode === 'link') box.append(this.linkForm('Your shows and positions live on the server, and this device has not joined them yet. On a device that has, open Settings and copy the link, then paste it here.'));
+    if (mode === 'start') box.append(this.startForm());
+  }
+
+  // Nobody has a library on this server yet: this device can be its first.
+  startForm() {
+    const go = async (e) => {
+      e.currentTarget.disabled = true;
+      try {
+        await this.store.claim();
+        this.toast('The library is started. Link your other devices from Settings.');
+        this.inboxStale = true;
+        this.loadInbox();
+      } catch (err) {
+        this.toast(err.status === 409 ? 'Another device started it a moment ago. Link this one to it.' : `Couldn't start it: ${err.message}`);
+        this.store.connect();
+      }
+    };
+    return h('div.link-form', {},
+      h('div', {}, h('p.kicker', { text: 'One library on every device' }), h('h2', { text: 'Start your library here' }),
+        h('p.hint', { text: 'The shows you follow, how far you have listened and your queue are kept on this server, so every device you link has them. Nobody has started a library here yet. Whoever does holds its key.' })),
+      h('div.actions', {}, h('button.btn.primary', { type: 'button', onclick: go }, h('span', { text: 'Start the library on this device' }))));
   }
 
   linkForm(text) {
@@ -727,6 +751,8 @@ export class Pod {
       library.append(h('p.hint', { text: 'This copy of the app has no server behind it, so what you follow and how far you have listened stay in this browser. Export your shows below to take them elsewhere.' }));
     } else if (server.offline) {
       library.append(h('p.hint', { text: 'The server is not answering right now. What you do here is kept and sent when it is back.' }));
+    } else if (!server.claimed) {
+      library.append(this.startForm());
     } else if (!server.linked) {
       library.append(this.linkForm('This device has not joined your library. On a device that has, open Settings, copy the link under "Link another device" and paste it here.'));
     } else {

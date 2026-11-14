@@ -11,13 +11,17 @@
  */
 if (typeof window === 'undefined') {
   // The app's own files are also kept as they are fetched, so the app starts without a
-  // connection (to play what was saved for offline) and on a bad one doesn't hang: the network
-  // is asked first, and the kept copy answers when it fails or takes more than a few seconds.
+  // connection (to play what was saved for offline) and on a bad one doesn't hang. The page
+  // itself decides: when it comes from the network, so does everything it loads (the kept copy
+  // only stands in for a file the network fails on); when the network fails or takes more than a
+  // few seconds, the page and everything it loads come from the kept copies, so a start is
+  // never half one version of the app and half another.
   // Not kept: the server's answers (api/), transcripts and audio (library/, enhance/), and
   // anything asked for in byte ranges.
   const SHELL = 'transcriber-shell';
   const SLOW_MS = 4000;
   const scope = new URL(self.registration.scope).pathname;
+  const live = new Map(); // page (client id) -> did it come from the network?
 
   self.addEventListener('install', () => self.skipWaiting());
   self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
@@ -30,18 +34,32 @@ if (typeof window === 'undefined') {
     return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
   };
 
-  async function shell(req, url) {
+  async function shell(e, url) {
+    const req = e.request;
     const cache = await caches.open(SHELL);
+    const page = req.mode === 'navigate';
     // The page is the page whatever was added to its address (?url=...).
-    const key = req.mode === 'navigate' ? url.origin + url.pathname : req;
+    const key = page ? url.origin + url.pathname : req;
     const kept = await cache.match(key);
-    const fresh = fetch(req).then((res) => {
+    const given = { up: false }; // given up on: an answer that comes late is not kept either
+    const fresh = () => fetch(req).then((res) => {
       const out = isolated(res);
-      if (res.status === 200) cache.put(key, out.clone()).catch(() => {});
+      if (res.status === 200 && !given.up) cache.put(key, out.clone()).catch(() => {});
       return out;
     });
-    if (!kept) return fresh;
-    return Promise.race([fresh.catch(() => kept), new Promise((resolve) => setTimeout(() => resolve(kept), SLOW_MS))]);
+    if (page) {
+      if (live.size > 40) live.delete(live.keys().next().value);
+      if (!kept) { live.set(e.resultingClientId, true); return fresh(); }
+      const got = await Promise.race([
+        fresh().then((res) => ({ res, ok: true }), () => ({ res: kept, ok: false })),
+        new Promise((resolve) => setTimeout(() => resolve({ res: kept, ok: false }), SLOW_MS)),
+      ]);
+      given.up = !got.ok;
+      live.set(e.resultingClientId, got.ok);
+      return got.res;
+    }
+    if (kept && live.get(e.clientId) === false) return kept;
+    return kept ? fresh().catch(() => kept) : fresh();
   }
 
   self.addEventListener('fetch', (e) => {
@@ -51,7 +69,7 @@ if (typeof window === 'undefined') {
     if (req.cache === 'only-if-cached' && req.mode !== 'same-origin') return;
     const rel = url.pathname.startsWith(scope) ? url.pathname.slice(scope.length) : url.pathname;
     const ours = req.method === 'GET' && !req.headers.has('range') && !/^(api|library|enhance)\//.test(rel);
-    e.respondWith(ours ? shell(req, url) : fetch(req).then(isolated));
+    e.respondWith(ours ? shell(e, url) : fetch(req).then(isolated));
   });
 } else {
   (() => {

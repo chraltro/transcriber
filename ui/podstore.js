@@ -160,10 +160,8 @@ export class PodStore extends EventTarget {
     this.server = { there: true, claimed: status.claimed, linked: status.linked, error: '' };
     try {
       if (!status.claimed) {
-        const key = [...crypto.getRandomValues(new Uint8Array(24))].map((b) => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_'[b & 63]).join('');
-        await this.api('POST', 'claim', { key });
-        this.setKey(key);
-        this.server = { ...this.server, claimed: true, linked: true };
+        // Nobody's yet. It is started with a tap (claim()), not by a page merely being opened:
+        // a crawler opens pages too.
       } else if (status.linked && !this.key) {
         this.setKey((await this.api('GET', 'key')).key);
       } else if (!status.linked && sent && sent === this.key) {
@@ -177,6 +175,17 @@ export class PodStore extends EventTarget {
     this.emit('link');
     if (this.server.linked) this.sync();
     return this.server;
+  }
+
+  // Makes this device the first of the library: its key becomes the library's.
+  async claim() {
+    const key = [...crypto.getRandomValues(new Uint8Array(24))].map((b) => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_'[b & 63]).join('');
+    await this.api('POST', 'claim', { key });
+    this.setKey(key);
+    this.server = { ...this.server, there: true, claimed: true, linked: true, error: '' };
+    this.meta.epoch = '';
+    this.emit('link');
+    await this.sync();
   }
 
   setKey(key) {
@@ -345,6 +354,9 @@ export class PodStore extends EventTarget {
         this.updateShow(id, { art: feed.art || sub.art, title: sub.title === sub.feedUrl ? feed.title : sub.title, lang: sub.lang || feed.lang || undefined });
       }
     }
+    // A cover the show has changed is taken over (the address, not what follows its question mark).
+    const bare = (u) => String(u || '').split('?')[0];
+    if (feed?.art && this.server.linked && this.doc.subs[id] && !this.doc.subs[id].gone && bare(feed.art) !== bare(this.doc.subs[id].art)) this.updateShow(id, { art: feed.art });
     if (feed && (!limit || feed.total <= feed.episodes.length)) putFeed(feed);
     return feed || (await getFeed(id));
   }

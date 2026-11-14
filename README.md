@@ -35,7 +35,8 @@ It is wording-based and errs towards leaving an ad in: what isn't clearly a spon
 
 The server keeps shows, positions, the queue and settings (`server/pod.mjs`, in `/data/pod`), with no accounts:
 
-- The first device to open the site claims the library with a random key. Other devices join with the link or QR code under Settings.
+- Until someone does, the site offers **Start the library on this device**: that device makes a random key the library's. Other devices join with the link or QR code under Settings. Opening the page alone claims nothing.
+- The key goes in a header on every request. The cookie set when a device joins only gets that device its key back (a home-screen app that inherits Safari's cookies).
 - Setting `SYNC_KEY` on the server fixes the key instead.
 - Records merge one by one, the last change winning (`lib/podstate.js`).
 
@@ -47,7 +48,7 @@ A static copy (GitHub Pages) has no server: everything stays in the browser, and
 
 A followed show's page has **Transcribe new episodes** and **And the last** N, which goes back for older ones. Any episode has **Transcribe on the server**.
 
-The work runs on GitHub's runners (`.github/workflows/shows.yml`, `server/ci.mjs`, `server/plan.mjs`). Each run reads `/api/pod/transcribe` and does new episodes first, then single requests, then the backfill. The five shows in `server/shows.mjs` are followed from the start, with Transcribe new episodes on.
+The work runs on GitHub's runners (`.github/workflows/shows.yml`, `server/ci.mjs`, `server/plan.mjs`). Each run reads `/api/pod/transcribe` (which answers the workflow's GitHub token or the library's key, nobody else) and does new episodes first, then single requests, then the backfill. The five shows in `server/shows.mjs` are followed from the start, with Transcribe new episodes on.
 
 ## Offline
 
