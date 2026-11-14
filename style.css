@@ -1324,6 +1324,16 @@ body.has-player { --bar: 72px; }
 .tile .meter { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; margin: 0; border-radius: 0; }
 .tile .meter span { background: var(--teal); }
 .tile { transition: background var(--t-press); }
+/* Swiped to the left, a tile shows what can be done with it (ui/gestures.js). */
+.swipe { position: relative; overflow: hidden; border-radius: var(--r-sm); }
+.swipe-front { position: relative; z-index: 1; touch-action: pan-y; transition: transform var(--t-pop) var(--ease); }
+.swipe-actions { position: absolute; top: 0; right: 0; bottom: 0; display: flex; }
+.swipe:not(.open) .swipe-actions { visibility: hidden; }
+.swipe-actions button { width: 84px; min-height: 44px; padding: 0 8px; border: 0; font: 600 13px var(--font-ui); color: var(--text); background: var(--panel-3); }
+.swipe-actions button + button { background: var(--cell); }
+.swipe-actions button:active { background: var(--line-strong); }
+/* (A long press opens a menu: not the phone's own for text and links.) */
+.tile, .ep { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 .tile.now .meter span { background: var(--accent); }
 
 .show-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 16px 14px; padding: 2px 22px 22px; }

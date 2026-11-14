@@ -6,6 +6,7 @@ import { statusOf, fractionOf } from '../lib/podstate.js';
 import { leftText, lengthText, timeIn, fmtSpeed } from '../lib/playback.js';
 import { parseOpml, toOpml } from '../lib/feed.js';
 import { CHOICES } from '../lib/autosave.js';
+import { longPress, swipeActions } from './gestures.js';
 import { notifyCard } from './notify.js';
 
 const $ = (id) => document.getElementById(id);
@@ -170,6 +171,8 @@ export class Pod {
       h('button.icon-btn.ep-more', { type: 'button', 'aria-label': `More for ${ep.title}`, 'aria-haspopup': 'true', 'aria-expanded': 'false', onclick: (e) => this.menu(e.currentTarget, this.eps.get(ep.id)) }, icon('more')),
       h('span.ep-bar', { 'aria-hidden': 'true' }, h('span')));
     li._showName = showName;
+    // A long press opens what the three dots open.
+    longPress(li, () => this.menu(li, this.eps.get(ep.id)));
     this.artInto(li.querySelector('.art'), ep);
     this.paintRow(li, ep);
     if (li.matches('.is-started, .now')) this.drawIn(li.querySelector('.ep-bar span'), ep.id);
@@ -236,10 +239,28 @@ export class Pod {
       saving ? { label: 'Stop saving', action: () => downloads.cancel(ep.id) }
         : downloads.has(ep.id) ? { label: 'Remove the saved copy', hint: fmtBytes(downloads.info(ep.id).bytes), action: () => downloads.remove(ep.id) }
           : { label: 'Save for offline', action: () => this.save(ep) },
-      { label: done ? 'Mark as not played' : 'Mark as played', action: () => { store.markPlayed(ep, !done); if (!done && player.item?.id !== ep.id) store.queueRemove(ep.id); } },
+      { label: done ? 'Mark as not played' : 'Mark as played', action: () => (done ? store.markPlayed(ep, false) : this.played(ep)) },
+      statusOf(prog) === 'started' && player.item?.id !== ep.id ? { label: 'Remove from Carry on', hint: 'forgets where it was', action: () => this.unstart(ep) } : null,
       ...this.transcriptChoices(ep),
       ep.sub && this.view !== 'show' && store.show(ep.sub) ? { label: 'Go to the show', action: () => this.go(`#/show/${ep.sub}`) } : null,
     ]);
+  }
+
+  // Played, and out of Carry on; undone, it is back where it was.
+  played(ep) {
+    const { store, player } = this;
+    const had = { ...store.progress(ep.id) };
+    store.markPlayed(ep, true);
+    if (player.item?.id !== ep.id) store.queueRemove(ep.id);
+    this.toast('Marked as played', { label: 'Undo', run: () => store.setProgress(ep, { p: had.p || 0, d: had.d || 0, done: !!had.done }) });
+  }
+
+  // Out of Carry on without being played: where it was is forgotten (undone, it is remembered).
+  unstart(ep) {
+    const { store } = this;
+    const had = { ...store.progress(ep.id) };
+    store.setProgress(ep, { p: 0, d: had.d || 0, done: false });
+    this.toast('Removed from Carry on', { label: 'Undo', run: () => store.setProgress(ep, { p: had.p || 0, d: had.d || 0, done: !!had.done }) });
   }
 
   feedOf(ep) {
@@ -399,7 +420,10 @@ export class Pod {
         h('div.meter', {}, h('span', { style: `width:${fractionOf(prog, ep.duration) * 100}%` })));
       this.artInto(tile.querySelector('.art'), ep);
       this.drawIn(tile.querySelector('.meter span'), `tile:${ep.id}`);
-      return tile;
+      // A long press opens the episode's menu; swiped to the left it shows "Played" and "Remove"
+      // (all the way: played).
+      longPress(tile, () => this.menu(tile, ep));
+      return swipeActions(tile, [{ label: 'Played', run: () => this.played(ep) }, { label: 'Remove', run: () => this.unstart(ep) }]);
     }));
   }
 

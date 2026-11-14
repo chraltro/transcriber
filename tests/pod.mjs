@@ -900,6 +900,51 @@ async function run(name, options) {
       }
     }
 
+    /* ---------- Carry on: long press and swipe ---------- */
+    {
+      await page.click(mobile ? '#tabbar [data-nav=listen]' : '#nav [data-nav=listen]');
+      await page.waitForSelector('#started-list .tile', { timeout: 10000 });
+      const first = () => page.evaluate(() => document.querySelector('#started-list .tile .tile-title')?.textContent || '');
+      const title = await first();
+      // A long press opens the episode's menu, with a way out of Carry on in it.
+      await page.evaluate(() => { const t = document.querySelector('#started-list .tile'); const r = t.getBoundingClientRect(); t.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 3, pointerType: 'touch', isPrimary: true, button: 0, clientX: r.left + 100, clientY: r.top + 20, bubbles: true })); });
+      await page.waitForTimeout(650);
+      await page.evaluate(() => { const t = document.querySelector('#started-list .tile'); t.dispatchEvent(new PointerEvent('pointerup', { pointerId: 3, pointerType: 'touch', isPrimary: true, bubbles: true })); });
+      const items = await page.locator('#row-menu.open button b').allTextContents();
+      check(items.includes('Remove from Carry on') && items.includes('Mark as played'), `a long press on a Carry on episode opens its menu (${items.join(', ')})`);
+      await page.keyboard.press('Escape');
+      if (mobile) {
+        const swipe = (by) => page.evaluate((by) => {
+          const t = document.querySelector('#started-list .tile');
+          const r = t.getBoundingClientRect();
+          const at = (x) => ({ pointerId: 4, pointerType: 'touch', isPrimary: true, button: 0, clientX: x, clientY: r.top + 20, bubbles: true });
+          const x = r.right - 20;
+          t.dispatchEvent(new PointerEvent('pointerdown', at(x)));
+          for (let i = 1; i <= 6; i++) t.dispatchEvent(new PointerEvent('pointermove', at(x - (by * i) / 6)));
+          t.dispatchEvent(new PointerEvent('pointerup', at(x - by)));
+        }, by);
+        // Swiped a little way: the two actions stay open.
+        await swipe(130);
+        await page.waitForTimeout(350);
+        const open = await page.evaluate(() => ({ open: !!document.querySelector('#started-list .swipe.open'), labels: [...document.querySelectorAll('#started-list .swipe.open .swipe-actions button')].map((b) => b.textContent) }));
+        await shot('4b-swipe');
+        check(open.open && open.labels.join() === 'Played,Remove', `swiped to the left, a Carry on episode shows what can be done (${open.labels.join(', ')})`);
+        await page.click('#started-list .swipe.open .swipe-actions button:has-text("Remove")');
+        await page.waitForTimeout(300);
+        check((await first()) !== title && /Removed from Carry on/.test(await page.locator('#toast').textContent()), `"Remove" takes it out of Carry on (${title})`);
+        await page.click('#toast-action');
+        await page.waitForFunction((t) => [...document.querySelectorAll('#started-list .tile-title')].some((x) => x.textContent === t), title, { timeout: 5000 }).catch(() => {});
+        check(await page.evaluate((t) => [...document.querySelectorAll('#started-list .tile-title')].some((x) => x.textContent === t), title), 'and Undo puts it back, where it was');
+        // Swiped all the way: played.
+        await swipe(360);
+        await page.waitForTimeout(500);
+        const gone = await page.evaluate((t) => ![...document.querySelectorAll('#started-list .tile-title')].some((x) => x.textContent === t), title);
+        check(gone && /Marked as played/.test(await page.locator('#toast').textContent()), 'swiped all the way, it is marked as played');
+        await page.click('#toast-action');
+        await page.waitForTimeout(400);
+      }
+    }
+
     /* ---------- shows out, as a file ---------- */
     if (!mobile) {
       await page.click('#nav [data-nav=settings]');
