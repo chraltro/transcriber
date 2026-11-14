@@ -50,11 +50,15 @@
         setTimeout(show, 1500);
       });
       setTimeout(show, 8000);
-      // Loading it again drops the copies the service worker keeps, so every file is fetched anew.
+      // Loading it again drops the service worker and the copies it keeps, so every file is fetched anew.
       document.getElementById('boot-reload').addEventListener('click', function () {
         var go = function () { location.reload(); };
-        if (!window.caches) return go();
-        caches.keys().then(function (keys) { return Promise.all(keys.filter(function (k) { return k === 'transcriber-shell'; }).map(function (k) { return caches.delete(k); })); }).then(go, go);
+        var tasks = [];
+        try {
+          if (window.caches) tasks.push(caches.keys().then(function (keys) { return Promise.all(keys.filter(function (k) { return k.indexOf('transcriber-shell') === 0; }).map(function (k) { return caches.delete(k); })); }));
+          if (navigator.serviceWorker) tasks.push(navigator.serviceWorker.getRegistrations().then(function (regs) { return Promise.all(regs.map(function (r) { return r.unregister(); })); }));
+        } catch (e) {}
+        Promise.all(tasks).then(go, go);
       });
     })();
   </script>

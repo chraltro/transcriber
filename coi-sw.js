@@ -18,21 +18,36 @@ if (typeof window === 'undefined') {
   // never half one version of the app and half another.
   // Not kept: the server's answers (api/), transcripts and audio (library/, enhance/), and
   // anything asked for in byte ranges.
-  const SHELL = 'transcriber-shell';
+  const SHELL = 'transcriber-shell-2';
   const SLOW_MS = 4000;
   const scope = new URL(self.registration.scope).pathname;
   const live = new Map(); // page (client id) -> did it come from the network?
 
   self.addEventListener('install', () => self.skipWaiting());
-  self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+  // Copies kept by an earlier version of this worker go: they were kept with headers that
+  // described the packed file, not the unpacked one in them.
+  self.addEventListener('activate', (e) => e.waitUntil(
+    caches.keys().then((keys) => Promise.all(keys.filter((k) => k.startsWith('transcriber-shell') && k !== SHELL).map((k) => caches.delete(k)))).catch(() => {}).then(() => self.clients.claim())
+  ));
 
   const isolated = (res) => {
     if (res.status === 0) return res;
     const headers = new Headers(res.headers);
     headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
     headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+    // A packed file arrives here unpacked: headers that still say it is packed, and how long it
+    // was while it was, are no longer true of what is handed on.
+    if (headers.has('Content-Encoding')) {
+      headers.delete('Content-Encoding');
+      headers.delete('Content-Length');
+    }
     return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
   };
+
+  // The whole file, whatever the page's own cache asked: in Safari the question "has it changed
+  // since my copy?" reaches this worker with the request, and an empty "no" for an answer is not
+  // something every kind of load there survives.
+  const whole = (req) => fetch(req.url, { cache: 'reload', credentials: 'same-origin' });
 
   async function shell(e, url) {
     const req = e.request;
@@ -42,10 +57,16 @@ if (typeof window === 'undefined') {
     const key = page ? url.origin + url.pathname : req;
     const kept = await cache.match(key);
     const given = { up: false }; // given up on: an answer that comes late is not kept either
-    const fresh = () => fetch(req).then((res) => {
-      const out = isolated(res);
-      if (res.status === 200 && !given.up) cache.put(key, out.clone()).catch(() => {});
-      return out;
+    const fresh = () => fetch(req).then((res) => (res.status === 304 ? whole(req) : res)).then((res) => {
+      // Keeping a copy must never cost the page its file: the copy is taken from the network's
+      // own answer, and whatever goes wrong with it stays here.
+      try {
+        if (res.status === 200 && !given.up) {
+          const copy = isolated(res.clone());
+          cache.put(key, copy).catch(() => {});
+        }
+      } catch {}
+      return isolated(res);
     });
     if (page) {
       if (live.size > 40) live.delete(live.keys().next().value);
@@ -69,7 +90,8 @@ if (typeof window === 'undefined') {
     if (req.cache === 'only-if-cached' && req.mode !== 'same-origin') return;
     const rel = url.pathname.startsWith(scope) ? url.pathname.slice(scope.length) : url.pathname;
     const ours = req.method === 'GET' && !req.headers.has('range') && !/^(api|library|enhance)\//.test(rel);
-    e.respondWith(ours ? shell(e, url) : fetch(req).then(isolated));
+    // (If keeping copies fails in some way of its own, the file still comes from the network.)
+    e.respondWith(ours ? shell(e, url).catch(() => fetch(req).then(isolated)) : fetch(req).then(isolated));
   });
 } else {
   (() => {

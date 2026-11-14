@@ -220,11 +220,13 @@ async function run(name, options) {
     await page.click('#row-menu button:has-text("Save for offline")');
     await page.waitForSelector('#latest-list .ep:has-text("A bakery in 1911") .tag:has-text("Saved")', { timeout: 30000 });
     check(true, "an episode whose host turns web pages away is saved through the library's server");
-    await A.ctx.setOffline(true);
+    // (Offline as the test browser fakes it also cuts WebKit off from its own stored files, so
+    // there the saved copy is played with the connection up.)
+    if (!WEBKIT) await A.ctx.setOffline(true);
     await row('A bakery in 1911').locator('.ep-play').click();
     await playing(0.3);
     a = await audio();
-    check(a.src.startsWith('blob:'), 'offline, the saved copy plays');
+    check(a.src.startsWith('blob:'), `${WEBKIT ? 'the saved copy is the one played' : 'offline, the saved copy plays'}`);
     await page.click('#pb-play');
     await A.ctx.setOffline(false);
 
@@ -312,14 +314,23 @@ async function offline() {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const page = await ctx.newPage();
   try {
+    page.on('pageerror', (e) => console.log(`  [page error] ${e.message} ${(e.stack || '').split('\n').slice(0, 3).join(' | ')}`));
+    page.on('console', (m) => { if (m.type() === 'error') console.log(`  [console] ${m.text().slice(0, 200)}`); });
+    page.on('requestfailed', (r) => console.log(`  [request failed] ${r.url().slice(0, 100)} ${r.failure()?.errorText || ''}`));
     await page.goto(world.base);
-    // The worker takes the page over (reloading it once), then keeps what the page loads.
+    // A first visit, as a web app just put on the home screen makes it: the worker installs,
+    // takes the page over and reloads it once. The app has to be alive after that.
     await page.waitForFunction(() => navigator.serviceWorker?.controller, null, { timeout: 20000 });
+    await page.waitForTimeout(2500);
+    const alive = await page.evaluate(() => ({ started: !!window.__appStarted, view: document.body.className, tab: !!document.querySelector('#tabbar a.on'), status: document.querySelector('#top-status').textContent, failed: !document.querySelector('#boot-fail').hidden && document.querySelector('#boot-why').textContent }));
+    check(alive.started && alive.tab && !alive.failed, `after the worker takes over and reloads the page, the app is running (${JSON.stringify(alive)})`);
     await page.waitForSelector('#show-grid');
     await page.reload();
     await page.waitForSelector('#show-grid');
+    const again = await page.evaluate(() => !!window.__appStarted && !!document.querySelector('#tabbar a.on'));
+    check(again, 'and on the next start, with every file passing through the worker');
     await page.waitForTimeout(1500);
-    const kept = await page.evaluate(async () => (await (await caches.open('transcriber-shell')).keys()).map((r) => new URL(r.url).pathname));
+    const kept = await page.evaluate(async () => (await (await caches.open('transcriber-shell-2')).keys()).map((r) => new URL(r.url).pathname));
     check(kept.includes('/') && kept.includes('/app.js') && kept.includes('/ui/pod.js') && !kept.some((p) => p.startsWith('/api/') || p.startsWith('/library/')), `the app's own files are kept, the server's answers are not (${kept.length} files)`);
     await ctx.setOffline(true);
     await page.reload();

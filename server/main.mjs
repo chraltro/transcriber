@@ -250,7 +250,7 @@ const TYPES = {
 const PUBLIC = /^\/(index\.html|app\.js|worker\.js|enhance-worker\.js|coi-sw\.js|style\.css|(lib|ui|fonts)\/[\w./-]+|[\w-]+\.(png|svg|ico|webmanifest|txt))$/;
 
 // Text is sent compressed (the app's own files are compressed once and kept; transcripts as
-// they go out), and everything carries a tag so a reload costs a few bytes when nothing changed.
+// they go out).
 const gzip = promisify(zlib.gzip);
 const brotli = promisify(zlib.brotliCompress);
 const TEXT = new Set(['.html', '.js', '.mjs', '.css', '.json', '.md', '.svg', '.webmanifest', '.txt']);
@@ -273,7 +273,11 @@ async function serveFile(req, res, file, { cache = 'no-cache' } = {}) {
     if (!s.isFile()) throw new Error('not a file');
     const ext = path.extname(file);
     const type = TYPES[ext] || 'application/octet-stream';
-    const tag = `"${s.size.toString(36)}-${Math.round(s.mtimeMs).toString(36)}"`;
+    // Which copy of the file this is, for the compressed copies kept below. It is not sent as an
+    // ETag: with one, a reload asks "has it changed?", and on an iPhone that question and its
+    // empty answer pass through the page's service worker, after which the app's script never
+    // ran (Safari and the home-screen app; Chrome there has no service worker and was fine).
+    const tag = `${s.size.toString(36)}-${Math.round(s.mtimeMs).toString(36)}`;
     const range = req.headers.range?.match(/^bytes=(\d*)-(\d*)$/);
     if (range && (range[1] || range[2])) {
       let start = range[1] ? Number(range[1]) : Math.max(0, s.size - Number(range[2]));
@@ -283,24 +287,19 @@ async function serveFile(req, res, file, { cache = 'no-cache' } = {}) {
         res.end();
         return;
       }
-      res.writeHead(206, { 'content-type': type, 'content-length': end - start + 1, 'content-range': `bytes ${start}-${end}/${s.size}`, 'accept-ranges': 'bytes', 'cache-control': cache, etag: tag });
+      res.writeHead(206, { 'content-type': type, 'content-length': end - start + 1, 'content-range': `bytes ${start}-${end}/${s.size}`, 'accept-ranges': 'bytes', 'cache-control': cache });
       createReadStream(file, { start, end }).pipe(res);
-      return;
-    }
-    if (req.headers['if-none-match'] === tag) {
-      res.writeHead(304, { etag: tag, 'cache-control': cache });
-      res.end();
       return;
     }
     const accepts = req.headers['accept-encoding'] || '';
     const enc = TEXT.has(ext) && s.size > 1024 && s.size < 8e6 ? (/\bbr\b/.test(accepts) ? 'br' : /\bgzip\b/.test(accepts) ? 'gzip' : '') : '';
     if (enc) {
       const body = await compressed(file, tag, enc, file.startsWith(ROOT + path.sep));
-      res.writeHead(200, { 'content-type': type, 'content-length': body.length, 'content-encoding': enc, vary: 'accept-encoding', 'cache-control': cache, etag: tag });
+      res.writeHead(200, { 'content-type': type, 'content-length': body.length, 'content-encoding': enc, vary: 'accept-encoding', 'cache-control': cache });
       res.end(req.method === 'HEAD' ? undefined : body);
       return;
     }
-    res.writeHead(200, { 'content-type': type, 'content-length': s.size, 'accept-ranges': 'bytes', 'cache-control': cache, etag: tag });
+    res.writeHead(200, { 'content-type': type, 'content-length': s.size, 'accept-ranges': 'bytes', 'cache-control': cache });
     if (req.method === 'HEAD') { res.end(); return; }
     createReadStream(file).pipe(res);
   } catch {
