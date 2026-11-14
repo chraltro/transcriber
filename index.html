@@ -213,7 +213,15 @@
       <section class="pod-view hidden" id="pod-search" aria-label="Search transcripts"></section>
     </div>
 
-    <section class="hero panel" id="hero">
+    <nav class="tx-tabs hidden" id="tx-tabs" aria-label="Views">
+      <a href="#/transcribe" data-tab="new">New</a>
+      <a href="#/transcribe/library" data-tab="library">Library</a>
+      <a href="#/transcribe" data-tab="transcript">Transcript</a>
+      <a href="#/transcribe/speakers" data-tab="speakers">Speakers</a>
+      <a href="#/transcribe/clean-up" data-tab="clean">Clean up</a>
+    </nav>
+
+    <section class="hero panel" id="hero" data-pane="new">
       <p class="kicker" id="hero-kicker">New transcript · runs in this browser</p>
       <h1 id="hero-title">Podcast to text.</h1>
 
@@ -259,20 +267,20 @@
           <label class="switch setting">
             <input type="checkbox" id="speakers" checked><span class="track"><span class="knob"></span></span><span class="switch-label">Label speakers</span>
           </label>
-          <details class="advanced">
-            <summary>Names to watch for</summary>
-            <label class="field">
+          <div class="advanced">
+            <button type="button" class="btn ghost small opener" aria-expanded="false" aria-controls="glossary-field"><span>Names to watch for</span><svg class="icon chev"><use href="#i-down"/></svg></button>
+            <label class="field hidden" id="glossary-field">
               <span>One per line. Near-misses in the transcript are corrected, and the model is told to expect them. Write <code>wrong = Right</code> to force a fix. Names from the show notes are added on their own.</span>
               <textarea id="glossary" rows="4" spellcheck="false" placeholder="Arvind Narayanan&#10;Hugging Face&#10;foom = FOOM"></textarea>
             </label>
-          </details>
-          <details class="advanced">
-            <summary>CORS proxy</summary>
-            <label class="field">
+          </div>
+          <div class="advanced">
+            <button type="button" class="btn ghost small opener" aria-expanded="false" aria-controls="proxy-field"><span>CORS proxy</span><svg class="icon chev"><use href="#i-down"/></svg></button>
+            <label class="field hidden" id="proxy-field">
               <span>For hosts that block browsers. Use <code>{url}</code> as the placeholder, or a prefix the link is appended to. Without one, pages that block web apps are read through <a href="https://jina.ai/reader">r.jina.ai</a>; only the link is sent, never audio.</span>
               <input type="text" id="proxy" spellcheck="false" placeholder="https://my-proxy.example.workers.dev/?url={url}">
             </label>
-          </details>
+          </div>
         </div>
       </div>
     </section>
@@ -304,7 +312,7 @@
       <button type="button" class="icon-btn close" id="error-close" aria-label="Dismiss"><svg class="icon"><use href="#i-x"/></svg></button>
     </section>
 
-    <section class="card sheet hidden" id="episodes-card" aria-labelledby="feed-title">
+    <section class="card sheet hidden" id="episodes-card" aria-labelledby="feed-title" data-pane="new">
       <div class="sheet-head">
         <div class="art sheet-art" id="feed-art"></div>
         <div class="sheet-title">
@@ -322,7 +330,7 @@
       <ul class="episode-list" id="episodes"></ul>
     </section>
 
-    <section class="card session hidden" id="progress-card" aria-labelledby="episode-title">
+    <section class="card session hidden" id="progress-card" aria-labelledby="episode-title" data-pane="transcript">
       <div class="session-top">
         <div class="art session-art" id="art"></div>
         <div class="session-info">
@@ -351,11 +359,10 @@
           <button type="button" class="btn ghost small" id="refine-all">Refine all</button>
         </div>
         <button type="button" class="btn ghost small hidden" id="names-btn" aria-expanded="false" aria-controls="names-panel">Check names</button>
-        <button type="button" class="btn ghost small hidden" id="clean-btn"><svg class="icon"><use href="#i-sliders"/></svg><span>Clean up audio</span></button>
       </div>
     </section>
 
-    <section class="card studio hidden" id="studio" aria-labelledby="studio-title">
+    <section class="card studio hidden" id="studio" aria-labelledby="studio-title" data-pane="clean">
       <div class="session-top">
         <div class="art session-art" id="studio-art"></div>
         <div class="session-info">
@@ -419,7 +426,7 @@
       </div>
     </section>
 
-    <section class="card map-card hidden" id="map-card" aria-labelledby="map-title">
+    <section class="card map-card hidden" id="map-card" aria-labelledby="map-title" data-pane="speakers">
       <div class="panel-head">
         <div>
           <p class="kicker" id="map-kicker">Who speaks when</p>
@@ -438,29 +445,29 @@
       <div class="map-wrap" id="map-grid"></div>
     </section>
 
-    <div class="duo" id="duo">
-      <section class="card talk-card hidden" id="talk-card" aria-labelledby="talk-title">
-        <p class="kicker">Talk time</p>
-        <h2 id="talk-title">Voices</h2>
-        <ol class="talk" id="talk-list"></ol>
-      </section>
-      <section class="card names hidden" id="names-panel" aria-labelledby="names-title">
-        <p class="kicker">Spellings</p>
-        <h2 id="names-title">Check names</h2>
-        <p class="hint">Names spelled more than one way in this transcript. Tap the right spelling to fix the others, here and in future transcripts.</p>
-        <ul class="names-list" id="names-list"></ul>
-      </section>
-    </div>
+    <section class="card talk-card hidden" id="talk-card" aria-labelledby="talk-title" data-pane="speakers">
+      <p class="kicker">Talk time</p>
+      <h2 id="talk-title">Voices</h2>
+      <p class="hint talk-hint">Tap a name to rename that speaker everywhere in the transcript.</p>
+      <ol class="talk" id="talk-list"></ol>
+    </section>
 
-    <article class="reader card hidden" id="result-card" aria-label="Transcript">
-      <div class="reader-head">
+    <section class="card names hidden" id="names-panel" aria-labelledby="names-title" data-pane="transcript">
+      <p class="kicker">Spellings</p>
+      <h2 id="names-title">Check names</h2>
+      <p class="hint">Names spelled more than one way in this transcript. Tap the right spelling to fix the others, here and in future transcripts.</p>
+      <ul class="names-list" id="names-list"></ul>
+    </section>
+
+    <article class="reader card hidden" id="result-card" aria-label="Transcript" data-pane="transcript">
+      <div class="reader-head sr-only">
         <p class="kicker">Transcript log</p>
         <h2>Transcript</h2>
       </div>
       <div class="toolbar" id="toolbar">
         <div class="search-field find">
           <svg class="icon"><use href="#i-search"/></svg>
-          <input type="search" id="search" placeholder="Search transcript" aria-label="Search transcript">
+          <input type="search" id="search" placeholder="Search" aria-label="Search the transcript">
           <span class="find-count" id="find-count"></span>
           <button type="button" class="icon-btn tiny" id="find-prev" aria-label="Previous match"><svg class="icon"><use href="#i-up"/></svg></button>
           <button type="button" class="icon-btn tiny" id="find-next" aria-label="Next match"><svg class="icon"><use href="#i-down"/></svg></button>
@@ -490,7 +497,7 @@
       </div>
     </article>
 
-    <section class="library card hidden" id="shelf" aria-labelledby="shelf-heading">
+    <section class="library card hidden" id="shelf" aria-labelledby="shelf-heading" data-pane="library">
       <div class="library-head">
         <div>
           <p class="kicker">Transcribed on the server as they come out</p>
@@ -502,7 +509,7 @@
       <ul class="library-list" id="shelf-list"></ul>
     </section>
 
-    <section class="library card hidden" id="library" aria-labelledby="library-heading">
+    <section class="library card hidden" id="library" aria-labelledby="library-heading" data-pane="library">
       <div class="library-head">
         <div>
           <p class="kicker">Kept in this browser only</p>

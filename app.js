@@ -60,7 +60,8 @@ const els = {
   mapPlay: $('#map-play'), mapRefine: $('#map-refine'), mapCopy: $('#map-copy'), mapClear: $('#map-clear'), talkCard: $('#talk-card'), talkList: $('#talk-list'),
   mini: $('#mini'), miniArt: $('#mini-art'), miniTitle: $('#mini-title'), miniStatus: $('#mini-status'), miniBar: $('#mini-bar'),
   dropzone: $('#dropzone'), toast: $('#toast'), toastText: $('#toast-text'), toastAction: $('#toast-action'), announce: $('#announce'), audio: $('#audio'),
-  modes: $('#modes'), heroTitle: $('#hero-title'), heroKicker: $('#hero-kicker'), studio: $('#studio'), cleanBtn: $('#clean-btn'), stepsClean: $('#steps-clean'),
+  modes: $('#modes'), heroTitle: $('#hero-title'), heroKicker: $('#hero-kicker'), studio: $('#studio'), stepsClean: $('#steps-clean'),
+  txTabs: $('#tx-tabs'),
 };
 
 const state = {
@@ -93,6 +94,12 @@ const state = {
   speakerNames: {},   // names the reader gave
   guessed: {},        // names from introductions ("I'm Derek Thompson")
 };
+
+// The tabs of the transcript side (see updateTabs).
+const TAB_SLUG = { new: '', library: 'library', transcript: '', speakers: 'speakers', clean: 'clean-up' };
+const SLUG_TAB = { new: 'new', library: 'library', transcript: 'transcript', speakers: 'speakers', 'clean-up': 'clean' };
+const tabs = { current: null, asked: '', lastArg: '', inView: false, scroll: {}, queued: false, libraryKnown: false, shelfKnown: false };
+const tabHash = (tab) => (TAB_SLUG[tab] ? `#/transcribe/${TAB_SLUG[tab]}` : '#/transcribe');
 
 const wave = new Waveform(els.waveWrap, els.wave, els.waveTip, { onSeek: (t) => playFrom(t) });
 
@@ -443,7 +450,12 @@ function renderTalk(list) {
   const most = list[0]?.seconds || 1;
   els.talkList.replaceChildren(...list.map((t) => {
     const li = el('li');
-    const name = el('span', 'who-name', speakerName(t.speaker, n));
+    // (the other voices together are no one to rename)
+    const name = t.speaker === OTHER ? el('span', 'who-name', speakerName(t.speaker, n)) : whoChip(t.speaker);
+    if (t.speaker !== OTHER) {
+      name.classList.add('who-name');
+      name.setAttribute('aria-label', `Rename ${name.textContent}`);
+    }
     const amount = el('span', 'amount', `${fmtTime(t.seconds)} · ${Math.round(t.fraction * 100)}%`);
     const bar = el('span', 'bar');
     const fill = el('span');
@@ -501,13 +513,13 @@ function playingSide() {
   if (!span) return 0;
   const r = span.getBoundingClientRect();
   const bottom = Math.min(window.innerHeight, ...['playbar', 'tabbar'].map((id) => document.getElementById(id)).filter((e) => e && e.offsetParent).map((e) => e.getBoundingClientRect().top));
-  return r.bottom < 70 ? -1 : r.top > bottom - 10 ? 1 : 0;
+  return r.bottom < readerTop() ? -1 : r.top > bottom - 10 ? 1 : 0;
 }
 
 // The reader scrolled the sentence being played out of view: the page stops following it, and
 // a button takes them back to it (pointing the way it is). Scrolled back to it, it follows again.
 function updateNowPill() {
-  const on = bound() && !state.busy && state.playingIdx >= 0 && document.body.classList.contains('view-transcribe');
+  const on = bound() && !state.busy && state.playingIdx >= 0 && document.body.classList.contains('view-transcribe') && tabs.current === 'transcript';
   const side = on ? playingSide() : 0;
   if (!side) {
     if (on) state.following = true;
@@ -610,7 +622,7 @@ function setBusy(busy) {
   if (!busy) pod.setBusy('');
   els.cancel.classList.toggle('hidden', !busy);
   els.sessionClose.classList.toggle('hidden', busy);
-  els.cleanBtn.classList.toggle('hidden', busy || !state.playable || !state.segments.length);
+  queueTabs();
   els.tail.classList.toggle('hidden', !busy);
   els.readerFoot.classList.toggle('hidden', busy || !state.segments.length);
   if (!busy) els.jump.classList.add('hidden');
@@ -1284,6 +1296,7 @@ function showEpisodes(feed) {
   renderEpisodes();
   els.episodesCard.classList.remove('hidden');
   updateLayout();
+  if (transcribing() && pod.arg) pod.go('#/transcribe');
   els.episodesCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
   if (!IS_MOBILE) els.filter.focus({ preventScroll: true });
 }
@@ -2040,7 +2053,7 @@ async function refreshPlayable() {
 
 function setPlayable(on) {
   state.playable = on;
-  els.cleanBtn.classList.toggle('hidden', !on || state.busy || !state.segments.length);
+  queueTabs();
   updateRefineBar();
   els.play.disabled = !on;
   els.transcript.classList.toggle('playable', on);
@@ -2090,8 +2103,9 @@ function highlightPlaying(i) {
   span.classList.add('playing');
   // Follow along, unless the reader has scrolled away (then the button to go back says which way).
   if (!state.following || Date.now() - state.userScrolledAt < 1500) { updateNowPill(); return; }
+  if (tabs.current !== 'transcript') return; // (it is found again when the Transcript tab is back)
   const r = span.getBoundingClientRect();
-  if (r.top < 130 || r.bottom > window.innerHeight - 110) span.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  if (r.top < readerTop() + 14 || r.bottom > window.innerHeight - 110) span.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
 function onPlayState() {
@@ -2354,11 +2368,22 @@ const pod = new Pod({
     els.topStatus.textContent = status;
   },
   onView: (view) => {
-    if (view !== 'transcribe') return;
+    const was = tabs.inView;
+    tabs.inView = view === 'transcribe';
+    if (view !== 'transcribe') { tabs.lastArg = ''; return; }
     els.topCrumb.textContent = top.crumb;
     els.topContext.textContent = top.context;
     els.topStatus.textContent = top.status;
     updateLayout();
+    // The tab the address asks for (a tap on the tabs, or the back gesture).
+    const arg = pod.arg || '';
+    const moved = was && arg !== tabs.lastArg;
+    tabs.lastArg = arg;
+    tabs.asked = arg;
+    if (was && tabs.current) tabs.scroll[tabs.current] = window.scrollY;
+    updateTabs();
+    // (the address moving scrolls the page to the top: each tab goes back to where it was)
+    if (moved) requestAnimationFrame(() => restoreScroll(tabs.current));
     updateMap(true);
   },
 });
@@ -2369,6 +2394,7 @@ pod.finder = new TranscriptSearch({ pod, store: podcasts, player, artInto, toast
 /* ---------- session, mini player, layout ---------- */
 
 function beginSession(meta, { loading = false } = {}) {
+  tabs.scroll = {};
   els.progressCard.classList.remove('hidden');
   showSessionMeta(meta, { loading });
   els.steps.classList.remove('failed', 'stopped');
@@ -2406,6 +2432,88 @@ function updateLayout() {
     renderShelf();
   }
   updateSettingsSummary();
+  queueTabs();
+}
+
+/* ---------- tabs: one part of the transcript side on screen at a time ----------
+ * With a transcript open: Transcript (the reader, its search, playing and export), Speakers
+ * (who speaks when, talk time, renaming) and Clean up (the studio). With none: New (a link or
+ * a file) and Library. A tab with nothing to show is not offered, and one tab alone is no bar.
+ * The tab is in the address (#/transcribe/speakers), so the back gesture moves between them;
+ * #/transcribe is the first one offered. Changing tab is instant (DESIGN.md). */
+
+function offeredTabs() {
+  if (!document.body.classList.contains('has-session')) {
+    const library = !els.library.classList.contains('hidden') || !els.shelf.classList.contains('hidden');
+    return library ? ['new', 'library'] : ['new'];
+  }
+  const offered = [];
+  const reading = !els.progressCard.classList.contains('hidden') || !els.resultCard.classList.contains('hidden') || !els.resumeCard.classList.contains('hidden');
+  if (reading) offered.push('transcript');
+  if (reading && !els.resultCard.classList.contains('hidden') && state.segments.some((x) => x.speaker != null)) offered.push('speakers');
+  if (state.cleaning || (reading && !state.busy && state.playable && state.segments.length)) offered.push('clean');
+  return offered.length ? offered : ['new'];
+}
+
+// (Many changes come in one go, a transcript taken down and built again: the tabs are worked out
+// once they have settled.)
+function queueTabs() {
+  if (tabs.queued) return;
+  tabs.queued = true;
+  queueMicrotask(() => { tabs.queued = false; updateTabs(); });
+}
+
+function updateTabs() {
+  const offered = offeredTabs();
+  const asked = SLUG_TAB[tabs.asked] || '';
+  const tab = offered.includes(asked) ? asked : offered[0];
+  // An address naming a tab that is not there (a transcript since closed) is put right, so the
+  // back gesture does not come back to it. (The library is known once it has been read.)
+  if (asked && tab !== asked && transcribing() && (asked !== 'library' || (tabs.libraryKnown && tabs.shelfKnown))) {
+    history.replaceState(history.state, '', `${location.pathname}${location.search}${tabHash(tab)}`);
+    tabs.asked = '';
+    tabs.lastArg = '';
+  }
+  for (const a of els.txTabs.querySelectorAll('a')) {
+    const on = a.dataset.tab === tab;
+    a.classList.toggle('hidden', !offered.includes(a.dataset.tab));
+    a.classList.toggle('on', on);
+    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  }
+  const bar = offered.length > 1;
+  els.txTabs.classList.toggle('hidden', !bar);
+  document.body.classList.toggle('tx-tabbed', bar);
+  if (tab === tabs.current) return;
+  const left = tabs.current;
+  tabs.current = tab;
+  document.body.dataset.tab = tab;
+  for (const pane of document.querySelectorAll('main > [data-pane]')) pane.classList.toggle('tab-off', pane.dataset.pane !== tab);
+  // The studio's preview stops when its tab goes; the studio itself stays as it was.
+  if (left === 'clean' && state.cleaning) studio.stopPlayback();
+  if (tab === 'clean' && !state.cleaning) cleanFromTranscript();
+  hideSelPill();
+  updateNowPill();
+}
+
+function restoreScroll(tab) {
+  if (tab !== tabs.current) return;
+  const span = state.segEls[state.playingIdx];
+  // Back on the transcript while it plays along: at the sentence being played.
+  if (tab === 'transcript' && span && bound() && state.following) span.scrollIntoView({ block: 'center' });
+  else window.scrollTo(0, tabs.scroll[tab] || 0);
+}
+
+// Another tab, through the address. replace: instead of the one on screen (nothing to go back to).
+function goTab(tab, { replace = false } = {}) {
+  if (!replace) { pod.go(tabHash(tab)); return; }
+  history.replaceState(history.state, '', `${location.pathname}${location.search}${tabHash(tab)}`);
+  pod.route();
+}
+
+// Where the transcript's own view starts, under the top bar and the tabs held at the top.
+function readerTop() {
+  const bar = els.txTabs;
+  return Math.max(70, bar.offsetParent ? bar.getBoundingClientRect().bottom : 0);
 }
 
 // How far the transcript is, when its panel has scrolled out of sight (playing has its own bar).
@@ -2469,6 +2577,8 @@ async function renderLibrary() {
   const entries = await listEntries();
   if (v !== libraryVersion || document.body.classList.contains('has-session')) return;
   els.library.classList.toggle('hidden', !entries.length);
+  tabs.libraryKnown = true;
+  queueTabs();
   if (entries.length) foldSettings(true);
   els.libraryList.replaceChildren(...entries.map((e, i) => {
     const li = el('li');
@@ -2518,6 +2628,8 @@ async function renderShelf() {
   if (v !== shelfVersion || document.body.classList.contains('has-session')) return;
   const entries = index?.entries || [];
   els.shelf.classList.toggle('hidden', !index || (!entries.length && !status?.current));
+  tabs.shelfKnown = true;
+  queueTabs();
   const now = status?.current;
   els.shelfNow.classList.toggle('hidden', !now);
   if (now) {
@@ -3173,7 +3285,7 @@ function setCleanBusy(on) {
   els.go.disabled = on;
   els.file.disabled = on;
   if (on) { startKeepAlive(); acquireWakeLock(); } else { stopKeepAlive(); releaseWakeLock(); }
-  els.cleanBtn.classList.toggle('hidden', on || !state.playable || !state.segments.length);
+  queueTabs();
 }
 
 function saveBlob(blob, name) {
@@ -3271,7 +3383,7 @@ async function cleanFromTranscript() {
   enterCleaning();
   setCleanBusy(true);
   showStudioHeader(state.source);
-  els.studio.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (tabs.current !== 'clean') goTab('clean');
   try {
     let blob = state.sourceFile || (state.audioKey ? await cachedAudio(state.audioKey) : null);
     if (!blob && state.source?.audio) {
@@ -3297,6 +3409,7 @@ async function cleanFromTranscript() {
     if (err.name === 'AbortError') return;
     console.error(err);
     leaveCleaning();
+    if (tabs.current === 'clean') goTab('transcript', { replace: true });
     toast(err instanceof UserError ? err.message : "Couldn't open the clean-up for this episode.");
   }
 }
@@ -3336,7 +3449,7 @@ const studio = new Studio({
     // is running (refine, speaker labels) carries on, only the studio goes.
     if (state.cleanBusy) { state.abort?.abort(); setCleanBusy(false); } else if (state.busy) { leaveCleaning(); return; }
     // With a transcript open, only the studio goes; on its own, back to the start.
-    if (!els.resultCard.classList.contains('hidden') && state.segments.length) { leaveCleaning(); els.progressCard.scrollIntoView({ behavior: 'smooth', block: 'start' }); } else closeSession();
+    if (!els.resultCard.classList.contains('hidden') && state.segments.length) { leaveCleaning(); goTab('transcript', { replace: true }); } else closeSession();
   },
 });
 
@@ -3446,7 +3559,9 @@ function wireEvents() {
   els.glossary.addEventListener('change', applyGlossary);
   els.namesBtn.addEventListener('click', () => toggleNames());
   els.mapPlay.addEventListener('click', () => { if (state.mapSel) { scrollToTime(state.mapSel.from); if (state.playable) playFrom(state.mapSel.from); } });
-  els.mapRefine.addEventListener('click', () => { const s = state.mapSel; if (s) { clearMapSelection(); refine({ from: s.from, to: s.to }); } });
+  // (refining is watched on the transcript, where the better words arrive)
+  els.mapRefine.addEventListener('click', () => { const s = state.mapSel; if (s) { clearMapSelection(); goTab('transcript'); refine({ from: s.from, to: s.to }); } });
+  els.talkList.addEventListener('click', (e) => { const who = e.target.closest('.who'); if (who) renameSpeaker(who); });
   els.mapCopy.addEventListener('click', async () => {
     const s = state.mapSel;
     if (!s) return;
@@ -3460,6 +3575,15 @@ function wireEvents() {
     const open = els.settings.classList.toggle('open');
     els.settingsToggle.setAttribute('aria-expanded', String(open));
   });
+  // Options kept out of the way: a button opens what it holds.
+  for (const b of document.querySelectorAll('.opener')) {
+    b.addEventListener('click', () => {
+      const open = b.getAttribute('aria-expanded') !== 'true';
+      const box = $(`#${b.getAttribute('aria-controls')}`);
+      b.setAttribute('aria-expanded', String(open));
+      box.classList.toggle('hidden', !open);
+    });
+  }
 
   els.form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -3506,7 +3630,6 @@ function wireEvents() {
 
   els.cancel.addEventListener('click', cancel);
   els.modes.addEventListener('change', () => { store.set('mode', mode()); applyMode(); });
-  els.cleanBtn.addEventListener('click', cleanFromTranscript);
   els.refineAll.addEventListener('click', () => refine());
   $('#refine-sel').addEventListener('click', () => { const w = selectedWindows() || state.lastSel; if (w) refine(w); });
   els.refineModel.addEventListener('change', () => { els.selModel.textContent = `with ${els.refineModel.selectedOptions[0]?.textContent || ''}`; });
@@ -3580,7 +3703,14 @@ function wireEvents() {
       if (!els.episodesCard.classList.contains('hidden')) { els.episodesCard.classList.add('hidden'); updateLayout(); }
     }
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === '/' && transcribing() && !els.resultCard.classList.contains('hidden')) { e.preventDefault(); els.search.focus(); }
+    if (e.key === '/' && transcribing() && !els.resultCard.classList.contains('hidden')) {
+      e.preventDefault();
+      if (tabs.current === 'transcript') els.search.focus();
+      else {
+        goTab('transcript');
+        window.addEventListener('hashchange', () => requestAnimationFrame(() => requestAnimationFrame(() => els.search.focus())), { once: true });
+      }
+    }
     // The player's keys, as video sites have them: k or space plays and pauses, j and l (or the
     // arrows) go back and forward. Not while a button or a slider has the keyboard.
     const onControl = !!document.activeElement?.closest?.('button, a, summary, [role=slider], [tabindex="0"]');
