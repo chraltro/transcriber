@@ -43,9 +43,12 @@ async function device(browser, world, name, options) {
   await ctx.route('https://audio.test.example/**', (route) => route.fulfill({ status: 200, contentType: 'audio/wav', body: world.audio }));
   const page = await ctx.newPage();
   const errors = [];
-  page.on('pageerror', (e) => { errors.push(e.message); console.log(`  [page error] ${e.message} ${(e.stack || '').split('\n').slice(0, 4).join(' | ')}`); });
+  // (A download the podcast's host refuses to web pages is expected, and tried through the
+  // library's server next; WebKit reports the refusal as an error of the page's.)
+  const refused = /Access-Control-Allow-Origin|due to access control checks/;
+  page.on('pageerror', (e) => { if (refused.test(e.message)) return; errors.push(e.message); console.log(`  [page error] ${e.message} ${(e.stack || '').split('\n').slice(0, 4).join(' | ')}`); });
   page.on('requestfailed', (r) => { if (!/audio|\.wav|\.mp3|itunes/.test(r.url())) console.log(`  [request failed] ${r.url().slice(0, 120)} ${r.failure()?.errorText || ''}`); });
-  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|net::ERR_|blocked by CORS policy/.test(m.text())) errors.push(m.text()); });
+  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|net::ERR_|blocked by CORS policy/.test(m.text()) && !refused.test(m.text())) errors.push(m.text()); });
   const shot = (state) => page.screenshot({ path: join(SHOTS, `pod-${name}-${state}.png`) });
   const noSideScroll = async (state) => {
     const [w, sw] = await page.evaluate(() => [window.innerWidth, document.documentElement.scrollWidth]);

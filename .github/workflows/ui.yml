@@ -34,19 +34,6 @@ jobs:
         run: node tests/pod.mjs offline; node tests/pod.mjs phone
         env:
           ENGINE: webkit
-      # One run only: the worker and the server as they were when the app went dead on an iPhone
-      # (dccff64), to see whether WebKit here shows the same. Taken out again after this run.
-      - name: The earlier worker in WebKit (one run, to compare)
-        if: always()
-        continue-on-error: true
-        run: |
-          git fetch --depth=1 origin dccff64e871ea96f69d123a9f77818e650be904c
-          git checkout dccff64e871ea96f69d123a9f77818e650be904c -- coi-sw.js server lib/ads.js lib/adbreaks.js
-          node tests/pod.mjs offline || true
-          git rm -q -f --cached lib/ads.js lib/adbreaks.js && rm -f lib/ads.js lib/adbreaks.js
-          git checkout HEAD -- coi-sw.js server
-        env:
-          ENGINE: webkit
       - uses: actions/upload-artifact@v4
         if: always()
         with:
