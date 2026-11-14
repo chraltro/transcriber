@@ -18,7 +18,7 @@ The mock-up it was picked from is kept beside this file's history: `tests-local/
 
 1. Draw what is known, to scale. Every mark stands for something the app has measured: loudness, a voice, a sponsor read, a chapter, a position. Where it has not measured, the mark is plainly absent (an even row of faint bars, no colours), never invented. A streamed episode nobody transcribed looks like one.
 2. One memorable thing, and the score is it. Everything around it stays as quiet as it is today: flat teal panels, slab headings, mono labels, low radius. No second showpiece.
-3. Motion is drawing or travel, once. A strip draws in along its length. A sheet comes from the edge it lives at. A value moves from where it was to where it is. Nothing fades up in a stagger, pulses, breathes, bounces, or loops while idle. While an episode plays, the only thing that moves is the position.
+3. It moves like a native iPhone app (the owner, 14 November 2026: "not luxurious or native app like. It's very stiff"). Screens push in from the right and pop back, the page behind a sheet recedes, the mini player grows into the full player, a press gives way under the finger, removed rows close up, everything on springs that settle without wobble. Motion carries meaning (where a thing came from and went), never decoration; still and complete under reduced motion.
 4. The colours already have jobs. The speaker hues are for voices and nothing else. Red is the position and the play button and nothing else. No new colours, no colour taken from cover art.
 5. Made for a thumb. Anything touched is at least 44 px, works one-handed, is sharp on a 3x screen, and is complete and still under reduced motion.
 
@@ -40,19 +40,19 @@ Colours, type and radius are the tokens in `style.css` (`:root`), unchanged.
 | No data | bars of one even height in `--faint` at 35%; ticks, sponsor box, position and magnifier as usual | principle 1 |
 | Draw-in | once, when the strip first shows for an episode: left to right, 500 ms, linear | the mock-up |
 | Magnifier opens / closes | 160 ms, `--ease` | the mock-up |
-| Interface moves | `--t-press` 120 ms (a press, a switch), `--t-pop` 200 ms (a menu, a toast), `--t-move` 320 ms (a sheet, a value drawing in); going away takes the step below; `--ease`. Screens change at once | what the app already used, made into three steps |
+| Interface moves | iOS-like springs, settled (no visible overshoot on large moves, a touch on small ones): a press 100 ms down / 220 ms up, a menu or toast 260 ms, a sheet or a pushed screen 420 ms, going back a little faster than coming in; written as `linear()` spring curves in `:root` with `--ease` as the fallback. Tabs change at once or cross-fade in 150 ms | the owner's ask for a native feel |
 
 ## What stays out
 
 Three separate runs of a generic model, given only the brief "make a podcast player visually stunning", all proposed the same things. They are what everything else looks like, so none of them goes in unless the owner asks for one by name:
 
 - blurred or gradient backgrounds made from the cover art, or any colour taken from it
-- grain, glows, glass
+- grain, glows
+- glass, except where iOS itself uses it: the bars along the top and bottom may be translucent with the page blurred under them
 - a greeting header ("Good evening")
-- cards that fade and rise one after another
+- cards that fade and rise one after another on every screen as decoration (rows coming in where they really arrive is fine)
 - a waveform that breathes or pulses with the audio, cover art that scales with playback
 - line-art illustrations for empty states (headphones, moons)
-- a play button that morphs, press effects that scale things down
 - a cream, ember and purple palette; Fraunces with Inter
 
 Also out, by the owner's standing rules: italics, emoji, em dashes in copy, title case, buttons that don't say what happens.
