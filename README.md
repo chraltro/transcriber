@@ -11,6 +11,7 @@ The transcriber is the **Transcribe** section (`#/transcribe`): paste a podcast 
 - **A show's page**: its episodes, a search, and Play the latest.
 - **Up next**: the queue. **Play next** puts an episode first, and when one ends the next starts.
 - **The player**: back 15 and forward 30 seconds (changeable in Settings), speed from 0.8x to 3x with an optional speed per show, and a sleep timer. Each episode's position is remembered, and after a pause it picks up a few seconds earlier (up to 25 after a day). Keys: `k` or space plays and pauses, `j` goes back, `l` forward.
+- **The score**: the player's position control is the episode itself. A bar for each stretch of time, its height the loudness and its colour the voice, sponsor reads hatched, a tick where each chapter starts, and a red line where you are (`ui/score.js`). Hold a finger on it and a magnifier opens above, three minutes at a bar a second, with the chapter and the exact time; the audio moves when you lift it. The server files each transcript's shape beside it (`<id>.shape.json`, `lib/shape.js`: a byte of loudness a second and the turns, a few kilobytes an hour) while it keeps the audio the transcript was made from. An episode saved on the device that nobody transcribed shows its loudness once the device has listened through it (the same pass that finds its pauses), and a streamed one shows a plain strip.
 - **Shorten pauses**: pick the longest pause to leave alone (0.5, 0.8, 1.2 or 2 seconds) and anything longer is cut down to that, so the dead air of a call's delay goes and the pauses people make on purpose stay. Where the audio goes quiet is found from the audio itself (`lib/quiet.js`): by the transcribing for episodes the server has, on the device for episodes saved for offline. A streamed episode has to be saved first; the player offers to.
 - **Episode notes** come from the feed, and times in them (`12:34`) start the episode there.
 - **Chapters**: from the show's Podcasting 2.0 chapters file (the server fetches it, from public hosts only, and keeps it), from Podlove chapters in the feed, or from three or more times that begin lines of the notes (`lib/chapters.js`). An episode's sheet lists them above the notes and tapping one plays from there. The player shows the chapter being played under the title, with buttons to the one before and after, and marks each chapter on the position slider with a thin tick. Chapters are only for getting about: nothing is skipped by them.
@@ -18,6 +19,12 @@ The transcriber is the **Transcribe** section (`#/transcribe`): paste a podcast 
 - **Save for offline** keeps an episode on the device, listed under Up next.
 - **Keep the newest saved**: on a show's page, "Keep the newest saved on this device" (none, 1, 2, 3 or 5) saves that show's newest episodes not yet played, one at a time, while the app is open (`lib/autosave.js` decides, `ui/autosave.js` fetches). Episodes saved this way go once played (unless "Keep saved episodes once played" is on) or once they are no longer among the newest. Episodes saved by hand are never touched, and one removed by hand is not fetched again. The choice belongs to the device, not the library. A web app can't tell Wi-Fi from mobile data or fetch while it is closed, and it stops when the device is short of space. Settings says what is kept that way and can stop it.
 - **Notifications**: with the app on an iPhone's home screen (iOS 16.4 or later), or in a desktop browser, switch on Settings > Notifications and the server says when a show you follow has a new episode. A tap opens that show's page. Each show has its own switch, "Tell me about new episodes", on unless turned off. The server sends them itself through the browsers' push services (Web Push with VAPID, `server/push.mjs`, Node's crypto only) after each round of reading feeds: only episodes new since the last reading, out since the show was followed and less than three days old, two per show per round at most. The server's key and the devices that asked are kept in `/data/pod`; `PUSH_SUBJECT` can name a `mailto:` address for the push services (the site's address is used otherwise).
+
+## How it looks and moves
+
+`DESIGN.md` has the direction (the score), its principles and measurements, and the list of what stays out. In short: every mark stands for something measured, the score is the one showpiece, and motion is drawing or travel, once.
+
+Three steps of timing in `style.css` (`--t-press` 120 ms for a press or a switch, `--t-pop` 200 ms for a menu or a toast, `--t-move` 320 ms for a sheet or a value drawing in), and going away takes the step below. Screens change at once; a sheet comes in from its edge (the bottom on a phone, the right on a desktop) and goes back to it, except when the browser's back closes it, which is instant. A show's cover travels from Listen to the show's page where the browser has view transitions. An episode's played part draws in once when a list first shows it, and a search hit carries a tick showing where in the episode it is. On a phone every control reaches at least 44 px both ways, and `tests/pod.mjs` checks that on each screen.
 
 ## On an iPhone
 
@@ -150,6 +157,7 @@ Both `npm` runs happen in GitHub Actions on every push to a `claude/**` branch t
 - `lib/quiet.js`: where audio goes quiet, and what to cut for a given limit
 - `lib/direct.js`: the address of an episode's file behind the services that count downloads
 - `lib/chapters.js`: chapters from a chapters file, the feed or the notes
+- `lib/shape.js`: an episode's shape (loudness a second, who speaks when), as the score draws it
 - `lib/autosave.js`: which episodes a device keeps saved by itself
 - `server/search.mjs`: search across the library's transcripts; `node tests/search-lab.mjs 400 half` times it
 - `server/push.mjs`: notifications through the browsers' push services
@@ -163,6 +171,7 @@ Both `npm` runs happen in GitHub Actions on every push to a `claude/**` branch t
 - `ui/downloads.js`: episodes saved for offline
 - `ui/autosave.js`: keeps the newest episodes saved, while the app is open
 - `ui/search.js`: the search screen
+- `ui/score.js`: the score, the player's position control
 - `ui/notify.js`: the Notifications card in Settings
 - `ui/dom.js`: DOM helpers
 - `ui/`: also the waveform canvas and the library of recent transcripts
