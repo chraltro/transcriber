@@ -186,6 +186,11 @@ export async function startWorld({ audioSeconds = 300 } = {}) {
     publish: (slug, title, seconds = 1800, at = now) => { (state.extra[slug] ||= []).unshift([title, (now - at) / DAY, seconds]); },
     // The app's server goes away (the page is then on its own).
     stopApp: () => new Promise((resolve) => { app.once('exit', resolve); app.kill(); }),
-    close: async () => { app.kill(); world.close(); await rm(data, { recursive: true, force: true }); },
+    // (The server writes what it holds as it is told to stop: its folder goes only once it has.)
+    close: async () => {
+      if (app.exitCode == null && app.signalCode == null) await new Promise((resolve) => { app.once('exit', resolve); app.kill(); setTimeout(resolve, 5000); });
+      world.close();
+      await rm(data, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    },
   };
 }
