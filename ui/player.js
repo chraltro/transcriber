@@ -75,7 +75,9 @@ export class Player extends EventTarget {
     on('seeked', () => {
       // A jump over a pause: how long it took is what the next ones have to be worth.
       if (this.jumpedAt) {
-        this.seekCost = this.seekCost * 0.7 + ((performance.now() - this.jumpedAt) / 1000) * 0.3;
+        // (One stall is not what jumps cost: it counts for a second at most, or no pause would
+        // be worth a jump again, and with no jumps made the figure would never come back down.)
+        this.seekCost = this.seekCost * 0.7 + Math.min(1, (performance.now() - this.jumpedAt) / 1000) * 0.3;
         this.jumpedAt = 0;
         if (this.seekCost > this.cutCost * 1.6 || this.seekCost < this.cutCost * 0.5) this.recut();
       }
@@ -207,6 +209,8 @@ export class Player extends EventTarget {
     this.finding = null;
     this.sought = false;
     this.trimmed = 0;
+    this.seekCost = 0.1; // another copy, another cost: measured again
+    this.jumpedAt = 0;
     this.wanted = at ?? resumeAt(progress, Date.now(), { rewind: this.store.settings.rewind });
     this.at = this.wanted;
     this.known = progress?.d || item.duration || 0;
