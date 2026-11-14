@@ -13,7 +13,11 @@ The transcriber is the **Transcribe** section (`#/transcribe`): paste a podcast 
 - **The player**: back 15 and forward 30 seconds (changeable in Settings), speed from 0.8x to 3x with an optional speed per show, and a sleep timer. Each episode's position is remembered, and after a pause it picks up a few seconds earlier (up to 25 after a day). Keys: `k` or space plays and pauses, `j` goes back, `l` forward.
 - **Shorten pauses**: pick the longest pause to leave alone (0.5, 0.8, 1.2 or 2 seconds) and anything longer is cut down to that, so the dead air of a call's delay goes and the pauses people make on purpose stay. Where the audio goes quiet is found from the audio itself (`lib/quiet.js`): by the transcribing for episodes the server has, on the device for episodes saved for offline. A streamed episode has to be saved first; the player offers to.
 - **Episode notes** come from the feed, and times in them (`12:34`) start the episode there.
+- **Chapters**: from the show's Podcasting 2.0 chapters file (the server fetches it, from public hosts only, and keeps it), from Podlove chapters in the feed, or from three or more times that begin lines of the notes (`lib/chapters.js`). An episode's sheet lists them above the notes and tapping one plays from there. The player shows the chapter being played under the title, with buttons to the one before and after, and marks each chapter on the position slider with a thin tick. Chapters are only for getting about: nothing is skipped by them.
+- **Search every transcript**: the field at the top of Listen (or `/` on a keyboard) searches what was said in every episode the server has transcribed. Words find the start of words, "quoted phrases" find themselves, case and accents don't count, and æ, ø and å are letters of their own. A hit is a sentence holding every word, or two or three sentences in a row that do, newest episode first. Tapping a line plays the server's copy from just before that sentence, and the button beside it opens the transcript there.
 - **Save for offline** keeps an episode on the device, listed under Up next.
+- **Keep the newest saved**: on a show's page, "Keep the newest saved on this device" (none, 1, 2, 3 or 5) saves that show's newest episodes not yet played, one at a time, while the app is open (`lib/autosave.js` decides, `ui/autosave.js` fetches). Episodes saved this way go once played (unless "Keep saved episodes once played" is on) or once they are no longer among the newest. Episodes saved by hand are never touched, and one removed by hand is not fetched again. The choice belongs to the device, not the library. A web app can't tell Wi-Fi from mobile data or fetch while it is closed, and it stops when the device is short of space. Settings says what is kept that way and can stop it.
+- **Notifications**: with the app on an iPhone's home screen (iOS 16.4 or later), or in a desktop browser, switch on Settings > Notifications and the server says when a show you follow has a new episode. A tap opens that show's page. Each show has its own switch, "Tell me about new episodes", on unless turned off. The server sends them itself through the browsers' push services (Web Push with VAPID, `server/push.mjs`, Node's crypto only) after each round of reading feeds: only episodes new since the last reading, out since the show was followed and less than three days old, two per show per round at most. The server's key and the devices that asked are kept in `/data/pod`; `PUSH_SUBJECT` can name a `mailto:` address for the push services (the site's address is used otherwise).
 
 ## On an iPhone
 
@@ -53,9 +57,11 @@ A followed show's page has **Transcribe new episodes** and **And the last** N, w
 
 The work runs on GitHub's runners (`.github/workflows/shows.yml`, `server/ci.mjs`, `server/plan.mjs`). Each run reads `/api/pod/transcribe` (which answers the workflow's GitHub token or the library's key, nobody else) and does new episodes first, then single requests, then the backfill. The five shows in `server/shows.mjs` are followed from the start, with Transcribe new episodes on.
 
+The server keeps the copy of the audio each transcript was made from, so the player can play it in step with the transcript. That copy goes once the transcript is 60 days old (`AUDIO_DAYS`), or 180 days for an episode that is queued or started and not finished; the transcript stays, and the app then plays the podcast's own address. Uploads whose transcript never arrived are cleared after two days (`server/prune.mjs`, a minute after start and twice a day).
+
 ## Offline
 
-The service worker (`coi-sw.js`) keeps the app's own files, so the app starts without a connection. Episodes saved for offline play without one.
+The service worker (`coi-sw.js`) keeps the app's own files, so the app starts without a connection. The files carry ETags, so a start where nothing changed costs a "not modified" answer per file; the worker asks for each file itself, so it always has a whole copy to keep. Episodes saved for offline play without one.
 
 ## Supported links
 
@@ -143,6 +149,11 @@ Both `npm` runs happen in GitHub Actions on every push to a `claude/**` branch t
 - `lib/breaks.js`: ad breaks from a transcript (named so that content blockers leave it alone, like `lib/pitch.js`, the wording of sponsor reads)
 - `lib/quiet.js`: where audio goes quiet, and what to cut for a given limit
 - `lib/direct.js`: the address of an episode's file behind the services that count downloads
+- `lib/chapters.js`: chapters from a chapters file, the feed or the notes
+- `lib/autosave.js`: which episodes a device keeps saved by itself
+- `server/search.mjs`: search across the library's transcripts; `node tests/search-lab.mjs 400 half` times it
+- `server/push.mjs`: notifications through the browsers' push services
+- `server/prune.mjs`: which of the server's audio copies go, and when
 - `lib/podstate.js`: the library document and how copies merge
 - `lib/playback.js`: where to resume, which ad to skip
 - `ui/pod.js`: the Listen, Up next and Settings screens
@@ -150,6 +161,9 @@ Both `npm` runs happen in GitHub Actions on every push to a `claude/**` branch t
 - `ui/player.js`: playback, the queue, Media Session, ad skipping
 - `ui/playerui.js`: the player bar and the sheet it opens into
 - `ui/downloads.js`: episodes saved for offline
+- `ui/autosave.js`: keeps the newest episodes saved, while the app is open
+- `ui/search.js`: the search screen
+- `ui/notify.js`: the Notifications card in Settings
 - `ui/dom.js`: DOM helpers
 - `ui/`: also the waveform canvas and the library of recent transcripts
 - `server/pod.mjs`: the library and feeds on the server (API listed at the top)

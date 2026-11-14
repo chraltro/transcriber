@@ -473,6 +473,51 @@ body.has-session .settings:not(.open) .settings-body, .settings.collapsible:not(
 .search-field input:focus { border-color: var(--teal); }
 .search-field input::-webkit-search-cancel-button { -webkit-appearance: none; }
 
+/* search across every transcript (ui/search.js): the way in at the top of Listen looks like a field */
+.search-entry {
+  margin: 0; height: 44px; padding: 0 14px 0 38px; max-width: 560px;
+  border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--panel);
+  color: var(--faint); font-size: 15px; text-decoration: none;
+}
+.search-entry span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-key { margin-left: auto; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: 11px/1.6 var(--font-mono); color: var(--faint); }
+@media (hover: none) { .search-key { display: none; } }
+@media (hover: hover) { .search-entry:hover { border-color: var(--teal); color: var(--muted); } }
+.search-note { display: grid; gap: 12px; justify-items: start; padding-top: 14px; }
+.search-note p { margin: 0; }
+.hit-eps { list-style: none; margin: 14px 0 0; padding: 0; border-top: 1px solid var(--line); transition: opacity 0.2s; }
+.hit-eps:empty { display: none; }
+.hit-eps.stale { opacity: 0.55; }
+.hit-ep { padding: 14px 0 10px; border-bottom: 1px solid var(--line); }
+.hit-ep:last-child { border-bottom: 0; }
+.hit-head { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 14px; align-items: center; padding: 0 22px; }
+.hit-head .art { --size: 44px; width: 44px; }
+.hit-ep-main { min-width: 0; display: grid; gap: 2px; padding: 2px 0; border: 0; background: none; text-align: left; color: inherit; }
+.hit-ep-title { font-weight: 600; font-size: 14.5px; line-height: 1.3; overflow-wrap: anywhere; }
+.hit-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.hit { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; padding: 0 12px 0 16px; }
+.hit-main { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 6px; padding: 9px 6px; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); text-align: left; font-size: 14px; line-height: 1.5; }
+@media (hover: hover) { .hit-main:hover { background: var(--panel-2); color: var(--text); } }
+.hit-time { font: 600 11px/2 var(--font-mono); color: var(--faint); }
+.hit-text { overflow-wrap: anywhere; }
+.hit-text b { font-weight: 700; color: var(--text); }
+.hit.now .hit-main { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); color: var(--text); }
+.hit.now .hit-time { color: var(--accent); }
+.hit-read { margin-top: 4px; }
+.hit-more { margin: 2px 0 0; padding: 0 22px 0 80px; font: 11px var(--font-mono); color: var(--faint); }
+.seg.sought { background: var(--panel-3); box-shadow: 0 0 0 2px var(--panel-3); }
+@media (max-width: 640px) {
+  .search-entry { max-width: none; }
+  .hit-head { padding: 0 16px; gap: 12px; }
+  .hit { padding: 0 4px 0 10px; }
+  .hit-main { grid-template-columns: 46px minmax(0, 1fr); }
+  .hit-more { padding: 0 16px 0 68px; }
+}
+@media (hover: none) and (pointer: coarse) {
+  .hit-read { width: 44px; height: 44px; margin-top: 0; }
+  .hit-main:active, .hit-ep-main:active { opacity: 0.6; }
+}
+
 .episode-list { list-style: none; margin: 12px -22px -20px; padding: 0; max-height: min(62vh, 640px); overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--line); }
 .episode-list li + li { border-top: 1px solid var(--line); }
 .episode {

@@ -125,11 +125,12 @@ export class PodStore extends EventTarget {
 
   /* ---------- the server ---------- */
 
-  async api(method, route, body) {
+  // signal: to give up on an answer no longer wanted (a search overtaken by the next key).
+  async api(method, route, body, { signal } = {}) {
     const headers = {};
     if (this.key) headers.authorization = `Bearer ${this.key}`;
     if (body !== undefined) headers['content-type'] = 'application/json';
-    const res = await fetch(`api/pod/${route}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), cache: 'no-store' });
+    const res = await fetch(`api/pod/${route}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), cache: 'no-store', signal });
     if (res.status === 401 && route !== 'link') { this.server.linked = false; this.emit('link'); }
     let json = null;
     try { json = await res.json(); } catch {}

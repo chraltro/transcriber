@@ -207,6 +207,48 @@ async function run(name, options) {
     check(a.t >= 119 && a.t < 126, `it picks up where it stopped (${a.t.toFixed(1)} s)`);
     await page.click('#pb-play');
 
+    /* ---------- searching every transcript ---------- */
+    // (The world's one transcript says "It took ten years of committees to agree on twenty feet
+    // and forty feet" at 2:20, "a steel box" at 0:12 and "the quay" in the sentence after.)
+    await page.click(mobile ? '#tabbar [data-nav=listen]' : '#nav [data-nav=listen]');
+    await page.waitForSelector('#home-search:not(.hidden) .search-entry');
+    if (mobile) await page.click('#home-search .search-entry');
+    else { await page.locator('body').click({ position: { x: 5, y: 300 } }); await page.keyboard.press('/'); }
+    await page.waitForSelector('#pod-search:not(.hidden) input[type=search]');
+    check(await page.evaluate(() => document.activeElement === document.querySelector('#pod-search input') && location.hash === '#/search'), `${mobile ? 'tapping the field at the top of Listen' : 'pressing /'} opens the search, ready to type`);
+    check(/Type a word or two/.test(await page.locator('#search-note').textContent()), 'before anything is typed it says what it does');
+    await page.keyboard.type('Committees "twenty feet"');
+    await page.waitForSelector('#search-results .hit');
+    const found = await page.evaluate(() => ({
+      eps: [...document.querySelectorAll('#search-results .hit-ep-title')].map((x) => x.textContent),
+      time: document.querySelector('#search-results .hit-time').textContent,
+      bold: [...document.querySelectorAll('#search-results .hit-text b')].map((x) => x.textContent),
+    }));
+    check(found.eps.join() === 'Why every container is the same size' && found.time === '2:20' && found.bold.join() === 'committees,twenty feet', `words and a phrase find the sentence, its words set off (${JSON.stringify(found)})`);
+    await page.waitForTimeout(300);
+    await shot('5b-search');
+    await noSideScroll('search');
+    await page.fill('#pod-search input', 'steel quay');
+    await page.waitForFunction(() => document.querySelector('#search-results .hit-time')?.textContent === '0:12');
+    check((await page.locator('#search-results .hit-text b').allTextContents()).join() === 'steel,quay', 'two neighbouring sentences that together hold the words are one hit');
+    await page.fill('#pod-search input', 'submarine');
+    await page.waitForFunction(() => /No transcript has "submarine"/.test(document.querySelector('#search-note').textContent) && !document.querySelector('#search-results .hit'));
+    check(true, 'nothing found says so');
+    await page.fill('#pod-search input', 'committees');
+    await page.waitForFunction(() => document.querySelector('#search-results .hit-time')?.textContent === '2:20');
+    await page.click('#search-results .hit-main');
+    await playing(138.5);
+    a = await audio();
+    check(a.src.endsWith(`/library/${world.transcribed}.mp3`) && a.t >= 138 && a.t < 143 && (await page.locator('#pb-title').textContent()) === 'Why every container is the same size', `tapping a hit plays the server's copy from just before the sentence (${a.t.toFixed(1)} s)`);
+    check(await page.locator('#search-results .hit.now').count() === 1, 'and the line played from is marked');
+    await page.click('#pb-play');
+    await page.waitForFunction(() => document.querySelector('#audio').paused);
+    await page.click('#search-results .hit-read');
+    await page.waitForSelector('#transcript .seg.sought');
+    check(await page.evaluate(() => document.body.classList.contains('view-transcribe') && /ten years of committees/.test(document.querySelector('#transcript .seg.sought').textContent)), 'the other button opens the transcript at that sentence');
+    await page.click(mobile ? '#tabbar [data-nav=listen]' : '#nav [data-nav=listen]');
+    await page.waitForSelector('#pod-home:not(.hidden) #latest-list .ep');
+
     /* ---------- the queue ---------- */
     await row('A bakery in 1911').locator('.ep-more').click();
     await page.click('#row-menu button:has-text("Add to the queue")');

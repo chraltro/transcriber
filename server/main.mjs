@@ -23,6 +23,7 @@ import { verifyGithubToken } from './oidc.mjs';
 import { createEnhance } from './enhance.mjs';
 import { createPod } from './pod.mjs';
 import { pruneLibrary } from './prune.mjs';
+import { createSearch } from './search.mjs';
 import { ADS_VERSION } from '../lib/breaks.js';
 import { QUIET_VERSION } from '../lib/quiet.js';
 
@@ -186,6 +187,7 @@ async function work() {
         await writeJson(path.join(LIB, `${entry.id}.json`), entry);
         await writeFile(path.join(LIB, `${entry.id}.md`), markdownOf(entry));
         await addToIndex(entry);
+        await search.put(entry).catch(() => {});
         state.seen[ep.guid] = 'done';
         log(`done: ${entry.words} words, ${Math.round(entry.total / 60)} min of audio in ${Math.round(entry.took / 60)} min (${(entry.total / entry.took).toFixed(2)}x realtime)`);
       } catch (err) {
@@ -342,9 +344,14 @@ const enhance = createEnhance({ dataDir: DATA, authorized: (req) => authorized(r
 // The podcast side: followed shows, positions and queue in step across devices, feeds read here
 // (server/pod.mjs). SYNC_KEY fixes the library's key; without it the first device to ask sets it.
 // (POD_SEED=0: the built-in shows are not followed from the start, for tests.)
+// Search across the transcripts (server/search.mjs): their text is filed compactly in DATA/search,
+// and the newest SEARCH_MEMORY_MB of it (16 by default, some 200 hours) is kept in memory: the
+// server has 256 MB for everything.
+const search = createSearch({ dir: LIB, cacheDir: path.join(DATA, 'search'), entries: async () => (await readIndex()).entries, log, budget: Number(process.env.SEARCH_MEMORY_MB || 16) * 1e6 });
 const pod = createPod({ dataDir: DATA, log, findFeed, seeds: process.env.POD_SEED === '0' ? [] : SHOWS, key: process.env.SYNC_KEY || '', pollMinutes: POLL_MIN, allowPrivate: process.env.POD_ALLOW_PRIVATE === '1', freshSeconds: Number(process.env.POD_FRESH_SECONDS ?? 120),
   transcribed: async () => new Set((await readIndex()).entries.map((e) => e.id)),
   workflow: async (req) => (req.headers.authorization ? authorized(req, WORKFLOW) : false),
+  search: (q) => search.query(q),
   lookup: async (host) => (await dnsLookup(host, { all: true })).map((a) => a.address),
   // (Push services want to know who sends: the site, unless PUSH_SUBJECT names a mailto: address.)
   pushSubject: process.env.PUSH_SUBJECT || SITE_URL });
@@ -438,6 +445,7 @@ async function upload(req, res, name) {
         if (!Array.isArray(value.segments) || value.id !== name.slice(0, 16)) throw new Error('Not a transcript');
         await rename(tmp, file);
         await addToIndex(value);
+        await search.put(value).catch((err) => log(`search: ${err.message}`));
         log(`received ${value.show}: ${value.title} (${value.words} words)`);
         return done(200, 'ok');
       }

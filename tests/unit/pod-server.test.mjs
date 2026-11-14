@@ -313,3 +313,17 @@ test('the built-in shows are followed from the start and listed for the transcri
     assert.equal(JSON.parse(gunzipSync(raw.body)).title, 'Beta');
   } finally { await s.close(); }
 });
+
+test('the transcripts are searched for the key holder only', async () => {
+  const asked = [];
+  const s = await serve({ key: KEY, search: async (q) => { asked.push(q); return { q, episodes: [], more: 0 }; } });
+  try {
+    assert.equal((await s.call('GET', '/api/pod/search?q=box', null, {})).status, 401);
+    assert.equal((await s.call('GET', '/api/pod/search?q=box', null, { cookie: 'pod_key=' + KEY })).status, 401);
+    const got = await s.call('GET', `/api/pod/search?q=${encodeURIComponent('"steel box" ø')}`);
+    assert.deepEqual(got.json, { q: '"steel box" ø', episodes: [], more: 0 });
+    assert.deepEqual(asked, ['"steel box" ø']);
+  } finally { await s.close(); }
+  const none = await serve({ key: KEY });
+  try { assert.equal((await none.call('GET', '/api/pod/search?q=box')).status, 404, 'a server without transcripts has no search'); } finally { await none.close(); }
+});

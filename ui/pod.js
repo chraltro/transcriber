@@ -19,7 +19,8 @@ const pref = {
 export class Pod {
   // deps: store, player, playerUI, downloads, artInto, toast, setTop({ crumb, context, status }),
   // onView(view), searchShows(term), showFromLink(text), transcriptOf(ep) -> 'server'|'local'|null,
-  // openTranscript(ep), transcribe(ep), autosave (ui/autosave.js)
+  // openTranscript(ep), transcribe(ep), autosave (ui/autosave.js); and `finder`, the search
+  // across transcripts (ui/search.js), once app.js has made it.
   constructor(deps) {
     Object.assign(this, deps);
     this.eps = new Map(); // every episode on screen, by id
@@ -71,12 +72,12 @@ export class Pod {
       return this.route();
     }
     const [, name = '', arg = ''] = hash.match(/^#\/([\w-]*)\/?([\w-]*)/) || [];
-    const view = name === 'transcribe' ? 'transcribe' : name === 'show' && arg ? 'show' : ['queue', 'add', 'settings'].includes(name) ? name : 'home';
+    const view = name === 'transcribe' ? 'transcribe' : name === 'show' && arg ? 'show' : ['queue', 'add', 'settings', 'search'].includes(name) ? name : 'home';
     const listen = view !== 'transcribe';
     document.body.classList.toggle('view-listen', listen);
     document.body.classList.toggle('view-transcribe', !listen);
-    for (const v of ['home', 'show', 'queue', 'add', 'settings']) $(`pod-${v}`).classList.toggle('hidden', v !== view);
-    const nav = view === 'show' || view === 'add' || view === 'home' ? 'listen' : view;
+    for (const v of ['home', 'show', 'queue', 'add', 'settings', 'search']) $(`pod-${v}`).classList.toggle('hidden', v !== view);
+    const nav = view === 'show' || view === 'add' || view === 'home' || view === 'search' ? 'listen' : view;
     for (const a of document.querySelectorAll('[data-nav]')) {
       const on = a.dataset.nav === nav;
       a.classList.toggle('on', on);
@@ -92,6 +93,7 @@ export class Pod {
     if (view === 'queue') this.queue();
     if (view === 'add') this.add();
     if (view === 'settings') this.settings();
+    if (view === 'search') this.finder?.show();
     this.status();
     if (changed) window.scrollTo(0, 0);
   }
@@ -111,7 +113,7 @@ export class Pod {
             : !server.linked ? 'Not linked to your library'
             : server.error ? 'Not in step with the server'
               : this.store.syncedAt ? `In step ${new Date(this.store.syncedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}` : 'Linked';
-    const titles = { home: ['Listen', 'New episodes'], queue: ['Listen', 'Up next'], add: ['Listen', 'Find a show'], settings: ['Listen', 'Settings'], show: ['Listen / Show', this.showTitle || 'Show'] };
+    const titles = { home: ['Listen', 'New episodes'], queue: ['Listen', 'Up next'], add: ['Listen', 'Find a show'], settings: ['Listen', 'Settings'], show: ['Listen / Show', this.showTitle || 'Show'], search: ['Listen', 'Search transcripts'] };
     const [crumb, context] = titles[this.view] || titles.home;
     this.setTop({ crumb, context, status: text });
   }
@@ -263,6 +265,7 @@ export class Pod {
     const root = $('pod-home');
     if (!root.firstChild) {
       root.append(
+        h('div.hidden', { id: 'home-search' }),
         h('section.card.pod-card.hidden', { id: 'home-link' }),
         h('section.card.pod-card.hidden', { id: 'home-install' }),
         h('section.card.pod-card.hidden', { id: 'home-started', 'aria-labelledby': 'started-h' },
@@ -282,6 +285,7 @@ export class Pod {
               h('button.icon-btn', { type: 'button', id: 'latest-refresh', 'aria-label': 'Check for new episodes', onclick: () => this.loadInbox(true) }, icon('resume')))),
           h('div', { id: 'latest-list' })));
     }
+    this.finder?.entry();
     this.drawLink();
     this.drawInstall();
     this.drawStarted();

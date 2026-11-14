@@ -21,6 +21,7 @@
 //   POST /api/pod/push { subscription }  a device asks to be told of new episodes (server/push.mjs)
 //   DELETE /api/pod/push?endpoint=    and no longer
 //   POST /api/pod/push/test { endpoint }  a notification to that device now
+//   GET  /api/pod/search?q=           where the library's transcripts say something (server/search.mjs)
 //
 // Everything but status, claim and link needs the key in an Authorization header (transcribe
 // also answers the workflow, which proves itself with GitHub's token). The cookie that claim and
@@ -87,7 +88,8 @@ async function readCapped(res, max, what = 'Feed') {
 // workflow(req): is this request from the transcribing workflow (server/oidc.mjs)?
 // lookup(host): the addresses a name stands for, so one that points into this network is refused.
 // pushSubject: who sends notifications, as push services are told (the site's address).
-export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findFeed = null, seeds = [], key: fixedKey = '', pollMinutes = 30, now = () => Date.now(), allowPrivate = false, freshSeconds = 120, transcribed = async () => new Set(), workflow = async () => false, lookup = null, pushSubject = '' }) {
+// search(q): the transcripts' answer to a query (server/search.mjs), where the server has them.
+export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findFeed = null, seeds = [], key: fixedKey = '', pollMinutes = 30, now = () => Date.now(), allowPrivate = false, freshSeconds = 120, transcribed = async () => new Set(), workflow = async () => false, lookup = null, pushSubject = '', search = null }) {
   const DIR = path.join(dataDir, 'pod');
   const FEEDS = path.join(DIR, 'feeds');
   const STATE = path.join(DIR, 'state.json');
@@ -500,6 +502,13 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
         return send(req, res, 200, { ...out, total: feed.episodes.length, episodes: feed.episodes.slice(0, 60) });
       } catch (err) {
         return fail(req, res, 502, `Couldn't read that feed (${err.message})`);
+      }
+    }
+
+    if (route === 'search' && method === 'GET' && search) {
+      try { return send(req, res, 200, await search(String(url.searchParams.get('q') || ''))); } catch (err) {
+        log(`pod: search failed: ${err.message}`);
+        return fail(req, res, 500, 'The search failed on the server');
       }
     }
 

@@ -25,6 +25,7 @@ import { Autosave } from './ui/autosave.js';
 import { Player } from './ui/player.js';
 import { PlayerUI } from './ui/playerui.js';
 import { Pod } from './ui/pod.js';
+import { TranscriptSearch } from './ui/search.js';
 import { adBreaks } from './lib/breaks.js';
 import { subId } from './lib/podstate.js';
 import { summaryOf } from './lib/feed.js';
@@ -2151,9 +2152,16 @@ const localEntryOf = (ep) => localIndex.get(ep.id) || (ep.url ? localIndex.get(`
 const transcriptOf = (ep) => (podcasts.transcripts.has(ep.id) ? 'server' : localEntryOf(ep) ? 'local' : null);
 
 // The server's transcript of an episode (made from its own copy of the audio, ads marked), else
-// the one made in this browser.
-async function openEpisodeTranscript(ep) {
-  if (sessionId() === ep.id && state.segments.length) { pod.go('#/transcribe'); return; }
+// the one made in this browser. at: a time to show it at (from a search across transcripts).
+async function openEpisodeTranscript(ep, { at = null } = {}) {
+  const show = () => {
+    if (at == null) return;
+    scrollToTime(at);
+    const span = state.segEls[segmentAt(at)];
+    span?.classList.add('sought');
+    setTimeout(() => span?.classList.remove('sought'), 2600);
+  };
+  if (sessionId() === ep.id && state.segments.length) { pod.go('#/transcribe'); setTimeout(show, 100); return; }
   if (state.busy) { toast('A transcript is being made. This one opens when it is done or cancelled.'); pod.go('#/transcribe'); return; }
   let entry = null;
   if (podcasts.transcripts.has(ep.id)) {
@@ -2167,6 +2175,7 @@ async function openEpisodeTranscript(ep) {
   if (!entry) { toast(navigator.onLine === false ? 'The transcript is on the server, and there is no connection.' : "Couldn't open this transcript. Try again in a moment."); return; }
   pod.go('#/transcribe');
   await openEntry(entry, { episode: ep });
+  show();
 }
 
 // An episode from the podcast screens goes to the speech model like a pasted link would, in
@@ -2251,6 +2260,9 @@ const pod = new Pod({
     updateMap(true);
   },
 });
+
+// Search across every transcript in the library (ui/search.js), from the Listen screen.
+pod.finder = new TranscriptSearch({ pod, store: podcasts, player, artInto, toast, openTranscript: openEpisodeTranscript });
 
 /* ---------- session, mini player, layout ---------- */
 
