@@ -54,7 +54,12 @@
         var n = 0;
         var name = function (url) { return url.slice(new URL('.', location.href).href.length); };
         var next = function () {
-          if (!queue.length || n++ > 150) return;
+          if (!queue.length) {
+            // Nothing is missing: that is worth knowing too, when someone reads this out.
+            blocked = 'All ' + n + ' files of its script arrive when asked for one at a time, and still it did not start: ' + errors[0] + '.';
+            return show();
+          }
+          if (n++ > 150) return;
           var url = queue.shift();
           fetch(url, { cache: 'no-store' }).then(function (res) {
             if (!res.ok) { blocked = name(url) + ' did not load: the server answered ' + res.status + '.'; return show(); }
