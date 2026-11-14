@@ -26,6 +26,7 @@ import { pruneLibrary } from './prune.mjs';
 import { createSearch } from './search.mjs';
 import { ADS_VERSION } from '../lib/breaks.js';
 import { QUIET_VERSION } from '../lib/quiet.js';
+import { fileShape, makeShapes, shapeName } from './shapes.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = process.env.DATA_DIR || '/data';
@@ -81,11 +82,16 @@ const quietVersion = async (id) => Number((await readJson(quietFile(id), null))?
 const validQuiet = (value) => Number.isInteger(value?.v) && Array.isArray(value.quiet) && value.quiet.length <= 50000
   && value.quiet.every((r) => Array.isArray(r) && r.length === 2 && Number.isFinite(r[0]) && Number.isFinite(r[1]) && r[0] >= 0 && r[1] > r[0]);
 
+// Its shape (server/shapes.mjs: loudness and who speaks when, for the player to draw) is filed
+// beside it the same way, and on the same terms: while the audio it was made from is kept.
+const shapeVersion = async (id) => Number((await readJson(path.join(LIB, shapeName(id)), null))?.v) || undefined;
+
 function addToIndex(entry) {
   // Where the ads are goes into the index, so the player can skip them without the transcript.
   const meta = metaOf({ ...entry, ads: adsOf(entry), adsV: ADS_VERSION });
   return withIndex(async () => {
     meta.quiet = entry.audio ? await quietVersion(entry.id) : undefined;
+    meta.shape = entry.audio ? await shapeVersion(entry.id) : undefined;
     const index = await readIndex();
     index.entries = [meta, ...index.entries.filter((e) => e.id !== entry.id)].sort((a, b) => b.createdAt - a.createdAt);
     await writeJson(path.join(LIB, 'index.json'), index);
@@ -185,6 +191,7 @@ async function work() {
         await writeJson(quietFile(entry.id), { v: QUIET_VERSION, quiet: entry.quiet || [] });
         delete entry.quiet;
         await writeJson(path.join(LIB, `${entry.id}.json`), entry);
+        await fileShape({ lib: LIB, entry, writeJson }).catch((err) => log(`shape: ${err.message}`));
         await writeFile(path.join(LIB, `${entry.id}.md`), markdownOf(entry));
         await addToIndex(entry);
         await search.put(entry).catch(() => {});
@@ -380,7 +387,7 @@ async function route(req, res) {
   if (p.startsWith('/api/library/')) { await upload(req, res, p.slice('/api/library/'.length)); return; }
   if (p.startsWith('/library/')) {
     const name = p.slice('/library/'.length);
-    if (!/^[\w-]+\.(json|md|mp3|m4a)$|^[0-9a-f]{16}\.quiet\.json$/.test(name)) { res.writeHead(404); res.end(); return; }
+    if (!/^[\w-]+\.(json|md|mp3|m4a)$|^[0-9a-f]{16}\.(quiet|shape)\.json$/.test(name)) { res.writeHead(404); res.end(); return; }
     if (name === 'index.json' && !(await stat(path.join(LIB, name)).catch(() => null))) {
       res.writeHead(200, { 'content-type': TYPES['.json'] });
       res.end('{"entries":[]}');
@@ -444,6 +451,7 @@ async function upload(req, res, name) {
       if (name !== 'status.json') {
         if (!Array.isArray(value.segments) || value.id !== name.slice(0, 16)) throw new Error('Not a transcript');
         await rename(tmp, file);
+        await fileShape({ lib: LIB, entry: value, writeJson }).catch((err) => log(`shape: ${err.message}`));
         await addToIndex(value);
         await search.put(value).catch((err) => log(`search: ${err.message}`));
         log(`received ${value.show}: ${value.title} (${value.words} words)`);
@@ -468,7 +476,11 @@ for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => pod.flush().catch
 state = { ...state, ...(await readJson(STATE_FILE, {})) };
 current = null;
 server.listen(PORT, () => log(`serving on :${PORT}; data in ${DATA}; model ${MODEL_KEY}; checking feeds every ${POLL_MIN} min`));
-markAds().catch((err) => log(`ads: ${err.message}`));
+// (One after the other: each reads the transcripts one at a time, and the server has 256 MB.)
+markAds().catch((err) => log(`ads: ${err.message}`))
+  .then(() => makeShapes({ lib: LIB, readJson, writeJson, withIndex, log }))
+  .then((n) => { if (n) log(`shapes: made for ${n} transcript${n === 1 ? '' : 's'}`); })
+  .catch((err) => log(`shapes: ${err.message}`));
 // A minute after start (out of the way of the start itself), then twice a day.
 setTimeout(pruneAudio, 60000).unref();
 setInterval(pruneAudio, 12 * 3600000).unref();

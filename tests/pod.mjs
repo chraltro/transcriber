@@ -141,7 +141,8 @@ async function run(name, options) {
     let a = await audio();
     check(a.src.endsWith(`/library/${world.transcribed}.mp3`), `a transcribed episode plays the copy its transcript was made from (${a.src.split('/').slice(-2).join('/')})`);
     check(await page.locator('#playbar').isVisible(), 'the player is along the bottom');
-    check((await page.locator('#playbar .scrub-marks i').count()) === (mobile ? 1 : 1), 'the ad is marked on the position slider');
+    await page.waitForSelector('#playbar .score[data-breaks="1"]', { state: 'attached', timeout: 5000 }).catch(() => {});
+    check((await page.locator('#playbar .score').getAttribute('data-breaks')) === '1', 'the ad is marked on the position control');
     await page.evaluate(() => { document.querySelector('#audio').currentTime = 38; });
     await page.waitForFunction(() => document.querySelector('#audio').currentTime > 76, null, { timeout: 15000 });
     a = await audio();
@@ -189,6 +190,109 @@ async function run(name, options) {
     await noSideScroll('pauses');
     await page.keyboard.press('Escape');
     await page.waitForSelector('.np', { state: 'detached' });
+
+    /* ---------- the score: the episode drawn as the position control ---------- */
+    {
+      const score = () => page.evaluate(() => {
+        const s = document.querySelector('.np .score');
+        const slider = s.querySelector('[role=slider]');
+        return { shows: s.dataset.shows, boxes: s.dataset.breaks, ticks: s.dataset.ticks, text: slider.getAttribute('aria-valuetext'), now: slider.getAttribute('aria-valuenow'), max: slider.getAttribute('aria-valuemax'),
+          who: document.querySelector('.np-now-who').textContent, hue: document.querySelector('.np-now-sw').dataset.hue, line: document.querySelector('.np-now-text').innerText.trim(),
+          open: s.classList.contains('scrubbing') && getComputedStyle(s.querySelector('.score-loupe')).visibility === 'visible',
+          name: s.querySelector('.score-loupe-name').textContent, time: s.querySelector('.score-loupe-time').textContent,
+          edges: [...s.querySelectorAll('.score-loupe-foot span')].map((x) => x.textContent).join(' to '), clock: document.querySelector('.np-cur').textContent };
+      });
+      // A finger at `t` seconds into the strip (and moved to `to`, if given), held there.
+      const press = async (t) => {
+        const box = await page.locator('.np .score-cv').boundingBox();
+        const d = (await audio()).d;
+        const at = (s) => [box.x + (box.width * s) / d, box.y + box.height / 2];
+        await page.mouse.move(...at(t));
+        await page.mouse.down();
+        return { to: (s) => page.mouse.move(...at(s), { steps: 4 }), lift: () => page.mouse.up() };
+      };
+      await page.click('#pb-open');
+      await page.waitForSelector('.np');
+      await page.click('.np-play');
+      await page.waitForFunction(() => document.querySelector('#audio').paused);
+      await page.evaluate(() => { document.querySelector('#audio').currentTime = 100; });
+      await page.waitForSelector('.np .score[data-shows="voices"]', { timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(700); // (drawn in)
+      let s = await score();
+      check(s.shows === 'voices' && s.boxes === '1' && s.ticks === '0', `the transcribed episode is drawn with its voices, its loudness and its sponsor read (${s.shows}, ${s.boxes} box)`);
+      check(s.who && s.hue === '0' && s.line === s.who, `the line under it says who is speaking, in the colour of the voice heard most (${s.line}, hue ${s.hue})`);
+      check(s.now === '100' && s.max === '300' && s.text === '1:40 of 5:00', `it is a slider to assistive technology (${s.now} of ${s.max}, "${s.text}")`);
+      await shot('6c-score');
+      // A finger on it: the magnifier opens at that time, and the audio stays until it lifts.
+      const finger = await press(200);
+      await page.waitForTimeout(250);
+      s = await score();
+      check(s.open && s.time === '3:20' && s.edges === '1:50 to 4:50' && s.name === s.who && s.clock === '3:20', `a finger on the strip opens the magnifier there (${s.time}, ${s.edges}, "${s.name}")`);
+      check(Math.abs((await audio()).t - 100) < 0.5, 'and the audio stays where it was while the finger is down');
+      await shot('6d-magnifier');
+      await finger.to(230);
+      s = await score();
+      check(s.time === '3:50' && s.clock === '3:50', `the magnifier follows the finger (${s.time})`);
+      await finger.lift();
+      await page.waitForTimeout(300);
+      s = await score();
+      const t = (await audio()).t;
+      check(!s.open && t > 229.5 && t < 230.5, `lifting the finger moves the audio there and closes the magnifier (${t.toFixed(1)} s)`);
+      // The keys: back and forward by the player's amounts, Home to the start.
+      await page.focus('.np .score-strip');
+      await page.keyboard.press('ArrowLeft');
+      await page.waitForTimeout(200);
+      const back = (await audio()).t;
+      await page.keyboard.press('Home');
+      await page.waitForTimeout(200);
+      check(back > 214.5 && back < 215.5 && (await audio()).t < 0.5, `the arrow keys move by the back and forward amounts, Home goes to the start (${back.toFixed(1)} s)`);
+      await page.evaluate(() => { document.querySelector('#audio').currentTime = 100; });
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.np', { state: 'detached' });
+      await noSideScroll('score');
+
+      // Streamed, and transcribed by nobody: the plain strip, with its chapters, and the magnifier
+      // says which chapter is under the finger.
+      await row('What the tide tables leave out').locator('.ep-play').click();
+      await playing(0.3);
+      await page.click('#pb-play');
+      await page.waitForFunction(() => document.querySelector('#audio').paused);
+      await page.click('#pb-open');
+      await page.waitForSelector('.np .score[data-ticks="3"]', { timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(700);
+      s = await score();
+      check(s.shows === 'none' && s.boxes === '0' && s.ticks === '3' && !s.who, `a streamed episode nobody transcribed shows the plain strip, with its chapters (${s.shows}, ${s.ticks} ticks)`);
+      const chapterFinger = await press(160);
+      await page.waitForTimeout(250);
+      s = await score();
+      check(s.open && s.name === 'Storm surges' && s.time === '2:40' && s.line === 'Storm surges', `the magnifier names the chapter under the finger (${s.name}, ${s.time})`);
+      await shot('6e-score-chapters');
+      // (Back to the start before lifting: this episode is not to look started.)
+      await chapterFinger.to(0);
+      await chapterFinger.lift();
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.np', { state: 'detached' });
+
+      // Saved on the device and transcribed by nobody: its loudness, once listened through.
+      await row('Cranes, and the people under them').locator('.ep-more').click();
+      await page.click('#row-menu button:has-text("Save for offline")');
+      await page.waitForSelector('#latest-list .ep:has-text("Cranes, and the people under them") .tag:has-text("Saved")', { timeout: 30000 });
+      await row('Cranes, and the people under them').locator('.ep-play').click();
+      await playing(0.3);
+      await page.click('#pb-play');
+      await page.click('#pb-open');
+      await page.waitForSelector('.np .score[data-shows="loudness"]', { timeout: 30000 }).catch(() => {});
+      await page.waitForTimeout(700);
+      s = await score();
+      check(s.shows === 'loudness' && !s.who, `a saved file nobody transcribed shows its loudness once it has been listened through (${s.shows})`);
+      await shot('6f-score-loudness');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.np', { state: 'detached' });
+
+      // Back to the transcribed one, playing, for what follows.
+      await row('Why every container').locator('.ep-play').click();
+      await playing(1);
+    }
 
     /* ---------- where it was left ---------- */
     await page.evaluate(() => { document.querySelector('#audio').currentTime = 120; });
@@ -306,15 +410,15 @@ async function run(name, options) {
       check((await chapterRows()).filter((r) => r.endsWith('*')).join() === '2:30 Storm surges *', `and the chapter being played is marked (${(await chapterRows()).join(' | ')})`);
       await page.keyboard.press('Escape');
       await page.waitForSelector('.ep-sheet', { state: 'detached' });
-      const bar = await page.evaluate(() => ({ ticks: [...document.querySelectorAll('#playbar .scrub-marks .scrub-chapter')].map((t) => Math.round(parseFloat(t.style.left))), bands: document.querySelectorAll('#playbar .scrub-marks i').length }));
-      check(bar.ticks.join() === '25,50,75' && bar.bands === 0, `the chapters are ticks on the position slider, not bands (${bar.ticks.join()} %, ${bar.bands} bands)`);
+      const bar = await page.evaluate(() => ({ ticks: document.querySelector('#playbar .score').dataset.ticks, bands: document.querySelector('#playbar .score').dataset.breaks }));
+      check(bar.ticks === '3' && bar.bands === '0', `the chapters are ticks on the position control, not sponsor boxes (${bar.ticks} ticks, ${bar.bands} boxes)`);
 
       // The player opened up: the chapter under the title, and the one before and after.
       await page.click('#pb-open');
       await page.waitForSelector('.np .np-chapter:not(.hidden)');
       await page.click('.np-play');
       await page.waitForFunction(() => document.querySelector('#audio').paused);
-      const np = () => page.evaluate(() => ({ title: document.querySelector('.np-chapter-title').textContent, count: document.querySelector('.np-chapter-count').textContent, t: document.querySelector('#audio').currentTime, ticks: document.querySelectorAll('.np-scrub .scrub-chapter').length }));
+      const np = () => page.evaluate(() => ({ title: document.querySelector('.np-chapter-title').textContent, count: document.querySelector('.np-chapter-count').textContent, t: document.querySelector('#audio').currentTime, ticks: Number(document.querySelector('.np .score').dataset.ticks) }));
       let now = await np();
       check(now.title === 'Storm surges' && now.count === 'Chapter 3 of 4' && now.ticks === 3, `the player shows the chapter being played, and ticks for the chapters (${JSON.stringify(now)})`);
       await page.waitForTimeout(350);
@@ -349,7 +453,7 @@ async function run(name, options) {
       check(a.t >= 80 && a.t < 90, `and play from there (${a.t.toFixed(1)} s)`);
       await page.keyboard.press('Escape');
       await page.waitForSelector('.ep-sheet', { state: 'detached' });
-      check((await page.locator('#playbar .scrub-marks .scrub-chapter').count()) === 2, 'with their ticks on the slider');
+      check((await page.locator('#playbar .score').getAttribute('data-ticks')) === '2', 'with their ticks on the position control');
       await page.click('#pb-play');
       await page.waitForFunction(() => document.querySelector('#audio').paused);
 

@@ -1415,13 +1415,22 @@ a.sheet-show:hover { color: var(--text); }
 .np-art { --size: 232px; width: min(232px, 62vw); justify-self: center; margin: 2px 0 4px; }
 .np-show { margin: 0; text-align: center; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .np-title { text-align: center; font-size: 1.22rem; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
-.np-chapter { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; gap: 4px; margin: -6px 0 -2px; }
-.np-chapter .icon-btn { width: 44px; height: 44px; }
+/* the score, the line under it (who is speaking, which chapter, and the way to the one before
+   and after) and the clock: one block, spaced as the mock-up it was picked from */
+.np-score { position: relative; display: grid; margin-top: 32px; }
+.np-strip { --score-bg: var(--panel); }
+.np-now { display: flex; align-items: center; gap: 8px; height: 18px; margin-top: 12px; }
+.np-now-text { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; line-height: 18px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+.np-now-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.np-now-who { font-weight: 500; color: var(--text); }
+.np-now-sw { flex: none; width: 3px; height: 12px; border-radius: 1px; background: var(--spk, var(--spk-0)); }
+.np-now-sw[data-hue="other"] { --spk: var(--faint); }
+.np-now-sw.hatch { width: 7px; border-radius: 0; background: repeating-linear-gradient(-45deg, var(--faint) 0 1px, transparent 1px 3px); box-shadow: inset 0 0 0 1px var(--faint); }
+.np-chapter { flex: none; display: flex; margin-right: -10px; }
+.np-chapter .icon-btn { width: 40px; height: 44px; margin: -13px 0; color: var(--muted); }
+.np-chapter .icon-btn .icon { width: 18px; height: 18px; }
 .np-chapter .icon-btn:disabled { opacity: 0.3; background: none; }
-.np-chapter p { margin: 0; min-width: 0; display: grid; gap: 2px; text-align: center; }
-.np-chapter-count { font: 600 10.5px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
-.np-chapter-title { font-size: 14px; line-height: 1.3; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.np-clock { display: flex; justify-content: space-between; margin-top: -10px; font: 500 12px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.np-clock { display: flex; justify-content: space-between; margin-top: 8px; font: 500 12px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
 .np-transport { display: flex; align-items: center; justify-content: center; gap: 24px; margin: 2px 0 4px; }
 .np-transport .play { width: 64px; height: 64px; }
 .np-transport .play .icon { width: 26px; height: 26px; }
@@ -1451,13 +1460,36 @@ a.sheet-show:hover { color: var(--text); }
 .np-actions { display: grid; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
 .np-actions .btn { justify-content: flex-start; }
 
-/* ---------- the position slider, with the ads and chapters on its track ---------- */
+/* ---------- the score: the position control, drawn as the whole episode (ui/score.js) ----------
+   Bars, colours, the sponsor read, the chapter ticks and the position are drawn on the canvas;
+   the magnifier opens above while a finger is on it. The whole strip takes the finger, so the
+   page and the sheet's pull-down leave it alone (touch-action, and ui/dom.js). */
 
-.scrub { position: relative; height: 26px; }
-.scrub input { position: relative; z-index: 1; display: block; }
-.scrub-marks { position: absolute; z-index: 2; left: 7px; right: 7px; top: 50%; height: 4px; margin-top: -2px; pointer-events: none; }
-.scrub-marks i { position: absolute; top: 0; bottom: 0; border-radius: 1px; background: var(--spk-1); }
-.scrub-chapter { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text); opacity: 0.6; }
+.score { position: relative; --score-bg: var(--panel); }
+.score-strip { position: relative; height: 80px; margin: 0 -4px; padding: 0 4px; touch-action: none; cursor: pointer; outline: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+.score-strip:focus-visible { box-shadow: 0 0 0 2px var(--accent); border-radius: var(--r-sm); }
+.score-strip[aria-disabled="true"] { cursor: default; }
+.score-cv { display: block; width: 100%; height: 100%; }
+.score-loupe {
+  position: absolute; z-index: 3; left: 0; right: 0; bottom: calc(100% + 10px);
+  padding: 10px 12px 8px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--panel-2);
+  opacity: 0; transform: translateY(6px); visibility: hidden; pointer-events: none;
+  transition: opacity 0.16s var(--ease), transform 0.16s var(--ease), visibility 0s 0.16s;
+}
+.score.scrubbing .score-loupe { opacity: 1; transform: none; visibility: visible; transition: opacity 0.16s var(--ease), transform 0.16s var(--ease), visibility 0s; }
+.score-loupe-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.score-loupe-name { min-width: 0; font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.score-loupe-time { font: 600 15px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text); }
+.score-loupe-cv { display: block; width: 100%; height: 64px; }
+.score-loupe-foot { display: flex; justify-content: space-between; margin-top: 5px; font: 500 10.5px var(--font-mono); color: var(--faint); font-variant-numeric: tabular-nums; }
+/* in the player bar: lower, on the bar's own colour, its magnifier clear of the bar */
+.pb-score { --score-bg: var(--rail); }
+.pb-score .score-strip { height: 44px; }
+.pb-score .score-loupe { bottom: calc(100% + 18px); }
+.pb-score .score-loupe-cv { height: 48px; }
+@media (prefers-reduced-motion: reduce) {
+  .score-loupe, .score.scrubbing .score-loupe { transition: none; transform: none; }
+}
 
 /* ---------- the player, along the bottom ---------- */
 

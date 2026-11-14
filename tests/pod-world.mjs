@@ -1,7 +1,7 @@
 // A small stand-in for the podcast world, for tests/pod.mjs: a host with three shows' feeds,
 // their cover art and audio (with byte ranges, one show's without permission for web pages to
 // download it), and the app's own server (server/main.mjs) started on a fresh data folder that
-// already holds the transcript of one episode, ads marked.
+// already holds the transcript of one episode, ads marked (its shape the server makes at start).
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { QuietFinder, QUIET_VERSION } from '../lib/quiet.js';
+import { secondLevels, encodeLevels } from '../lib/levels.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const idOf = (guid) => createHash('sha1').update(guid).digest('hex').slice(0, 16);
@@ -153,16 +154,18 @@ export async function startWorld({ audioSeconds = 300 } = {}) {
   const show = SHOWS[0];
   const id = episodeIdOf(show, 0);
   const segments = transcript(show, audioSeconds);
+  // How loud each second of its audio is, as the transcribing measures it (lib/levels.js).
+  const samples = Float32Array.from(new Int16Array(audio.buffer, audio.byteOffset + 44, (audio.length - 44) / 2), (v) => v / 32768);
   const entry = {
     id, createdAt: now - 0.2 * DAY, transcribedAt: now - 0.1 * DAY, title: show.episodes[0][0], show: show.title, art: `${worldBase}/art/${show.slug}.svg`,
     lang: 'english', model: 'turbo', total: audioSeconds, words: segments.reduce((n, s) => n + s.text.split(' ').length, 0), segments,
-    levels: '', key: `server:${id}`, source: { url: `${worldBase}/audio/${show.slug}/${show.episodes.length}.wav` }, notes: '', voices: [], speakerNames: {}, audio: `library/${id}.mp3`,
+    levels: encodeLevels(secondLevels(samples, 8000)), key: `server:${id}`, source: { url: `${worldBase}/audio/${show.slug}/${show.episodes.length}.wav` }, notes: '', voices: [], speakerNames: {}, audio: `library/${id}.mp3`,
   };
   await writeFile(path.join(lib, `${id}.json`), JSON.stringify(entry));
   await writeFile(path.join(lib, `${id}.mp3`), audio); // (a WAV under the name the server keeps audio by)
   // ...and where that audio goes quiet, as the transcribing leaves it beside the transcript.
   const finder = new QuietFinder(8000);
-  finder.push(Float32Array.from(new Int16Array(audio.buffer, audio.byteOffset + 44, (audio.length - 44) / 2), (v) => v / 32768));
+  finder.push(samples);
   await writeFile(path.join(lib, `${id}.quiet.json`), JSON.stringify({ v: QUIET_VERSION, quiet: finder.finish() }));
   const { metaOf } = await import('../server/shows.mjs');
   await writeFile(path.join(lib, 'index.json'), JSON.stringify({ entries: [metaOf({ ...entry, quiet: QUIET_VERSION })] }));

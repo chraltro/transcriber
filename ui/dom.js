@@ -77,7 +77,7 @@ function dragToClose(p) {
   p.addEventListener('touchstart', (e) => {
     if (e.touches.length !== 1 || !matchMedia('(max-width: 640px)').matches) return;
     const fromTop = e.touches[0].clientY - p.getBoundingClientRect().top < 120;
-    y0 = p.scrollTop <= 0 && (fromTop || !e.target.closest('input, .notes, .mini-seg')) ? e.touches[0].clientY : null;
+    y0 = p.scrollTop <= 0 && !e.target.closest('.score') && (fromTop || !e.target.closest('input, .notes, .mini-seg')) ? e.touches[0].clientY : null;
     dy = 0;
     t0 = performance.now();
   }, { passive: true });

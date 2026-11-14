@@ -2,13 +2,15 @@
 // followed show, a link that was pasted, or the audio under an open transcript. It remembers
 // where each episode was left, moves on through the queue, answers the lock screen's and the
 // headphones' buttons (Media Session), jumps over the ads a transcript has marked, and knows the
-// episode's chapters (lib/chapters.js), which are only ever jumped to by the listener.
+// episode's chapters (lib/chapters.js), which are only ever jumped to by the listener, and the
+// episode's shape (lib/shape.js: its loudness and who speaks when), which the player draws.
 // What it decides (where to resume, which ad to skip) is in lib/playback.js.
 import { resumeAt, rewindFor, finished, skipAt } from '../lib/playback.js';
 import { breakAt } from '../lib/breaks.js';
 import { cutsFor, cutIndex } from '../lib/quiet.js';
 import { directUrl } from '../lib/direct.js';
 import { chapterAt } from '../lib/chapters.js';
+import { readShape, hasLoudness } from '../lib/shape.js';
 
 const IS_IOS = typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 const NOW = 'pod-now';
@@ -32,10 +34,16 @@ export class Player extends EventTarget {
   // store: ui/podstore.js; downloads: ui/downloads.js; cachedAudio(key) -> the copy an open
   // transcript was made from, if it is still kept; adsFor(item, source) -> [[start, end], ...]
   // for that copy of the audio, or null; quietFor(item, source, progress) -> where that copy
-  // goes quiet (lib/quiet.js), or null when it can't be read.
-  constructor({ audio, store, downloads, cachedAudio, adsFor, quietFor = async () => null }) {
+  // goes quiet (lib/quiet.js), or null when it can't be read; shapeFor(item, source, { listen })
+  // -> that copy's shape (lib/shape.js, the stored form), or null (listen: a file here may be
+  // listened through for it).
+  constructor({ audio, store, downloads, cachedAudio, adsFor, quietFor = async () => null, shapeFor = async () => null }) {
     super();
-    Object.assign(this, { audio, store, downloads, cachedAudio, adsFor, quietFor });
+    Object.assign(this, { audio, store, downloads, cachedAudio, adsFor, quietFor, shapeFor });
+    this.shape = null; // the shape of the copy in the player, ready to draw (lib/shape.js readShape)
+    this.shapeReady = false; // whether it has been looked for (null then means there is none)
+    this.shapeSeq = 0;
+    this.heard = false; // whether a file here was listened through for it
     this.quiet = null; // where the audio in the player goes quiet
     this.cuts = []; // what of that is jumped over, at the listener's limit
     this.finding = null; // how far the search for quiet has got (0 to 1), while it runs
@@ -197,6 +205,7 @@ export class Player extends EventTarget {
     this.metadata();
     this.loadAds();
     this.loadQuiet();
+    this.loadShape();
     this.prepare();
     // Paused while it was being found: it is in the player, and stays quiet.
     if (!this.wantPlay) { this.busy = false; this.state(); return false; }
@@ -212,6 +221,10 @@ export class Player extends EventTarget {
     this.lastSkip = null;
     this.quiet = null;
     this.cuts = [];
+    this.shape = null;
+    this.shapeReady = false;
+    this.shapeSeq++;
+    this.heard = false;
     this.finding = null;
     this.sought = false;
     this.trimmed = 0;
@@ -241,6 +254,9 @@ export class Player extends EventTarget {
     this.at = progress && !progress.done ? progress.p : 0;
     this.known = progress?.d || item.duration || 0;
     this.loadChapters();
+    // Not loaded until it plays, but the copy it will play may already be known: its shape is.
+    const next = this.downloads.has(item.id) || item.key ? null : this.remote(item);
+    if (next?.synced) this.loadShape({ source: next }); else this.shapeReady = true;
     this.emit('item');
     this.emit('time');
   }
@@ -295,6 +311,8 @@ export class Player extends EventTarget {
     this.breaks = null;
     this.quiet = null;
     this.cuts = [];
+    this.shape = null;
+    this.shapeSeq++;
     this.setChapters(null, []);
     this.fine();
     this.busy = false;
@@ -516,6 +534,33 @@ export class Player extends EventTarget {
     this.emit('time');
   }
 
+  /* ---------- the episode's shape ---------- */
+
+  // The shape of the copy being played (or about to be): from the server, from a transcript made
+  // here, or kept from listening through a file here. listen: such a file nobody has listened
+  // through yet is listened through now (the same single pass that finds its pauses).
+  async loadShape({ source = this.source, listen = false } = {}) {
+    const { item } = this;
+    if (!item || !source) { this.shapeReady = true; this.emit('shape'); return; }
+    const seq = this.shapeSeq;
+    let shape = null;
+    try { shape = await this.shapeFor(item, source, { listen }); } catch {}
+    if (seq !== this.shapeSeq || this.item !== item || (this.source && this.source !== source)) return;
+    const read = readShape(shape);
+    if (!read && this.shape && this.shapeReady) return;
+    this.shape = read;
+    this.shapeReady = true;
+    this.emit('shape');
+  }
+
+  // The player was opened up on a file here that nobody transcribed: it is listened through
+  // once, for its loudness (and its pauses, kept for when they are shortened).
+  wantShape() {
+    if (!this.source?.own || hasLoudness(this.shape) || this.heard) return;
+    this.heard = true;
+    this.loadShape({ listen: true });
+  }
+
   /* ---------- pauses, shortened ---------- */
 
   // Finds where this copy of the audio goes quiet, when the listener wants pauses shortened.
@@ -534,6 +579,8 @@ export class Player extends EventTarget {
     this.finding = null;
     this.quiet = quiet || null;
     this.recut();
+    // (The same listening found how loud each second is: a file nobody transcribed has its shape.)
+    if (source.own && !this.shape) this.loadShape();
   }
 
   // The limit changed (or was switched on or off).

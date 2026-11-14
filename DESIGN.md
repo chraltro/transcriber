@@ -32,7 +32,7 @@ Colours, type and radius are the tokens in `style.css` (`:root`), unchanged.
 | Strip height | 64 px of bars above a 1 px baseline | the mock-up |
 | Bar height | loudness, rescaled from the episode's 3rd percentile to its maximum (speech averaged over half a minute is nearly flat otherwise) | the mock-up |
 | Played / not yet played | full strength / mixed 70% toward the panel behind (a mix, not opacity, so yellow does not turn olive) | the mock-up, and its builder's note |
-| Voice colours | `--spk-0`, `--spk-1`, ... in order of who speaks most; passing voices share `--faint` | the transcript side already does this |
+| Voice colours | the colour the transcript side gives that speaker (`--spk-N`, N its number modulo 6), so a voice is one colour everywhere; passing voices share `--faint` | the transcript side (`hueOf` in app.js) |
 | Sponsor read | a hollow box in `--faint`, hatched at 45 degrees, flat-topped, no bars inside | the mock-up |
 | Chapter start | a 1 px tick, 6 px long, under the baseline | the mock-up |
 | Position | a 1.5 px line in `--accent`, the full height of the strip | the mock-up |

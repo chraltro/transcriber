@@ -73,12 +73,15 @@ export async function pruneLibrary({ lib, doc, now = Date.now(), days, readJson,
   for (const meta of index.entries) {
     if (!gone.has(meta.id)) continue;
     await drop(path.basename(meta.audio));
-    await rm(path.join(lib, `${meta.id}.quiet.json`), { force: true }); // (it was about that copy)
+    // (Where it goes quiet, and its shape, were about that copy.)
+    await rm(path.join(lib, `${meta.id}.quiet.json`), { force: true });
+    await rm(path.join(lib, `${meta.id}.shape.json`), { force: true });
     const file = path.join(lib, `${meta.id}.json`);
     const entry = await readJson(file, null);
     if (entry?.audio) { delete entry.audio; await writeJson(file, entry); }
     delete meta.audio;
     delete meta.quiet;
+    delete meta.shape;
   }
   const ids = new Set(index.entries.map((e) => e.id));
   for (const name of plan.leftovers) {

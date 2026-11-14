@@ -50,11 +50,13 @@ test('a pass over a library folder', async () => {
       await writeFile(path.join(lib, name), body);
       if (daysOld != null) await utimes(path.join(lib, name), new Date(NOW - daysOld * DAY), new Date(NOW - daysOld * DAY));
     };
-    const entries = [{ ...entry(1, 90), quiet: 2 }, entry(2, 10), entry(3, 90)];
+    const entries = [{ ...entry(1, 90), quiet: 2, shape: 1 }, { ...entry(2, 10), shape: 1 }, entry(3, 90)];
     await put('index.json', JSON.stringify({ entries }));
     for (const e of entries) await put(`${e.id}.json`, JSON.stringify({ ...e, segments: [] }));
     await put(`${id(1)}.mp3`, Buffer.alloc(3 * 2 ** 20), 90);
     await put(`${id(1)}.quiet.json`, '{}');
+    await put(`${id(1)}.shape.json`, '{}'); // (its shape is about that copy too)
+    await put(`${id(2)}.shape.json`, '{}');
     await put(`${id(1)}.md`, '# Episode 1');
     await put(`${id(2)}.mp3`, Buffer.alloc(10), 10);
     await put(`${id(3)}.mp3`, Buffer.alloc(10), 90);
@@ -70,9 +72,9 @@ test('a pass over a library folder', async () => {
     assert.equal(freed.leftovers, 2);
     assert.equal(freed.bytes, 4 * 2 ** 20 + 10);
     const left = (await readdir(lib)).sort();
-    assert.deepEqual(left, [`${id(1)}.json`, `${id(1)}.md`, `${id(2)}.json`, `${id(2)}.mp3`, `${id(3)}.json`, `${id(3)}.mp3`, `${id(7)}.mp3`, 'index.json'].sort());
+    assert.deepEqual(left, [`${id(1)}.json`, `${id(1)}.md`, `${id(2)}.json`, `${id(2)}.mp3`, `${id(2)}.shape.json`, `${id(3)}.json`, `${id(3)}.mp3`, `${id(7)}.mp3`, 'index.json'].sort());
     const index = await readJson(path.join(lib, 'index.json'));
-    assert.deepEqual(index.entries.map((e) => [e.id, e.audio ?? null, e.quiet ?? null]), [[id(1), null, null], [id(2), entry(2).audio, null], [id(3), entry(3).audio, null]]);
+    assert.deepEqual(index.entries.map((e) => [e.id, e.audio ?? null, e.quiet ?? null, e.shape ?? null]), [[id(1), null, null, null], [id(2), entry(2).audio, null, 1], [id(3), entry(3).audio, null, null]]);
     assert.equal((await readJson(path.join(lib, `${id(1)}.json`))).audio, undefined);
     assert.equal((await readJson(path.join(lib, `${id(1)}.json`))).title, 'Episode 1');
     // Nothing more to do the second time.

@@ -30,6 +30,7 @@ import { adBreaks } from './lib/breaks.js';
 import { subId } from './lib/podstate.js';
 import { summaryOf } from './lib/feed.js';
 import { QuietFinder, QUIET_VERSION } from './lib/quiet.js';
+import { makeShape, validShape, Loudness } from './lib/shape.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -1959,7 +1960,7 @@ const podcasts = new PodStore({
   },
 });
 const downloads = new Downloads({ open: openEpisodeAudio });
-const player = new Player({ audio, store: podcasts, downloads, cachedAudio, adsFor, quietFor });
+const player = new Player({ audio, store: podcasts, downloads, cachedAudio, adsFor, quietFor, shapeFor });
 // The newest episodes of the shows that ask for it, saved on this device by themselves.
 const autosave = new Autosave({ store: podcasts, downloads, player });
 // An episode saved while it plays is played from the saved copy from then on, where its pauses
@@ -2114,23 +2115,81 @@ async function quietFor(item, source, progress) {
     if (kept?.quiet) return kept.quiet;
   }
   if (!source.own) return null; // streamed: there is no file here to listen through
+  return (await listenTo(item, { progress }))?.quiet || null;
+}
+
+// The one listening pass over a file on this device: where it goes quiet, and how loud each
+// second is (its shape, when nobody transcribed it). Kept for that copy (by its size), so a
+// file is decoded once; asked for twice at once (pauses shortened, the player opened up), it is
+// still one pass. listen: false only looks for what is kept. -> { quiet, levels, ... } or null.
+const listening = new Map(); // episode id -> { size, progress: Set, done: Promise }
+async function listenTo(item, { listen = true, progress = null, levels = false } = {}) {
   const blob = item.file || item.blob || (await downloads.blob(item.id)) || (item.key ? await cachedAudio(item.key).catch(() => null) : null);
   if (!blob) return null;
   const key = `quiet:own:${item.id}`;
   const kept = await getFeed(key).catch(() => null);
-  if (kept?.v === QUIET_VERSION && kept.size === blob.size) return kept.quiet;
-  const finder = new QuietFinder(SAMPLE_RATE);
-  let total = 0;
-  let done = 0;
-  for await (const piece of decodePieces(blob, (t) => { total = t; })) {
-    if (player.item?.id !== item.id) return null; // the listener moved on
-    finder.push(piece);
-    done += piece.length / SAMPLE_RATE;
-    progress(total ? Math.min(1, done / total) : 0);
+  // (One kept from before loudness was kept with it does for pauses, and is heard again for a shape.)
+  if (kept?.v === QUIET_VERSION && kept.size === blob.size && (kept.levels || !levels)) return kept;
+  if (!listen) return null;
+  let run = listening.get(item.id);
+  if (!run || run.size !== blob.size) {
+    run = { size: blob.size, progress: new Set() };
+    run.done = (async () => {
+      const finder = new QuietFinder(SAMPLE_RATE);
+      const meter = new Loudness(SAMPLE_RATE);
+      let total = 0;
+      let done = 0;
+      for await (const piece of decodePieces(blob, (t) => { total = t; })) {
+        if (player.item?.id !== item.id) return null; // the listener moved on
+        finder.push(piece);
+        meter.push(piece);
+        done += piece.length / SAMPLE_RATE;
+        for (const f of run.progress) f(total ? Math.min(1, done / total) : 0);
+      }
+      const found = { id: key, v: QUIET_VERSION, size: blob.size, quiet: finder.finish(), levels: encodeLevels(meter.finish()), at: Date.now() };
+      putFeed(found).catch(() => {});
+      return found;
+    })().finally(() => { if (listening.get(item.id) === run) listening.delete(item.id); });
+    listening.set(item.id, run);
   }
-  const quiet = finder.finish();
-  putFeed({ id: key, v: QUIET_VERSION, size: blob.size, quiet, at: Date.now() }).catch(() => {});
-  return quiet;
+  if (progress) run.progress.add(progress);
+  return run.done;
+}
+
+// The shape of the copy of the audio in the player (lib/shape.js), for drawing it. The server
+// files one beside each transcript of the copy it keeps; a transcript made in this browser is
+// the shape of the audio it was made from; a file here nobody transcribed has its loudness only,
+// from listening through it (when `listen`); a streamed episode nobody transcribed has none.
+async function shapeFor(item, source, { listen = false } = {}) {
+  const servers = source.kind === 'server' || (source.kind === 'download' && source.synced);
+  if (servers) {
+    const key = `shape:server:${item.id}`;
+    if (podcasts.transcripts.get(item.id)?.shape) {
+      try {
+        const res = await fetch(`library/${encodeURIComponent(item.id)}.shape.json`);
+        const found = res.ok ? await res.json() : null;
+        if (validShape(found)) { putFeed({ id: key, shape: found, at: Date.now() }).catch(() => {}); return found; }
+      } catch {}
+    }
+    const kept = await getFeed(key).catch(() => null);
+    if (validShape(kept?.shape)) return kept.shape;
+  }
+  if (source.synced && item.id === sessionId() && state.segments.length && !state.busy) {
+    // (Passing voices are found again by makeShape: the names it is given are the real ones.)
+    const named = Object.fromEntries(Object.entries(names()).filter(([k]) => Number(k) >= 0 && (!state.minor?.has(Number(k)) || state.speakerNames[k])));
+    return makeShape({ segments: state.segments, levels: wave.levels, total: wave.total }, named);
+  }
+  if (source.synced && source.kind !== 'server' && localIndex.has(item.id)) {
+    const entry = await getEntry(localIndex.get(item.id)).catch(() => null);
+    if (entry?.segments?.length) {
+      const guessed = guessNames(entry.segments, vocabulary(entry.source).terms, { host: hostFromShow(entry.source?.show) });
+      return makeShape(entry, { ...guessed, ...(entry.speakerNames || {}) });
+    }
+  }
+  // (Not a file being transcribed right now: that is decoded once, by the transcribing.)
+  if (!source.own || (item.id === sessionId() && state.busy)) return null;
+  const heard = await listenTo(item, { listen, levels: true });
+  return heard?.levels ? makeShape({ levels: heard.levels }) : null;
 }
 
 /* ---------- transcripts and the podcast screens ---------- */
