@@ -200,12 +200,12 @@ h2 { font-size: 1.35rem; line-height: 1.2; }
 .wordmark { font: 700 14px/1 var(--font-slab); letter-spacing: 0.14em; text-transform: uppercase; }
 
 .context { min-width: 0; display: grid; gap: 3px; padding: 0 24px; }
-.crumb { font-size: 10px; color: var(--faint); }
+.crumb { font-size: 10px; color: var(--muted); }
 .context-line { font-weight: 600; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .top-meta { min-width: 0; display: grid; justify-items: end; gap: 3px; font: 500 11.5px/1.2 var(--font-mono); color: var(--muted); text-align: right; }
 #top-date { color: var(--text); }
-#top-status { color: var(--faint); max-width: min(36ch, 100%); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#top-status { color: var(--muted); max-width: min(36ch, 100%); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* (each line holds its place before its words arrive, so the bar's text does not move) */
 #top-date:empty::before, #top-status:empty::before { content: "\a0"; }
 body.busy #top-status { color: var(--accent); }
@@ -1281,6 +1281,11 @@ body.has-player { --bar: 72px; }
 .ep-main { min-width: 0; display: block; padding: 2px 0; border: 0; background: none; text-align: left; }
 .ep-main:focus-visible { outline-offset: 4px; }
 .ep .ep-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* (Where the line may wrap, it breaks between its parts, never inside one or before a dot.) */
+.ep-meta .bit { white-space: nowrap; }
+/* On a show's own page its cover is at the top: the rows go without. */
+#show-list .ep { grid-template-columns: minmax(0, 1fr) auto auto; }
+#show-list .ep > .art { display: none; }
 .ep.is-new .ep-title::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 8px; vertical-align: 1px; border-radius: 1px; background: var(--teal); }
 .ep.is-done .ep-title { color: var(--muted); font-weight: 500; }
 .ep.now { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }
@@ -1635,7 +1640,9 @@ a.sheet-show:hover { color: var(--text); }
   .link-form { padding: 16px; }
   .sheet-pane { left: 0; width: 100%; border-left: 0; padding: calc(12px + env(safe-area-inset-top)) 18px calc(26px + env(safe-area-inset-bottom)); animation-name: sheet-up; }
   .sheet-pane.closing { animation-name: sheet-down; }
-  .np-art { --size: 280px; width: min(300px, 72vw); }
+  /* (As large as the screen's height leaves room for: on a short one the cover gives way, so
+     the play button under the strip is never pushed off the bottom.) */
+  .np-art { --size: 280px; width: min(300px, 72vw, max(120px, calc(100vh - 430px))); width: min(300px, 72vw, max(120px, calc(100svh - 430px))); }
 }
 
 /* ============================================================

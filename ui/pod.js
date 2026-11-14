@@ -200,12 +200,14 @@ export class Pod {
       status === 'done' ? 'Played' : status === 'started' ? leftText(now ? player.time : prog.p, d) : lengthText(ep.duration),
     ].filter(Boolean);
     const meta = li.querySelector('.ep-meta');
-    meta.replaceChildren(bits.join(' · '));
+    // (Each part with the dot after it is one piece, so a line that wraps never starts with a dot.)
+    meta.replaceChildren(...bits.map((b, i) => h('span.bit', { text: i < bits.length - 1 ? `${b} · ` : b })));
     if (this.transcriptOf(ep)) meta.append(h('span.tag', { text: 'Transcript' }));
     else if (store.wanted(ep.id)) meta.append(h('span.tag', { text: 'Transcript asked for' }));
     if (saving != null) meta.append(h('span.tag.hot', { text: `Saving ${Math.round(saving * 100)}%` }));
     else if (downloads.has(ep.id)) meta.append(h('span.tag', { text: 'Saved' }));
-    if (store.queued(ep.id) && !now) meta.append(h('span.tag', { text: 'Queued' }));
+    // (In the queue's own list everything is queued: it goes without saying.)
+    if (store.queued(ep.id) && !now && !li.closest('#pod-queue')) meta.append(h('span.tag', { text: 'Queued' }));
     const play = li.querySelector('.ep-play');
     setIcon(play, playing ? 'pause' : 'play');
     play.classList.toggle('playing', playing);
@@ -317,7 +319,7 @@ export class Pod {
     box.append(h('div.link-form', {},
       h('div', {}, h('p.kicker', { text: 'On an iPhone' }), h('h2', { text: 'Put it on the home screen' }),
         h('p.hint', { text: 'In Safari, tap Share, then Add to Home Screen. From there it opens like an app, keeps playing with the screen locked, and what it stores is not cleared after a week away.' })),
-      h('div.actions', {}, h('button.btn.ghost', { type: 'button', onclick: () => { pref.set('pod-install-seen', '1'); box.classList.add('hidden'); } }, h('span', { text: 'Got it' })))));
+      h('div.actions', {}, h('button.btn.ghost', { type: 'button', onclick: () => { pref.set('pod-install-seen', '1'); box.classList.add('hidden'); } }, h('span', { text: 'Hide this' })))));
   }
 
   // On a device that isn't part of the library yet: how to join it.
@@ -340,7 +342,7 @@ export class Pod {
       e.currentTarget.disabled = true;
       try {
         await this.store.claim();
-        this.toast('The library is started. Link your other devices from Settings.');
+        this.toast('Library started. Link other devices from Settings.');
         this.inboxStale = true;
         this.loadInbox();
       } catch (err) {
@@ -576,7 +578,7 @@ export class Pod {
           h('span.track', {}, h('span.knob')), h('span.switch-label', { text: 'Transcribe new episodes' })),
         h('fieldset.segmented.backfill', {}, h('legend', { text: 'And the last' }),
           ...[0, 1, 3, 5, 10].map((n) => h('label', {}, h('input', { type: 'radio', name: 'backfill', value: String(n), checked: (followed.backfill || 0) === n, onchange: () => { store.updateShow(id, { backfill: n }); this.toast(n ? `The last ${n === 1 ? 'episode' : `${n} episodes`} will be transcribed too` : 'Only what you ask for'); } }), h('span', { text: n ? String(n) : 'None' })))),
-        h('p.hint', { text: 'Done on the server: new episodes an hour or two after they come out, older ones as time allows. A transcribed episode can be read along with, and its ads are marked and skipped. Any single episode can be asked for from its own page.' }),
+        h('p.hint', { text: 'The server does this. New episodes are ready an hour or two after they come out, older ones as time allows. A transcribed episode can be read along with, and its ads are marked and skipped. Any single episode can be asked for from its own page.' }),
         this.keepNewest(id),
         this.keepHint()) : null,
       followed && !store.server.linked ? h('div.show-opts', {}, this.keepNewest(id), this.keepHint()) : null,
@@ -668,7 +670,7 @@ export class Pod {
       h('section.card.pod-card', {},
         h('div.pod-head', {},
           h('div', {}, h('p.kicker', { text: eps.length ? `${eps.length} episode${eps.length === 1 ? '' : 's'}${total ? ` · ${lengthText(total)}` : ''}` : 'Plays one after the other' }), h('h2', { text: 'Up next' })),
-          eps.length ? h('button.btn.ghost.small', { type: 'button', onclick: () => store.queueClear() }, h('span', { text: 'Clear' })) : null),
+          eps.length ? h('button.btn.ghost.small', { type: 'button', onclick: () => store.queueClear() }, h('span', { text: 'Clear the queue' })) : null),
         now ? h('div.queue-now', {}, h('p.kicker', { text: player.playing ? 'Playing' : 'In the player' }), h('ul.ep-list', {}, this.row(store.decorate(now)))) : null,
         eps.length ? h('ol.ep-list', {}, rows) : h('p.pod-none', { text: 'Nothing queued. Use Play next or Add to the queue on any episode, and it plays when this one ends.' })),
       h('section.card.pod-card', {},
@@ -856,7 +858,7 @@ export class Pod {
         h('p.hint', { text: 'What the buttons beside play do on the lock screen, in the car and on headphones. An iPhone shows one pair or the other.' }),
         flip('Skip ads', s.skipAds, (v) => store.set({ skipAds: v }), 'Where an episode has a transcript, the sponsor reads in it are jumped over as they come up, with an undo each time.'),
         pick('Shorten pauses', 'trim', [[0, 'Off'], [0.5, 'Over 0.5 s'], [0.8, 'Over 0.8 s'], [1.2, 'Over 1.2 s'], [2, 'Over 2 s']], s.trim || 0, (v) => store.set({ trim: v })),
-        h('p.hint', { text: 'Pauses longer than this are cut down to it: the dead air of a call\'s delay goes, the pauses people make on purpose stay. It works for episodes the server has transcribed and for episodes saved on this device.' }),
+        h('p.hint', { text: 'Pauses longer than this are cut down to it. That takes out the dead air of a call\'s delay and leaves the pauses people make on purpose. It works for episodes the server has transcribed and for episodes saved on this device.' }),
         flip('Go back a little after a pause', s.rewind, (v) => store.set({ rewind: v }), 'A few seconds after minutes away, up to 25 after a day.'),
         flip('Keep saved episodes once played', s.keepDownloads, (v) => store.set({ keepDownloads: v }))));
 
