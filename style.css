@@ -1691,7 +1691,9 @@ a.sheet-show:active { color: var(--text); }
   .back-link { z-index: 2; }
   .under .file-pick { display: inline-block; white-space: nowrap; }
   .tile .play { width: 44px; height: 44px; }
-  #pod .segmented { row-gap: 10px; }
+  /* (two rows of options: a thumb's height each with a little to spare, so one row's reach
+     never meets the next whatever a browser rounds to) */
+  #pod .segmented { row-gap: 12px; }
   #pod .segmented span { min-width: 44px; text-align: center; }
   #pod .actions, .ep-sheet .actions { row-gap: 12px; }
   .ep-main, .found .ep-main, .hit-ep-main { min-height: 44px; }
