@@ -22,6 +22,42 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- If the app's script doesn't start (a file from another version, something this browser
+       can't run), say so and say why, instead of an empty page with buttons that do nothing. -->
+  <div class="boot-fail" id="boot-fail" hidden>
+    <h2>The app didn't start</h2>
+    <p id="boot-why"></p>
+    <button type="button" class="btn primary" id="boot-reload">Load it again</button>
+  </div>
+  <script>
+    (function () {
+      var errors = [];
+      var show = function () {
+        if (window.__appStarted) return;
+        var box = document.getElementById('boot-fail');
+        document.getElementById('boot-why').textContent = errors.length ? errors.slice(0, 3).join(' / ') : 'Its script never ran. Loading it again usually fixes that.';
+        box.hidden = false;
+      };
+      window.addEventListener('error', function (e) {
+        if (window.__appStarted) return;
+        var where = e.filename ? ' (' + String(e.filename).split('/').pop() + ':' + e.lineno + ')' : e.target && e.target.src ? ' (could not load ' + String(e.target.src).split('/').pop() + ')' : '';
+        errors.push((e.message || 'A file failed to load') + where);
+        setTimeout(show, 1500);
+      }, true);
+      window.addEventListener('unhandledrejection', function (e) {
+        if (window.__appStarted) return;
+        errors.push(String((e.reason && (e.reason.message || e.reason)) || 'A step failed'));
+        setTimeout(show, 1500);
+      });
+      setTimeout(show, 8000);
+      // Loading it again drops the copies the service worker keeps, so every file is fetched anew.
+      document.getElementById('boot-reload').addEventListener('click', function () {
+        var go = function () { location.reload(); };
+        if (!window.caches) return go();
+        caches.keys().then(function (keys) { return Promise.all(keys.filter(function (k) { return k === 'transcriber-shell'; }).map(function (k) { return caches.delete(k); })); }).then(go, go);
+      });
+    })();
+  </script>
   <svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true">
     <defs>
       <linearGradient id="logo-grad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff7a45"/><stop offset="1" stop-color="#e8341c"/></linearGradient>

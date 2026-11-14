@@ -3489,6 +3489,7 @@ async function init() {
   if (!/^#(\/|link=)/.test(location.hash) && (shared || job?.source || params.get('mode'))) history.replaceState(history.state, '', `${location.pathname}${location.search}#/transcribe`);
   player.restore();
   pod.route();
+  window.__appStarted = true; // index.html shows a message when this never happens
   downloads.verify();
   // The server, if this copy of the app has one: the library, and (for the clean-up studio)
   // voice regeneration. A static copy (GitHub Pages) has neither.

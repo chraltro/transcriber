@@ -139,6 +139,10 @@ button:disabled { cursor: not-allowed; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
 
 .hidden { display: none !important; }
+.boot-fail { position: fixed; z-index: 100; left: 16px; right: 16px; top: calc(var(--topbar) + env(safe-area-inset-top) + 16px); max-width: 520px; margin: 0 auto; padding: 18px 20px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--panel); box-shadow: var(--shadow-pop), inset 3px 0 0 var(--danger); }
+.boot-fail[hidden] { display: none; }
+.boot-fail h2 { font-size: 1.15rem; }
+.boot-fail p { margin: 8px 0 14px; font: 12.5px/1.5 var(--font-mono); color: var(--muted); overflow-wrap: anywhere; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 
