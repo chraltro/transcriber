@@ -467,7 +467,11 @@ async function run(name, options) {
         const kept = () => { try { return JSON.parse(sessionStorage.getItem('fake-push') || 'null'); } catch { return null; } };
         const sub = () => kept() && { endpoint, expirationTime: null, options: { userVisibleOnly: true, applicationServerKey: new Uint8Array(kept()).buffer }, toJSON: () => ({ endpoint, expirationTime: null, keys: { p256dh, auth } }), unsubscribe: async () => { sessionStorage.removeItem('fake-push'); return true; } };
         const pushManager = { getSubscription: async () => sub(), subscribe: async (o) => { sessionStorage.setItem('fake-push', JSON.stringify([...new Uint8Array(o.applicationServerKey)])); return sub(); } };
-        Object.defineProperty(Notification, 'permission', { get: () => sessionStorage.getItem('fake-permission') || 'default' });
+        // (WebKit as built for testing has neither of these at all: stood in for too, so the
+        // page's own part is gone through in that engine as well.)
+        if (!('Notification' in window)) window.Notification = function Notification() {};
+        if (!('PushManager' in window)) window.PushManager = function PushManager() {};
+        Object.defineProperty(Notification, 'permission', { configurable: true, get: () => sessionStorage.getItem('fake-permission') || 'default' });
         Notification.requestPermission = async () => { sessionStorage.setItem('fake-permission', 'granted'); return 'granted'; };
         navigator.serviceWorker.getRegistration = async () => ({ scope: `${location.origin}/`, pushManager });
       }, { endpoint: world.pushUrl('phone'), p256dh: phone.publicKey, auth: phone.auth });
