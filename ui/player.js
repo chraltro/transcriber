@@ -6,6 +6,7 @@
 import { resumeAt, rewindFor, finished, skipAt } from '../lib/playback.js';
 import { breakAt } from '../lib/breaks.js';
 import { cutsFor, cutIndex } from '../lib/quiet.js';
+import { directUrl } from '../lib/direct.js';
 
 const IS_IOS = typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 const NOW = 'pod-now';
@@ -114,7 +115,7 @@ export class Player extends EventTarget {
   remote(item) {
     const server = !item.noServer && (item.audio || this.store.transcripts.get(item.id)?.audio);
     if (server) return { src: server, kind: 'server', synced: true };
-    if (item.url) return { src: item.url, kind: 'origin', synced: false };
+    if (item.url) return { src: item.direct || item.url, kind: 'origin', synced: false };
     return null;
   }
 
@@ -325,6 +326,16 @@ export class Player extends EventTarget {
       this.source = null;
       this.play({ ...item, noServer: true }, { at });
       return;
+    }
+    // The address from the feed often goes through services that count downloads, and content
+    // blockers stop those: the file's own address, behind them, is tried once (lib/direct.js).
+    if (this.source.kind === 'origin' && item.url && !item.direct && navigator.onLine !== false) {
+      const direct = directUrl(item.url);
+      if (direct !== item.url) {
+        this.source = null;
+        this.play({ ...item, direct }, { at });
+        return;
+      }
     }
     this.busy = false;
     this.at = at;

@@ -21,6 +21,8 @@ The transcriber is the **Transcribe** section (`#/transcribe`): paste a podcast 
 - The lock screen and Control Center get play and pause, back and forward, and scrubbing through the Media Session API. Settings > Lock screen shows previous and next instead.
 - From the home screen the page runs under the status bar, with a dark strip behind it in either theme.
 - The home-screen app keeps its storage apart from Safari: link it by pasting the link from Settings on a linked device.
+- Content blockers work in Safari and in the home-screen app (not in Chrome on an iPhone). They drop files and hide elements named like ads, and one dropped file of the script stops the whole app, so nothing the page loads or shows is named like one (`tests/unit/blockers.test.mjs` holds that). If a file is kept from loading all the same, the page says which.
+- The same blockers stop the services many shows count their downloads through (podtrac, chartable and the like). When an episode's address fails, the player tries the file's own address behind them (`lib/direct.js`).
 
 ## Skipping ads
 
@@ -138,7 +140,9 @@ Both `npm` runs happen in GitHub Actions on every push to a `claude/**` branch t
 - `lib/enhance/`: the clean-up itself (DSP, modules, analysis, encoding); `ui/studio.js` is its page
 - `lib/`: the logic both use, kept free of the DOM so it can be unit tested (MP3/WAV indexing, ID3 tags, link parsing, text cleanup, paragraphs, waveform levels, splitting audio at pauses into 30 second windows, model choices, subtitles)
 - `lib/feed.js`: podcast feeds and OPML
-- `lib/breaks.js`: ad breaks from a transcript
+- `lib/breaks.js`: ad breaks from a transcript (named so that content blockers leave it alone, like `lib/pitch.js`, the wording of sponsor reads)
+- `lib/quiet.js`: where audio goes quiet, and what to cut for a given limit
+- `lib/direct.js`: the address of an episode's file behind the services that count downloads
 - `lib/podstate.js`: the library document and how copies merge
 - `lib/playback.js`: where to resume, which ad to skip
 - `ui/pod.js`: the Listen, Up next and Settings screens

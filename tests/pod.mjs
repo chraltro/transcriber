@@ -38,6 +38,9 @@ async function fakeApple(ctx, world) {
 async function device(browser, world, name, options) {
   const ctx = await browser.newContext({ ...options, serviceWorkers: 'block' });
   await fakeApple(ctx, world);
+  // A content blocker stops the service one episode's audio is counted by; the file behind it is there.
+  await ctx.route('https://dts.podtrac.com/**', (route) => route.abort('blockedbyclient'));
+  await ctx.route('https://audio.test.example/**', (route) => route.fulfill({ status: 200, contentType: 'audio/wav', body: world.audio }));
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => { errors.push(e.message); console.log(`  [page error] ${e.message} ${(e.stack || '').split('\n').slice(0, 4).join(' | ')}`); });
@@ -276,6 +279,16 @@ async function run(name, options) {
     await page.keyboard.press('Escape');
     await page.waitForSelector('.np', { state: 'detached' });
     await page.click('#pb-play');
+
+    // An episode whose address goes through a service that counts downloads, which a content
+    // blocker stops: the file behind the service is played.
+    if (!WEBKIT) {
+      await row('Et vrak ingen savnet').locator('.ep-play').click();
+      await playing(0.3).catch(() => {});
+      a = await audio();
+      check(a.src === 'https://audio.test.example/audio/fjord/1.wav' && !a.paused, `an episode behind a blocked counting service plays from the file's own address (${a.src})`);
+      await page.click('#pb-play');
+    }
 
     /* ---------- a second device joins, and the two stay in step ---------- */
     await page.click(mobile ? '#tabbar [data-nav=settings]' : '#nav [data-nav=settings]');

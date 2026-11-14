@@ -44,6 +44,10 @@ export const SHOWS = [
     episodes: [['Kanonen i Oslofjorden', 3, 1980], ['Kaldtvannskorallene', 10, 2210], ['Et vrak ingen savnet', 17, 2050]] },
 ];
 
+// One episode's audio is handed out through a service that counts downloads (the page under
+// test is told the service is blocked, and where the file behind it is: tests/pod.mjs).
+export const COUNTED = 'https://dts.podtrac.com/redirect.mp3/audio.test.example';
+
 export const guidOf = (show, i) => `${show.slug}-${show.episodes.length - i}`;
 export const episodeIdOf = (show, i) => idOf(guidOf(show, i));
 
@@ -52,7 +56,7 @@ function feedXml(show, base, now, extra = []) {
     const n = show.episodes.length + extra.length - i;
     const guid = i < extra.length ? `${show.slug}-new-${n}` : guidOf(show, i - extra.length);
     return `<item><title>${title}</title><guid isPermaLink="false">${guid}</guid><pubDate>${new Date(now - daysAgo * DAY).toUTCString()}</pubDate>
-<enclosure url="${base}/audio/${show.slug}/${n}.wav" type="audio/wav" length="0"/><itunes:duration>${seconds}</itunes:duration><link>${base}/${show.slug}/${n}</link>
+<enclosure url="${show.slug === 'fjord' && n === 1 ? COUNTED : base}/audio/${show.slug}/${n}.wav" type="audio/wav" length="0"/><itunes:duration>${seconds}</itunes:duration><link>${base}/${show.slug}/${n}</link>
 <description><![CDATA[<p>${title}: ${show.about}</p><p>In this episode:</p><ul><li>(00:30) Where it starts</li><li>(02:10) The part with the numbers</li></ul><p>More at <a href="${base}/${show.slug}">the show's site</a>.</p><script>window.__pwned = 1</script><img src="${base}/pixel.gif" onerror="window.__pwned = 2">]]></description></item>`;
   });
   return `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><title>${show.title}</title><link>${base}/${show.slug}</link><language>${show.lang}</language>
@@ -149,7 +153,7 @@ export async function startWorld({ audioSeconds = 300 } = {}) {
     await new Promise((r) => setTimeout(r, 100));
   }
   return {
-    base, worldBase, data, logs, state, transcribed: id,
+    base, worldBase, data, logs, state, audio, transcribed: id,
     feedUrl: (slug) => `${worldBase}/feed/${slug}.xml`,
     // A new episode comes out.
     publish: (slug, title, seconds = 1800) => { (state.extra[slug] ||= []).unshift([title, 0, seconds]); },
