@@ -3,14 +3,16 @@
 // episode was left, ads skipped from a transcript, the queue, two devices kept in step, an
 // episode saved and played without a connection, and the transcript side joined to the player.
 // Screenshots of each state go to ui-shots/.
-import { chromium, devices } from 'playwright';
+import { chromium, webkit, devices } from 'playwright';
 import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startWorld, SHOWS, episodeIdOf } from './pod-world.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const SHOTS = join(ROOT, 'ui-shots');
-const launch = () => chromium.launch({ ...(process.env.CHROME ? { executablePath: process.env.CHROME } : {}), args: ['--autoplay-policy=no-user-gesture-required'] });
+// ENGINE=webkit runs it in Safari's engine, which is what an iPhone has whatever the browser.
+const WEBKIT = process.env.ENGINE === 'webkit';
+const launch = () => (WEBKIT ? webkit.launch() : chromium.launch({ ...(process.env.CHROME ? { executablePath: process.env.CHROME } : {}), args: ['--autoplay-policy=no-user-gesture-required'] }));
 
 const failures = [];
 const check = (ok, what) => {
@@ -36,7 +38,8 @@ async function device(browser, world, name, options) {
   await fakeApple(ctx, world);
   const page = await ctx.newPage();
   const errors = [];
-  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('pageerror', (e) => { errors.push(e.message); console.log(`  [page error] ${e.message} ${(e.stack || '').split('\n').slice(0, 4).join(' | ')}`); });
+  page.on('requestfailed', (r) => { if (!/audio|\.wav|\.mp3|itunes/.test(r.url())) console.log(`  [request failed] ${r.url().slice(0, 120)} ${r.failure()?.errorText || ''}`); });
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|net::ERR_|blocked by CORS policy/.test(m.text())) errors.push(m.text()); });
   const shot = (state) => page.screenshot({ path: join(SHOTS, `pod-${name}-${state}.png`) });
   const noSideScroll = async (state) => {
@@ -58,6 +61,8 @@ async function run(name, options) {
   try {
     /* ---------- a first visit: nothing followed, and the library becomes this device's ---------- */
     await page.goto(world.base);
+    await page.waitForTimeout(1500);
+    console.log(`  started: body class "${await page.evaluate(() => document.body.className)}", status "${await page.locator('#top-status').textContent()}"`);
     await page.waitForSelector('#show-grid .pod-empty');
     await page.waitForSelector('#home-link:not(.hidden) .btn.primary');
     check(await page.evaluate(() => !localStorage.getItem('pod-key')) && !(await (await fetch(`${world.base}/api/pod/status`)).json()).claimed, 'opening the page does not take the library');

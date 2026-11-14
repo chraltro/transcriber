@@ -24,11 +24,16 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-1.56.1
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium webkit
       - name: UI test
         run: node tests/ui.mjs
       - name: Podcast test
         run: node tests/pod.mjs
+      # An iPhone is where this is used, and every browser there is Safari's engine.
+      - name: Podcast test in WebKit (iPhone)
+        run: node tests/pod.mjs phone && node tests/pod.mjs offline
+        env:
+          ENGINE: webkit
       - uses: actions/upload-artifact@v4
         if: always()
         with:
