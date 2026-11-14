@@ -79,6 +79,8 @@ export class Player extends EventTarget {
     const on = (type, fn) => audio.addEventListener(type, fn);
     on('loadedmetadata', () => this.arrive());
     on('canplay', () => this.arrive(true));
+    on('loadeddata', () => { if (this.wanted != null) this.arrive(true); });
+    on('canplaythrough', () => { if (this.wanted != null) this.arrive(true); });
     on('durationchange', () => this.emit('time'));
     on('timeupdate', () => this.tick());
     on('playing', () => { this.unlocked = true; this.busy = false; this.pausedAt = 0; this.state(); this.fine(); });
@@ -356,7 +358,11 @@ export class Player extends EventTarget {
       const d = this.audio.duration;
       const to = Number.isFinite(d) && d > 0 ? Math.min(this.wanted, Math.max(0, d - 3)) : this.wanted;
       if (Math.abs(this.audio.currentTime - to) > 1) { try { this.audio.currentTime = to; } catch {} }
-      if (again || to < 1) this.wanted = null;
+      // Done once the audio is there (or it was the start that was wanted). A file out of the
+      // device's storage is not always ready to be moved in when it first says it can play: it
+      // is asked again as more of it arrives, a few seconds' worth of times, and then left.
+      this.asks = (this.asks || 0) + 1;
+      if (to < 1 || Math.abs(this.audio.currentTime - to) <= 1 || (again && this.asks > 40)) { this.wanted = null; this.asks = 0; }
     }
     this.position();
     this.chapterCheck();
@@ -666,6 +672,7 @@ export class Player extends EventTarget {
   /* ---------- while it plays ---------- */
 
   tick() {
+    if (this.source && this.wanted != null) this.arrive(true); // (still on its way to where it was to be)
     if (!this.source || this.wanted != null) return;
     this.trim();
     const t = this.audio.currentTime;
