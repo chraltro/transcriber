@@ -267,13 +267,16 @@ export class Player extends EventTarget {
     this.wantPlay = true;
     this.busy = true;
     this.changedAt = performance.now();
+    // play() first, while the press that asked for it (a tap, the lock screen, the AirPods) still
+    // counts as one; the rest after.
+    const p = this.audio.play();
     this.state(); // (iOS hears of it now, not when the audio has arrived)
     this.watch();
-    const p = this.audio.play();
     return p ? p.then(() => true, (err) => {
       if (err.name === 'AbortError') return false;
       this.busy = false;
-      this.emit('state');
+      this.wantPlay = false;
+      this.state(); // (and iOS that it is not playing after all, so the next press is "play")
       if (err.name === 'NotAllowedError') this.emit('blocked');
       return false;
     }) : Promise.resolve(true);
@@ -282,27 +285,22 @@ export class Player extends EventTarget {
   // A file on the device has nothing to wait for and starts at once. Now and then a browser
   // leaves one loading and never starts it (seen in Safari's engine, with a file out of the
   // device's storage). What gets it going is what a listener would do: pause, and play again.
-  // So one that has not moved after three seconds is paused and started again; if that did not
-  // do it either, it is loaded afresh and started from where it was to be. Then it is left.
+  // So one that has not moved after three seconds is paused and started again, once. Only while
+  // the app is on screen: with the screen locked iOS can take longer than that to start, and it
+  // does not let a page start playing by itself there, so stepping in would only silence it.
   watch() {
     clearTimeout(this.watching);
     const source = this.source;
-    if (!source?.own || source.asked > 1) return;
+    if (!source?.own || source.asked) return;
     const from = this.audio.currentTime;
     this.watching = setTimeout(() => {
       const a = this.audio;
-      if (this.source !== source || !this.wantPlay || a.error) return;
+      if (document.visibilityState !== 'visible' || this.source !== source || !this.wantPlay || a.error) return;
       if ((!a.paused && a.readyState >= 3) || a.currentTime !== from) return; // it is playing, or has moved
-      source.asked = (source.asked || 0) + 1;
-      console.info(`player: a file on the device had not started after three seconds (ready ${a.readyState}, network ${a.networkState}): ${source.asked === 1 ? 'paused and started again' : 'loaded afresh'}`);
-      if (source.asked === 1) {
-        a.pause();
-        setTimeout(() => { if (this.source === source && this.wantPlay) this.begin(); }, 200);
-      } else {
-        this.wanted = this.wanted ?? this.time;
-        a.load();
-        this.begin();
-      }
+      source.asked = true;
+      console.info(`player: a file on the device had not started after three seconds (ready ${a.readyState}, network ${a.networkState}): paused and started again`);
+      a.pause();
+      setTimeout(() => { if (this.source === source && this.wantPlay) this.begin(); }, 200);
     }, 3000);
   }
 
@@ -313,7 +311,14 @@ export class Player extends EventTarget {
       this.source = null;
       return this.play(this.item, { at: this.store.progress(this.item.id)?.done ? 0 : at });
     }
-    if (this.audio.ended || (this.duration && this.time >= this.duration - 0.5)) this.audio.currentTime = 0;
+    // Paused a while with the screen locked, iOS may have let go of the audio: it is given it again
+    // (still inside the press, so it may play), to start where it was.
+    const a = this.audio;
+    if (this.pausedAt && (a.readyState === 0 || a.networkState === 3)) {
+      this.wanted = Math.max(0, this.time - (this.store.settings.rewind ? rewindFor(Date.now() - this.pausedAt) : 0));
+      this.asks = 0;
+      a.src = this.source.src;
+    } else if (a.ended || (this.duration && this.time >= this.duration - 0.5)) a.currentTime = 0;
     else if (this.pausedAt && this.store.settings.rewind && this.wanted == null) {
       const back = rewindFor(Date.now() - this.pausedAt);
       if (back) this.audio.currentTime = Math.max(0, this.audio.currentTime - back);
@@ -364,7 +369,7 @@ export class Player extends EventTarget {
       // device's storage is not always ready to be moved in when it first says it can play: it
       // is asked again as more of it arrives, a few seconds' worth of times, and then left.
       this.asks = (this.asks || 0) + 1;
-      if (to < 1 || Math.abs(this.audio.currentTime - to) <= 1 || (again && this.asks > 40)) { this.wanted = null; this.asks = 0; }
+      if (to < 1 || Math.abs(this.audio.currentTime - to) <= 1 || (again && this.asks > 8)) { this.wanted = null; this.asks = 0; }
     }
     this.position();
     this.chapterCheck();
