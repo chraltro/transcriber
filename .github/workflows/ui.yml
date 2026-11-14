@@ -41,8 +41,9 @@ jobs:
         continue-on-error: true
         run: |
           git fetch --depth=1 origin dccff64e871ea96f69d123a9f77818e650be904c
-          git checkout dccff64e871ea96f69d123a9f77818e650be904c -- coi-sw.js server
+          git checkout dccff64e871ea96f69d123a9f77818e650be904c -- coi-sw.js server lib/ads.js lib/adbreaks.js
           node tests/pod.mjs offline || true
+          git rm -q -f --cached lib/ads.js lib/adbreaks.js && rm -f lib/ads.js lib/adbreaks.js
           git checkout HEAD -- coi-sw.js server
         env:
           ENGINE: webkit

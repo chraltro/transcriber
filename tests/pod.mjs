@@ -420,7 +420,9 @@ async function offline() {
     if (WEBKIT) await world.stopApp(); else await ctx.setOffline(true);
     await page.reload();
     await page.waitForSelector('#show-grid', { timeout: 15000 });
-    check(/Offline|not answering/.test(await page.locator('#top-status').textContent()), `${WEBKIT ? 'with the server gone' : 'offline'}, the app still opens and says so (${await page.locator('#top-status').textContent()})`);
+    // (With the server gone and the device never linked, the page knows of no server at all.)
+    const status = await page.locator('#top-status').textContent();
+    check(await page.evaluate(() => !!window.__appStarted) && (WEBKIT ? /Offline|not answering|Kept in this browser/ : /Offline|not answering/).test(status), `${WEBKIT ? 'with the server gone, the app still opens from the copies it kept' : 'offline, the app still opens and says so'} (${status})`);
   } catch (err) {
     check(false, `the offline start got through (${err.message.split('\n')[0]})`);
   } finally {
