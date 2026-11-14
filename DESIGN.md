@@ -10,17 +10,17 @@ One person's everyday podcast player, used mostly as a home-screen app on an iPh
 
 Picked by the owner on 14 November 2026 from three live mock-ups (the score, a studio meter bridge, a radio dial).
 
-The position control in the player is not a line with a thumb. It is the whole episode drawn as one strip that can be read at a glance and scrubbed on: a bar for each stretch of time, its height the loudness, its colour the voice, the sponsor read hatched, a tick where each chapter starts, a red line where the listener is. With a finger down on it, a magnified window of the part under the finger opens above, for picking an exact spot.
+The position control in the player is the whole episode drawn as one strip that can be read at a glance and scrubbed on, where a line with a thumb used to be: a bar for each stretch of time, its height the loudness, its colour the voice, the sponsor read hatched, a tick where each chapter starts, a red line where the listener is. With a finger down on it, a magnified window of the part under the finger opens above, for picking an exact spot.
 
 The mock-up it was picked from is kept beside this file's history: `tests-local/score-mockup.html` in a working copy, or ask for the page "Player directions".
 
 ## Principles
 
-1. **Draw what is known, to scale.** Every mark stands for something the app has measured: loudness, a voice, a sponsor read, a chapter, a position. Where it has not measured, the mark is plainly absent (an even row of faint bars, no colours), never invented. A streamed episode nobody transcribed looks like one.
-2. **One memorable thing.** The score is it. Everything around it stays as quiet as it is today: flat teal panels, slab headings, mono labels, low radius. No second showpiece.
-3. **Motion is drawing or travel, once.** A strip draws in along its length. A sheet comes from the edge it lives at. A value moves from where it was to where it is. Nothing fades up in a stagger, pulses, breathes, bounces, or loops while idle. While an episode plays, the only thing that moves is the position.
-4. **The colours already have jobs.** The speaker hues are for voices and nothing else. Red is the position and the play button and nothing else. No new colours, no colour taken from cover art.
-5. **Made for a thumb.** Anything touched is at least 44 px, works one-handed, is sharp on a 3x screen, and is complete and still under reduced motion.
+1. Draw what is known, to scale. Every mark stands for something the app has measured: loudness, a voice, a sponsor read, a chapter, a position. Where it has not measured, the mark is plainly absent (an even row of faint bars, no colours), never invented. A streamed episode nobody transcribed looks like one.
+2. One memorable thing, and the score is it. Everything around it stays as quiet as it is today: flat teal panels, slab headings, mono labels, low radius. No second showpiece.
+3. Motion is drawing or travel, once. A strip draws in along its length. A sheet comes from the edge it lives at. A value moves from where it was to where it is. Nothing fades up in a stagger, pulses, breathes, bounces, or loops while idle. While an episode plays, the only thing that moves is the position.
+4. The colours already have jobs. The speaker hues are for voices and nothing else. Red is the position and the play button and nothing else. No new colours, no colour taken from cover art.
+5. Made for a thumb. Anything touched is at least 44 px, works one-handed, is sharp on a 3x screen, and is complete and still under reduced motion.
 
 ## Measurements
 
@@ -40,7 +40,7 @@ Colours, type and radius are the tokens in `style.css` (`:root`), unchanged.
 | No data | bars of one even height in `--faint` at 35%; ticks, sponsor box, position and magnifier as usual | principle 1 |
 | Draw-in | once, when the strip first shows for an episode: left to right, 500 ms, linear | the mock-up |
 | Magnifier opens / closes | 160 ms, `--ease` | the mock-up |
-| Interface moves | 120 ms (a press, a switch), 200 ms (a menu, a toast), 320 ms (a sheet, a screen); `--ease` | what the app already used, made into three steps |
+| Interface moves | `--t-press` 120 ms (a press, a switch), `--t-pop` 200 ms (a menu, a toast), `--t-move` 320 ms (a sheet, a value drawing in); going away takes the step below; `--ease`. Screens change at once | what the app already used, made into three steps |
 
 ## What stays out
 
@@ -59,4 +59,6 @@ Also out, by the owner's standing rules: italics, emoji, em dashes in copy, titl
 
 ## Checking a change
 
-`python3 slop_lint.py` (the owner's lint; "Roboto" and "JetBrains Mono" findings are this project's existing faces and are expected), then look at it at 390 and 1440 wide in both themes, then compare against "What stays out" item by item.
+`python3 slop_lint.py` (the owner's lint), then look at it at 390 and 1440 wide in both themes, then compare against "What stays out" item by item.
+
+The lint's findings that are this project's own conventions from before the direction was picked, and stay: Roboto Slab and JetBrains Mono (its two faces), the mono upper-case label above a heading, the middle dot between the parts of a line of details, and "Spotify" (a link the app supports, not a product name of its own).

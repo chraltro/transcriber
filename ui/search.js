@@ -34,6 +34,7 @@ export class TranscriptSearch {
     this.got = null; // the last answer: { q, episodes, more }
     const { store, player, pod } = this;
     store.addEventListener('link', () => { this.entry(); if (pod.view === 'search') this.show(); });
+    store.ready.then(() => { this.settled = true; this.entry(); });
     for (const ev of ['online', 'offline']) window.addEventListener(ev, () => { if (pod.view === 'search') this.run(this.q, { now: true }); });
     player.addEventListener('item', () => this.paintNow());
     // On a keyboard, / goes to the search (in a transcript it searches the transcript: app.js).
@@ -52,11 +53,12 @@ export class TranscriptSearch {
     return server.there && (server.linked || (server.offline && !!key));
   }
 
-  // The way in, at the top of the Listen screen.
+  // The way in, at the top of the Listen screen. A device that holds the library's key shows it
+  // from the start, before the server has answered, so the screen below it does not move.
   entry() {
     const box = $('home-search');
     if (!box) return;
-    box.classList.toggle('hidden', !this.available);
+    box.classList.toggle('hidden', !(this.available || (!this.settled && !!this.store.key)));
     if (box.firstChild) return;
     box.append(h('a.search-field.search-entry', { href: '#/search', onclick: (e) => { e.preventDefault(); this.open(); } },
       icon('search'), h('span', { text: 'Search every transcript' }), h('kbd.search-key', { text: '/', title: 'Press / to search' })));
@@ -211,9 +213,13 @@ export class TranscriptSearch {
     for (const [a, b] of marks) { line.push(text.slice(at, a), h('b', { text: text.slice(a, b) })); at = b; }
     line.push(text.slice(at));
     const time = fmtTime(hit.start);
+    // Where in the episode: a line the width of the time, the episode to scale, a tick at the hit.
+    // (The server's length first: the times are in its copy of the audio.)
+    const d = e.duration || this.pod.eps.get(e.id)?.duration || 0;
+    const where = d > 0 ? h('span.hit-where', { 'aria-hidden': 'true' }, h('i', { style: `left:${Math.min(100, Math.max(0, hit.start / d * 100)).toFixed(2)}%` })) : null;
     return h('li.hit', { dataset: { start: String(hit.start) } },
       h('button.hit-main', { type: 'button', 'aria-label': `Play from ${time}: ${hit.text}`, onclick: () => this.play(e, hit) },
-        h('span.hit-time', { text: time }), h('span.hit-text', {}, line.filter((x) => x !== ''))),
+        h('span.hit-time', {}, time, where), h('span.hit-text', {}, line.filter((x) => x !== ''))),
       h('button.icon-btn.hit-read', { type: 'button', 'aria-label': `Read the transcript from ${time}`, title: 'Read the transcript from here', onclick: () => this.openTranscript(this.itemOf(e), { at: hit.start }) }, icon('lines')));
   }
 

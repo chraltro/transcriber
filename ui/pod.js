@@ -29,6 +29,7 @@ export class Pod {
     this.inbox = null;
     this.shown = PAGE;
     this.view = '';
+    this.drawn = new Set(); // played parts drawn in on the screen as it is now
     try { for (const p of JSON.parse(sessionStorage.getItem('pod-previews')) || []) this.previews.set(p.id, p); } catch {}
 
     const { store, player, downloads } = this;
@@ -86,6 +87,7 @@ export class Pod {
     const changed = view !== this.view || arg !== this.arg;
     this.view = view;
     this.arg = arg;
+    if (changed) this.drawn = new Set();
     if (sheetOpen() && changed) closeSheet();
     this.onView(view);
     if (view === 'home') this.home();
@@ -170,7 +172,17 @@ export class Pod {
     li._showName = showName;
     this.artInto(li.querySelector('.art'), ep);
     this.paintRow(li, ep);
+    if (li.matches('.is-started, .now')) this.drawIn(li.querySelector('.ep-bar span'), ep.id);
     return li;
+  }
+
+  // The played part of an episode draws in along its length the first time a list shows it on
+  // this screen (style.css .draw-in); redrawn after that, it is simply where it is.
+  drawIn(bar, key) {
+    if (!bar || this.drawn.has(key)) return;
+    this.drawn.add(key);
+    bar.classList.add('draw-in');
+    bar.addEventListener('animationend', () => bar.classList.remove('draw-in'), { once: true });
   }
 
   paintRow(li, ep) {
@@ -384,6 +396,7 @@ export class Pod {
         h(`button.play${playing ? '.playing' : ''}`, { type: 'button', 'aria-label': `${playing ? 'Pause' : 'Carry on with'} ${ep.title}`, onclick: () => this.playOrPause(ep) }, icon(playing ? 'pause' : 'play')),
         h('div.meter', {}, h('span', { style: `width:${fractionOf(prog, ep.duration) * 100}%` })));
       this.artInto(tile.querySelector('.art'), ep);
+      this.drawIn(tile.querySelector('.meter span'), `tile:${ep.id}`);
       return tile;
     }));
   }
@@ -395,10 +408,12 @@ export class Pod {
     const fresh = new Map();
     for (const e of this.inbox?.episodes || []) if (statusOf(this.store.progress(e.id)) !== 'done' && Date.now() - e.published < 14 * 864e5) fresh.set(e.sub, (fresh.get(e.sub) || 0) + 1);
     $('shows-kicker').textContent = shows.length ? `${shows.length} followed` : 'None yet';
-    $('shows-add').classList.toggle('hidden', !shows.length);
+    // (Kept in its place while there is nothing to add to, so the heading does not move.)
+    $('shows-add').classList.toggle('invisible', !shows.length);
+    $('shows-add').toggleAttribute('inert', !shows.length);
     grid.replaceChildren(...shows.map((s) => {
       const n = fresh.get(s.id);
-      const a = h('a.show-tile', { href: `#/show/${s.id}`, 'aria-label': n ? `${s.title}, ${n} not played` : s.title },
+      const a = h('a.show-tile', { href: `#/show/${s.id}`, 'aria-label': n ? `${s.title}, ${n} not played` : s.title, onclick: (e) => this.travel(e, a, s.id) },
         h('div.art'), h('span.show-name', { text: s.title }), n ? h('span.show-count', { text: String(n) }) : null);
       requestAnimationFrame(() => this.artInto(a.querySelector('.art'), { art: s.art, title: s.title, show: s.title }));
       return a;
@@ -408,6 +423,31 @@ export class Pod {
         h('p', { text: 'Follow a show and its new episodes turn up here, on every device you link.' }),
         h('a.btn.primary', { href: '#/add' }, icon('search'), h('span', { text: 'Find a show' }))));
     }
+  }
+
+  // A show's cover, tapped on Listen, travels to its place on the show's page (the View
+  // Transitions API, where there is one and motion is wanted; elsewhere the page just changes).
+  travel(e, tile, id) {
+    if (!document.startViewTransition || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches || document.body.classList.contains('busy')) return;
+    const from = tile.querySelector('.art');
+    if (!from) return;
+    e.preventDefault();
+    from.style.viewTransitionName = 'cover';
+    const t = document.startViewTransition(async () => {
+      from.style.viewTransitionName = '';
+      history.pushState(null, '', `${location.pathname}${location.search}#/show/${id}`);
+      this.route();
+      const to = $('show-head')?.querySelector('.show-art');
+      if (!to) return;
+      to.style.viewTransitionName = 'cover';
+      // The picture in place before the new page is taken, so what arrives is the cover.
+      const img = to.querySelector('img.art-img');
+      if (img) await Promise.race([img.decode().catch(() => {}), new Promise((r) => setTimeout(r, 150))]);
+    });
+    const clear = () => { from.style.viewTransitionName = ''; $('show-head')?.querySelector('.show-art')?.style.removeProperty('view-transition-name'); };
+    for (const p of [t.ready, t.updateCallbackDone]) p.catch(() => {});
+    t.finished.then(clear, clear);
   }
 
   drawLatest() {
@@ -432,6 +472,7 @@ export class Pod {
     this.loading = true;
     this.inboxStale = false;
     $('latest-refresh')?.classList.add('spinning');
+    if ($('latest-kicker') && force) $('latest-kicker').textContent = 'From the shows you follow · checking now';
     try {
       // The server has to know what is followed before it can say what is new.
       if (force || this.store.meta.dirty.some((k) => k.startsWith('subs/'))) await this.store.sync();
@@ -509,7 +550,10 @@ export class Pod {
     const feed = this.showFeed;
     const about = sub.description || feed?.description || '';
     const desc = h('p.show-about', { text: about, onclick: (e) => e.currentTarget.classList.toggle('open') });
-    const art = h('div.art.show-art');
+    // The cover drawn last time stays, if it is the same picture: redrawn, it would blink.
+    const pic = sub.art || feed?.art || '';
+    const kept = box.querySelector('.show-art');
+    const art = kept && kept.dataset.pic === pic ? kept : h('div.art.show-art', { dataset: { pic } });
     const follow = followed
       ? h('button.btn.ghost', { type: 'button', onclick: (e) => this.showMenu(e.currentTarget) }, icon('check'), h('span', { text: 'Following' }), icon('down', 'icon chev'))
       : h('button.btn.primary', { type: 'button', onclick: () => { store.follow({ ...sub, title: sub.title || feed?.title, art: sub.art || feed?.art, lang: sub.lang || feed?.lang }); this.toast(`Following ${sub.title || 'the show'}`); this.showHead(); } }, icon('plus'), h('span', { text: 'Follow' }));
@@ -538,7 +582,7 @@ export class Pod {
       followed && !store.server.linked ? h('div.show-opts', {}, this.keepNewest(id), this.keepHint()) : null,
       feed?.failed ? h('p.hint.warn', { text: `The feed didn't answer last time (${feed.failed}); this is what was read before.` }) : null,
     ].filter(Boolean));
-    this.artInto(art, { art: sub.art || feed?.art, title: sub.title, show: sub.title });
+    if (art !== kept) this.artInto(art, { art: sub.art || feed?.art, title: sub.title, show: sub.title });
     this.showTitle = sub.title || feed?.title || 'Show';
     this.status();
   }

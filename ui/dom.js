@@ -44,15 +44,37 @@ export function whenText(ms) {
 export const fmtBytes = (n) => (n > 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1e6))} MB`);
 
 /* ---------- the sheet ----------
- * One at a time, over the page: the player, an episode. The phone's back gesture closes it. */
+ * One at a time, over the page: the player, an episode. It comes in from the edge it lives at
+ * and goes back to it (style.css); the phone's back gesture closes it at once, since the phone
+ * has already moved the page. */
 
 const pane = () => document.getElementById('sheet');
 const back = () => document.getElementById('sheet-back');
 let onClose = null;
 let lastFocus = null;
+let leaving = 0; // the timer while a closed sheet is on its way out
+let ownBack = false; // the history step back is this page's own (a close), not the browser's
+
+const stillMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// The sheet on its way out is gone: hidden, emptied, ready for the next.
+function gone() {
+  clearTimeout(leaving);
+  leaving = 0;
+  const p = pane();
+  p.classList.add('hidden');
+  p.classList.remove('closing');
+  p.inert = false;
+  p.style.transform = '';
+  p.replaceChildren();
+  back().classList.add('hidden');
+  back().classList.remove('closing');
+  void p.offsetWidth; // (so a sheet opened next comes in from its edge)
+}
 
 export function openSheet(content, { name = '', closed = null } = {}) {
   const p = pane();
+  if (leaving) gone();
   const wasOpen = !p.classList.contains('hidden');
   if (wasOpen) onClose?.();
   else lastFocus = document.activeElement;
@@ -101,33 +123,47 @@ function dragToClose(p) {
   p.addEventListener('touchcancel', end);
 }
 
-export const sheetOpen = (name) => !pane().classList.contains('hidden') && (!name || pane().dataset.sheet === name);
+export const sheetOpen = (name) => !pane().classList.contains('hidden') && !leaving && (!name || pane().dataset.sheet === name);
 
-function hideSheet() {
+// Closed: done with at once (its owner told, focus back where it was), then it slides back to
+// its edge, from wherever a finger left it, and is emptied when it is there.
+function hideSheet({ glide = true } = {}) {
   const p = pane();
-  if (p.classList.contains('hidden')) return;
-  p.classList.add('hidden');
-  p.style.transform = '';
-  back().classList.add('hidden');
+  if (p.classList.contains('hidden') || leaving) return;
   document.body.classList.remove('sheet-open');
-  p.replaceChildren();
   const done = onClose;
   onClose = null;
   done?.();
+  p.classList.add('closing');
+  back().classList.add('closing');
+  p.inert = true;
+  const style = getComputedStyle(p);
+  const ms = parseFloat(style.animationDuration) * (style.animationDuration.endsWith('ms') ? 1 : 1000);
+  if (!glide || stillMotion() || style.animationName === 'none' || !(ms > 1)) gone();
+  else leaving = setTimeout(gone, ms + 40);
   lastFocus?.focus?.({ preventScroll: true });
 }
 
 export function closeSheet() {
   if (!sheetOpen()) return;
-  if (history.state?.sheet) history.back(); // popstate hides it
-  else hideSheet();
+  hideSheet(); // at once, not a few frames later when the step back has been taken
+  if (history.state?.sheet) { ownBack = true; history.back(); }
 }
 
 // (Nothing here touches the page until it is there: the tests load this file without one.)
 const inPage = typeof window !== 'undefined' && typeof document !== 'undefined';
 if (inPage) {
   if (pane()) dragToClose(pane());
-  window.addEventListener('popstate', () => { if (!history.state?.sheet) hideSheet(); });
+  window.addEventListener('popstate', () => {
+    const ours = ownBack;
+    ownBack = false;
+    // The step back a close took: the sheet is already on its way (or another was opened since,
+    // which then gets its own step to be closed by).
+    if (ours) { if (sheetOpen() && !history.state?.sheet) history.pushState({ sheet: true }, ''); return; }
+    if (!history.state?.sheet) hideSheet({ glide: false });
+  });
+  // (Without a listener for touches an iPhone shows no :active state, the press feedback.)
+  document.addEventListener('touchstart', () => {}, { passive: true });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && sheetOpen() && !menuOpen()) { e.preventDefault(); closeSheet(); } });
   document.addEventListener('click', (e) => { if (e.target === back()) closeSheet(); });
 }
@@ -157,8 +193,8 @@ export function openMenu(anchor, items) {
   m._at = performance.now();
   m._y = window.scrollY;
   anchor.setAttribute('aria-expanded', 'true');
-  m.classList.add('open');
-  // Under the button, or above it near the bottom of the screen; never off the side.
+  // Under the button, or above it near the bottom of the screen; never off the side. (Measured
+  // while still closed: closed, it is laid out and only clipped away.)
   const r = anchor.getBoundingClientRect();
   const w = m.offsetWidth;
   const hgt = m.offsetHeight;
@@ -166,6 +202,12 @@ export function openMenu(anchor, items) {
   const below = r.bottom + 6 + hgt <= window.innerHeight - 8;
   m.style.left = `${left}px`;
   m.style.top = `${below ? r.bottom + 6 : Math.max(8, r.top - hgt - 6)}px`;
+  // It unrolls from the edge nearest its button: settled there first, without a motion.
+  m.style.transition = 'none';
+  m.classList.toggle('up', !below);
+  void m.offsetWidth;
+  m.style.transition = '';
+  m.classList.add('open');
   m.querySelector('button')?.focus({ preventScroll: true });
 }
 

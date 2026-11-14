@@ -314,6 +314,21 @@ async function run(name, options) {
     /* ---------- searching every transcript ---------- */
     // (The world's one transcript says "It took ten years of committees to agree on twenty feet
     // and forty feet" at 2:20, "a steel box" at 0:12 and "the quay" in the sentence after.)
+    // The way in at the top of Listen is there from the start on a device that holds the
+    // library's key, so nothing below it moves when the server answers (made slow here).
+    {
+      await page.click(mobile ? '#tabbar [data-nav=listen]' : '#nav [data-nav=listen]');
+      await page.route('**/api/pod/status', async (r) => { await new Promise((ok) => setTimeout(ok, 1500)); await r.continue().catch(() => {}); });
+      await page.reload();
+      await page.waitForSelector('#home-shows');
+      const where = () => page.evaluate(() => ({ y: Math.round(document.querySelector('#home-shows').getBoundingClientRect().top + scrollY), field: !document.querySelector('#home-search').classList.contains('hidden'), status: document.querySelector('#top-status').textContent }));
+      const first = await where();
+      await page.waitForFunction(() => /In step|Linked/.test(document.querySelector('#top-status').textContent), null, { timeout: 15000 });
+      await page.waitForTimeout(600);
+      const then = await where();
+      check(first.field && then.field && first.y === then.y && !/In step|Linked/.test(first.status), `the search field is in place before the server answers, and the shows below it do not move (${first.y} px, then ${then.y} px)`);
+      await page.unroute('**/api/pod/status');
+    }
     await page.click(mobile ? '#tabbar [data-nav=listen]' : '#nav [data-nav=listen]');
     await page.waitForSelector('#home-search:not(.hidden) .search-entry');
     if (mobile) await page.click('#home-search .search-entry');
@@ -329,6 +344,20 @@ async function run(name, options) {
       bold: [...document.querySelectorAll('#search-results .hit-text b')].map((x) => x.textContent),
     }));
     check(found.eps.join() === 'Why every container is the same size' && found.time === '2:20' && found.bold.join() === 'committees,twenty feet', `words and a phrase find the sentence, its words set off (${JSON.stringify(found)})`);
+    {
+      // Beside the time, a line the width of the time's column is the episode, and a tick on it is the hit.
+      const mark = await page.evaluate(async () => {
+        const got = await (await fetch('api/pod/search?q=committees', { headers: { authorization: `Bearer ${localStorage.getItem('pod-key')}` } })).json();
+        const line = document.querySelector('#search-results .hit .hit-where');
+        const tick = line?.querySelector('i');
+        if (!tick) return null;
+        const a = line.getBoundingClientRect();
+        const t = tick.getBoundingClientRect();
+        const col = line.closest('.hit-time').getBoundingClientRect();
+        return { at: (t.left + t.width / 2 - a.left) / a.width, want: got.episodes[0].hits[0].start / got.episodes[0].duration, inCol: a.left >= col.left - 0.5 && a.right <= col.right + 0.5 };
+      });
+      check(!!mark && Math.abs(mark.at - mark.want) < 0.02 && mark.inCol, `each hit has a mark where in the episode it is, inside the time's column (${mark && `${(mark.at * 100).toFixed(1)}% along, the hit is ${(mark.want * 100).toFixed(1)}% in`})`);
+    }
     await page.waitForTimeout(300);
     await shot('5b-search');
     await noSideScroll('search');
@@ -629,6 +658,154 @@ async function run(name, options) {
     await page.click('#play');
     await page.waitForFunction(() => document.querySelector('#audio').paused);
     check(true, "the transcript's own play button is the player's");
+
+    /* ---------- how things move, and what a thumb can reach ---------- */
+    {
+      await page.click(mobile ? '#tabbar [data-nav=listen]' : '#nav [data-nav=listen]');
+      await page.waitForSelector('#pod-home:not(.hidden) #latest-list .ep');
+      // An episode's played part draws in along its length when its list first shows, once.
+      const drawn = await page.evaluate(() => [...document.querySelectorAll('#pod-home .draw-in')].map((x) => getComputedStyle(x).animationName));
+      await page.waitForTimeout(700);
+      const after = await page.evaluate(() => document.querySelectorAll('#pod-home .draw-in').length);
+      check(drawn.length > 0 && drawn.every((n) => n === 'draw-in') && after === 0, `the played part of each started episode draws in once as Listen shows (${drawn.length} drawn, ${after} still drawing after 0.7 s)`);
+
+      // A sheet comes from its edge and goes back to it, one motion; then it is gone, and the
+      // focus is back on what opened it.
+      const opener = row('The pilot who boards at night').locator('.ep-main');
+      const watch = () => page.evaluate(() => new Promise((done) => {
+        const p = document.querySelector('#sheet');
+        const seen = [];
+        const t0 = performance.now();
+        const look = () => {
+          const m = new DOMMatrix(getComputedStyle(p).transform);
+          seen.push({ x: m.m41, y: m.m42, hidden: p.classList.contains('hidden') });
+          if (performance.now() - t0 < 600) requestAnimationFrame(look); else done(seen);
+        };
+        look();
+      }));
+      await opener.focus();
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.ep-sheet');
+      await page.waitForTimeout(450);
+      await page.evaluate(() => document.querySelector('.ep-sheet .sheet-top .icon-btn').focus());
+      const [frames] = await Promise.all([watch(), page.keyboard.press('Enter')]);
+      const moving = frames.filter((f) => !f.hidden && (mobile ? f.y : f.x) > 1);
+      const gone = await page.evaluate(() => ({ hidden: document.querySelector('#sheet').classList.contains('hidden') && document.querySelector('#sheet-back').classList.contains('hidden'), empty: !document.querySelector('#sheet').firstChild, closing: !!document.querySelector('.closing'), focus: document.activeElement?.closest('.ep')?.querySelector('.ep-title')?.textContent }));
+      check(moving.length >= 2 && frames.at(-1).hidden && gone.hidden && gone.empty && !gone.closing, `a closed sheet goes back to the ${mobile ? 'bottom' : 'right'} edge and is then gone (${moving.length} frames on the way)`);
+      check(gone.focus === 'The pilot who boards at night', `and the focus is back on what opened it (${gone.focus})`);
+      // Closed with the browser's back (the phone's back gesture), it goes at once: the phone
+      // has moved the page itself.
+      await opener.click();
+      await page.waitForSelector('.ep-sheet');
+      await page.waitForTimeout(400);
+      await page.goBack();
+      await page.waitForTimeout(30);
+      check(await page.evaluate(() => document.querySelector('#sheet').classList.contains('hidden') && location.hash === '#/'), 'the browser\'s back closes it at once');
+      if (mobile) {
+        // Pulled down from its top and let go, it carries on down from where the finger left it.
+        await opener.click();
+        await page.waitForSelector('.ep-sheet');
+        await page.waitForTimeout(450);
+        const pulled = await page.evaluate(() => new Promise((done) => {
+          const p = document.querySelector('#sheet');
+          const at = (y) => [new Touch({ identifier: 1, target: p, clientX: 200, clientY: y })];
+          p.dispatchEvent(new TouchEvent('touchstart', { touches: at(40), targetTouches: at(40), changedTouches: at(40), bubbles: true, cancelable: true }));
+          p.dispatchEvent(new TouchEvent('touchmove', { touches: at(240), targetTouches: at(240), changedTouches: at(240), bubbles: true, cancelable: true }));
+          const held = new DOMMatrix(getComputedStyle(p).transform).m42;
+          p.dispatchEvent(new TouchEvent('touchend', { touches: [], targetTouches: [], changedTouches: at(240), bubbles: true, cancelable: true }));
+          const seen = [];
+          const look = () => {
+            seen.push(p.classList.contains('hidden') ? 'gone' : new DOMMatrix(getComputedStyle(p).transform).m42);
+            if (seen.length < 60 && seen.at(-1) !== 'gone') requestAnimationFrame(look); else done({ held, seen });
+          };
+          requestAnimationFrame(look);
+        }));
+        const ys = pulled.seen.filter((y) => y !== 'gone');
+        check(pulled.held === 200 && ys.length > 0 && ys.every((y) => y >= 199) && pulled.seen.at(-1) === 'gone', `pulled down and let go, the sheet goes on down from there (held at ${pulled.held} px, then ${ys.slice(0, 4).map(Math.round).join(', ')} ...)`);
+        await page.waitForFunction(() => location.hash === '#/');
+      }
+      // With motion turned down on the device, a sheet comes and goes without moving.
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await opener.click();
+      await page.waitForSelector('.ep-sheet');
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(40);
+      check(await page.evaluate(() => document.querySelector('#sheet').classList.contains('hidden')), 'with reduced motion a sheet goes at once');
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+
+      // On a phone, whatever is touched is at least 44 px both ways: tried 21.5 px from its
+      // middle up, down, left and right (the edge of the screen counts as reach).
+      if (mobile) {
+        const reach = (root, scroll = true) => page.evaluate(([root, scroll]) => {
+          const short = [];
+          for (const box of document.querySelectorAll(root)) {
+            for (const el of box.querySelectorAll('a[href], button, summary, select, input:not([type=hidden]), [role=button]')) {
+              if (el.disabled || el.closest('.notes, .hint, .footer, .sr-only, [inert]')) continue;
+              const t = el.tagName === 'INPUT' && ['radio', 'checkbox', 'file'].includes(el.type) ? el.closest('label') : el;
+              if (!t || !t.getClientRects().length || getComputedStyle(t).visibility === 'hidden') continue;
+              if (scroll) t.scrollIntoView({ block: 'center', inline: 'nearest' });
+              const r = t.getBoundingClientRect();
+              const cx = r.left + r.width / 2;
+              const cy = r.top + r.height / 2;
+              // (A side drawn 44 or more is enough as it is; a smaller one has to reach further.)
+              const missed = [[0, -21.5], [0, 21.5], [-21.5, 0], [21.5, 0]].filter(([dx, dy]) => {
+                if (dx ? r.width >= 43.5 : r.height >= 43.5) return false;
+                const x = cx + dx;
+                const y = cy + dy;
+                if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return false;
+                const hit = document.elementFromPoint(x, y);
+                if (hit?.closest('#tabbar, #playbar, .topbar') && !t.closest('#tabbar, #playbar, .topbar')) return false;
+                return !(hit && (hit === t || t.contains(hit)));
+              });
+              if (missed.length) short.push(`${t.tagName.toLowerCase()}.${[...t.classList].join('.')} "${(t.getAttribute('aria-label') || t.textContent).trim().slice(0, 24)}" ${Math.round(r.width)}x${Math.round(r.height)}, missed at ${missed.map(([dx, dy]) => { const hh = document.elementFromPoint(cx + dx, cy + dy); return `${dx},${dy} (${hh?.tagName.toLowerCase()}.${hh?.className?.baseVal ?? hh?.className})`; }).join(' ')}`);
+            }
+          }
+          return [...new Set(short)];
+        }, [root, scroll]);
+        const short = [];
+        const screen = async (name) => {
+          short.push(...(await reach('#pod .pod-view:not(.hidden), #playbar, #tabbar, .topbar')).map((x) => `${name}: ${x}`));
+          await page.evaluate(() => window.scrollTo(0, 0));
+        };
+        await screen('Listen');
+        await row('A bakery in 1911').locator('.ep-more').click();
+        await page.waitForSelector('#row-menu.open');
+        await page.waitForTimeout(300); // (unrolled)
+        short.push(...(await reach('#row-menu', false)).map((x) => `menu: ${x}`));
+        await page.keyboard.press('Escape');
+        await row('What the tide tables leave out').locator('.ep-main').click();
+        await page.waitForSelector('.ep-sheet .chapter');
+        await page.waitForTimeout(400); // (in)
+        short.push(...(await reach('#sheet')).map((x) => `episode: ${x}`));
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.ep-sheet', { state: 'detached' });
+        await page.click('#show-grid .show-tile:has-text("Fjordfunn")');
+        await page.waitForSelector('#show-list .ep');
+        await page.waitForTimeout(500); // (the cover has arrived)
+        await screen('a show');
+        for (const [nav, sel, name] of [['queue', '#pod-queue .ep', 'Up next'], ['settings', '#pod-settings .qr svg', 'Settings']]) {
+          await page.click(`#tabbar [data-nav=${nav}]`);
+          await page.waitForSelector(sel);
+          await screen(name);
+        }
+        await page.evaluate(() => { location.hash = '#/add'; });
+        await page.fill('#pod-add input[type=search]', 'the long');
+        await page.waitForSelector('#found-list .found');
+        await screen('Find a show');
+        await page.evaluate(() => { location.hash = '#/search'; });
+        await page.fill('#pod-search input', 'committees');
+        await page.waitForSelector('#search-results .hit');
+        await screen('Search');
+        // ...and in the now-playing sheet.
+        await page.click('#pb-open');
+        await page.waitForSelector('.np');
+        await page.waitForTimeout(450); // (in)
+        short.push(...(await reach('#sheet')).map((x) => `player: ${x}`));
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.np', { state: 'detached' });
+        check(!short.length, `on a phone every control is at least 44 px both ways${short.length ? `, not: ${short.join('; ')}` : ''}`);
+      }
+    }
 
     /* ---------- shows out, as a file ---------- */
     if (!mobile) {

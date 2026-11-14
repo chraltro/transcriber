@@ -66,7 +66,12 @@
   --rail-w: 232px;
   --stick: calc(var(--topbar) + 10px);
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --bar: 0px;   /* the player along the bottom, when an episode is in it */
+  /* the three moves the interface makes (DESIGN.md): a press or a switch; a menu or a toast;
+     a sheet or a screen. Going away takes the next step down. */
+  --t-press: 120ms;
+  --t-pop: 200ms;
+  --t-move: 320ms;
+  --bar: 0px;  /* the player along the bottom, when an episode is in it */
   --tabs: 0px;  /* the sections along the bottom, on narrow screens */
 }
 
@@ -137,6 +142,9 @@ button { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
 
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+/* A press shows as a step in ground or colour (below, with each control), never as the
+   browser's grey flash. */
+button, a, label, summary { -webkit-tap-highlight-color: transparent; }
 
 .hidden { display: none !important; }
 .boot-fail { position: fixed; z-index: 100; left: 16px; right: 16px; top: calc(var(--topbar) + env(safe-area-inset-top) + 16px); max-width: 520px; margin: 0 auto; padding: 18px 20px; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--panel); box-shadow: var(--shadow-pop), inset 3px 0 0 var(--danger); }
@@ -198,6 +206,8 @@ h2 { font-size: 1.35rem; line-height: 1.2; }
 .top-meta { min-width: 0; display: grid; justify-items: end; gap: 3px; font: 500 11.5px/1.2 var(--font-mono); color: var(--muted); text-align: right; }
 #top-date { color: var(--text); }
 #top-status { color: var(--faint); max-width: min(36ch, 100%); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* (each line holds its place before its words arrive, so the bar's text does not move) */
+#top-date:empty::before, #top-status:empty::before { content: "\a0"; }
 body.busy #top-status { color: var(--accent); }
 
 /* ---------- shell: spine + main ---------- */
@@ -221,7 +231,7 @@ body.busy #top-status { color: var(--accent); }
   display: grid; grid-template-columns: 18px 1fr auto; gap: 12px; align-items: center;
   height: 38px; padding: 0 10px;
   border-radius: var(--r); color: var(--muted); text-decoration: none; font-weight: 600; font-size: 14px;
-  transition: background 0.15s, color 0.15s;
+  transition: background var(--t-press), color var(--t-press);
 }
 .nav a:hover { background: var(--panel); color: var(--text); }
 .nav a.on { background: var(--panel); color: var(--text); }
@@ -234,7 +244,7 @@ body.busy #top-status { color: var(--accent); }
 .steps::before { content: ""; position: absolute; left: 4px; top: 8px; bottom: 8px; width: 1px; background: var(--line-strong); }
 .steps li { position: relative; display: grid; grid-template-columns: 9px 1fr; column-gap: 14px; padding: 0 0 26px; color: var(--muted); }
 .steps li:last-child { padding-bottom: 0; }
-.steps i { grid-row: span 2; width: 9px; height: 9px; margin-top: 6px; border-radius: 50%; background: var(--panel-3); border: 1px solid var(--line-strong); position: relative; z-index: 1; transition: background 0.3s, border-color 0.3s; }
+.steps i { grid-row: span 2; width: 9px; height: 9px; margin-top: 6px; border-radius: 50%; background: var(--panel-3); border: 1px solid var(--line-strong); position: relative; z-index: 1; transition: background var(--t-press), border-color var(--t-press); }
 .steps span { font-weight: 600; font-size: 14px; }
 .steps .note { font: 500 10.5px/1.4 var(--font-mono); letter-spacing: 0.04em; color: var(--accent); text-transform: uppercase; min-height: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .steps .note:empty { display: none; }
@@ -263,7 +273,7 @@ main { min-width: 0; padding: 22px clamp(16px, 2.4vw, 32px) 40px; display: grid;
   border: 1px solid var(--line-strong); border-radius: var(--r);
   box-shadow: var(--shadow-pop);
   transform: translateY(calc(-100% - var(--topbar) - 20px));
-  transition: transform 0.45s var(--ease);
+  transition: transform var(--t-move) var(--ease);
   overflow: hidden;
 }
 body.show-mini .mini { transform: none; }
@@ -272,7 +282,7 @@ body.show-mini .mini { transform: none; }
 .mini-title { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mini-status { font: 11.5px var(--font-mono); color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mini-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--line); }
-.mini-bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.4s var(--ease); }
+.mini-bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width var(--t-move) var(--ease); }
 
 /* ---------- buttons ---------- */
 
@@ -282,26 +292,27 @@ body.show-mini .mini { transform: none; }
   border-radius: var(--r); border: 1px solid transparent;
   font: 600 14px/1 var(--font-ui);
   white-space: nowrap;
-  transition: background 0.2s, border-color 0.2s, opacity 0.2s, transform 0.15s;
-  -webkit-tap-highlight-color: transparent;
+  transition: background var(--t-press), border-color var(--t-press), opacity var(--t-press);
 }
 a.btn { text-decoration: none; }
-.btn:active:not(:disabled) { transform: translateY(1px); }
 .btn.small { height: 32px; padding: 0 12px; font-size: 13px; gap: 6px; }
 .btn.small .icon { width: 15px; height: 15px; }
 .btn.ghost { background: var(--panel-2); border-color: var(--line-strong); color: var(--text); }
 .btn.ghost:hover:not(:disabled) { background: var(--panel-3); border-color: color-mix(in srgb, var(--text) 30%, transparent); }
+.btn.ghost:active:not(:disabled) { background: var(--cell); border-color: color-mix(in srgb, var(--text) 30%, transparent); }
 .btn.primary { color: var(--accent-ink); background: var(--accent); }
 .btn.primary:hover:not(:disabled) { background: var(--accent-2); }
+.btn.primary:active:not(:disabled) { background: var(--accent-2); }
 .btn:disabled { opacity: 0.5; }
 
 .icon-btn {
   display: inline-grid; place-items: center;
   width: 34px; height: 34px; flex: none;
   border: 1px solid transparent; border-radius: var(--r); background: transparent; color: var(--muted);
-  transition: background 0.2s, color 0.2s;
+  transition: background var(--t-press), color var(--t-press);
 }
 .icon-btn:hover { background: var(--panel-3); color: var(--text); }
+.icon-btn:active:not(:disabled) { background: var(--cell); color: var(--text); }
 .icon-btn.tiny { width: 28px; height: 28px; }
 .icon-btn.tiny .icon { width: 15px; height: 15px; }
 
@@ -321,9 +332,7 @@ a.btn { text-decoration: none; }
   padding: 20px 22px;
   border: 1px solid var(--line); border-radius: var(--r);
   background: var(--panel);
-  animation: rise 0.45s var(--ease) both;
 }
-@keyframes rise { from { opacity: 0; transform: translateY(8px); } }
 .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .panel-sub { margin: 6px 0 0; font-size: 10px; color: var(--faint); letter-spacing: 0.06em; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
@@ -336,8 +345,8 @@ a.btn { text-decoration: none; }
 h1 { margin: 2px 0 18px; font-size: clamp(2rem, 1.4rem + 2.2vw, 2.9rem); line-height: 1.05; letter-spacing: -0.02em; }
 
 .command { display: flex; gap: 8px; }
-.command.shake { animation: shake 0.4s var(--ease); }
-@keyframes shake { 20% { transform: translateX(-6px); } 40% { transform: translateX(5px); } 60% { transform: translateX(-3px); } 80% { transform: translateX(2px); } }
+.command.shake .command-field { animation: refuse 1.6s linear; }
+@keyframes refuse { from, 70% { border-color: var(--danger); } }
 .command-field {
   flex: 1; min-width: 0;
   display: flex; align-items: center;
@@ -349,7 +358,7 @@ h1 { margin: 2px 0 18px; font-size: clamp(2rem, 1.4rem + 2.2vw, 2.9rem); line-he
 .command-field input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; font-size: 16px; }
 .command-field input::placeholder { color: var(--faint); }
 .paste { height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); color: var(--muted); font: 600 10.5px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; }
-.paste:hover { color: var(--text); border-color: var(--line-strong); }
+.paste:hover, .paste:active { color: var(--text); border-color: var(--line-strong); }
 .btn.go { height: 48px; padding: 0 22px; font-size: 15px; }
 
 .under { margin: 12px 0 0; font-size: 13.5px; color: var(--muted); }
@@ -366,7 +375,7 @@ h1 { margin: 2px 0 18px; font-size: clamp(2rem, 1.4rem + 2.2vw, 2.9rem); line-he
   font: 600 10.5px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
 }
 .settings-toggle:hover { color: var(--text); }
-.settings-toggle .chev { width: 14px; height: 14px; transition: transform 0.25s var(--ease); }
+.settings-toggle .chev { width: 14px; height: 14px; transition: transform var(--t-press) var(--ease); }
 .settings.open .settings-toggle .chev { transform: rotate(180deg); }
 .settings-body { display: grid; gap: 14px; justify-items: start; }
 
@@ -379,9 +388,10 @@ h1 { margin: 2px 0 18px; font-size: clamp(2rem, 1.4rem + 2.2vw, 2.9rem); line-he
   font-size: 13.5px; color: var(--muted);
   border: 1px solid var(--line); border-radius: var(--r-sm);
   background: var(--panel-2);
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  transition: color var(--t-press), background var(--t-press), border-color var(--t-press);
 }
 .segmented label:hover span { color: var(--text); border-color: var(--line-strong); }
+.segmented label:active span { color: var(--text); background: var(--panel-3); }
 .segmented input:checked + span { color: var(--text); border-color: var(--teal); background: color-mix(in srgb, var(--teal) 16%, var(--panel-2)); box-shadow: inset 3px 0 0 var(--teal); }
 .segmented input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
 .model { position: relative; }
@@ -424,6 +434,8 @@ body.has-session .settings:not(.open) .settings-body, .settings.collapsible:not(
   aspect-ratio: 1; width: 64px;
   border-radius: var(--r);
   isolation: isolate;
+  /* the square holds its place, framed, until the picture is in: never an empty gap */
+  background: var(--panel-3); box-shadow: 0 0 0 1px var(--line-strong);
 }
 .art img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .art .art-img { position: relative; z-index: 1; box-shadow: 0 0 0 1px var(--line-strong); background: var(--panel-3); }
@@ -438,8 +450,11 @@ body.has-session .settings:not(.open) .settings-body, .settings.collapsible:not(
   font: 700 calc(var(--size, 64px) * 0.4)/1 var(--font-slab);
   overflow: hidden;
 }
-.art.loading .art-fallback {
-  background: linear-gradient(110deg, var(--panel-3) 30%, var(--panel-2) 50%, var(--panel-3) 70%);
+.art.loading .art-fallback { --sweep: var(--panel-3); --sweep-lit: var(--panel-2); }
+/* The one loading placeholder: a band of light that sweeps across while something is being
+   fetched or worked out (cover art, the transcript's first words, the waveform). */
+.art.loading .art-fallback, .skeleton, .wave.loading::after {
+  background: linear-gradient(110deg, var(--sweep) 30%, var(--sweep-lit) 50%, var(--sweep) 70%);
   background-size: 250% 100%;
   animation: shimmer 1.6s linear infinite;
 }
@@ -485,7 +500,7 @@ body.has-session .settings:not(.open) .settings-body, .settings.collapsible:not(
 @media (hover: hover) { .search-entry:hover { border-color: var(--teal); color: var(--muted); } }
 .search-note { display: grid; gap: 12px; justify-items: start; padding-top: 14px; }
 .search-note p { margin: 0; }
-.hit-eps { list-style: none; margin: 14px 0 0; padding: 0; border-top: 1px solid var(--line); transition: opacity 0.2s; }
+.hit-eps { list-style: none; margin: 14px 0 0; padding: 0; border-top: 1px solid var(--line); transition: opacity var(--t-press); }
 .hit-eps:empty { display: none; }
 .hit-eps.stale { opacity: 0.55; }
 .hit-ep { padding: 14px 0 10px; border-bottom: 1px solid var(--line); }
@@ -498,7 +513,11 @@ body.has-session .settings:not(.open) .settings-body, .settings.collapsible:not(
 .hit { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; padding: 0 12px 0 16px; }
 .hit-main { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 6px; padding: 9px 6px; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); text-align: left; font-size: 14px; line-height: 1.5; }
 @media (hover: hover) { .hit-main:hover { background: var(--panel-2); color: var(--text); } }
-.hit-time { font: 600 11px/2 var(--font-mono); color: var(--faint); }
+.hit-time { display: grid; align-content: start; font: 600 11px/2 var(--font-mono); color: var(--faint); }
+/* where in the episode the hit is: the episode drawn to scale as a line the width of the
+   column, and a tick at the sentence */
+.hit-where { position: relative; height: 7px; margin: 0 8px 0 0; background: linear-gradient(var(--line-strong), var(--line-strong)) 0 100% / 100% 1px no-repeat; }
+.hit-where i { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--teal); }
 .hit-text { overflow-wrap: anywhere; }
 .hit-text b { font-weight: 700; color: var(--text); }
 .hit.now .hit-main { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); color: var(--text); }
@@ -526,7 +545,7 @@ body.has-session .settings:not(.open) .settings-body, .settings.collapsible:not(
   padding: 10px 22px;
   border: 0; background: transparent;
   text-align: left;
-  transition: background 0.15s;
+  transition: background var(--t-press);
 }
 .episode:focus-visible { background: var(--panel-2); outline-offset: -2px; }
 @media (hover: hover) { .episode:hover { background: var(--panel-2); } }
@@ -534,7 +553,7 @@ body.has-session .settings:not(.open) .settings-body, .settings.collapsible:not(
 .ep-text { min-width: 0; }
 .ep-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-weight: 600; font-size: 14px; line-height: 1.35; }
 .ep-meta { display: block; margin-top: 3px; font: 11px var(--font-mono); color: var(--faint); letter-spacing: 0.03em; }
-.ep-go { color: var(--faint); opacity: 0; transition: opacity 0.15s; }
+.ep-go { color: var(--faint); opacity: 0; transition: opacity var(--t-press); }
 .episode:hover .ep-go, .episode:focus-visible .ep-go { opacity: 1; color: var(--accent); }
 .episode-empty { padding: 26px 22px; text-align: center; color: var(--faint); }
 
@@ -572,8 +591,10 @@ body.has-session .settings:not(.open) .settings-body, .settings.collapsible:not(
   width: 46px; height: 46px; border-radius: var(--r); border: 1px solid var(--line-strong);
   display: grid; place-items: center;
   background: var(--panel-3); color: var(--text);
-  transition: background 0.2s, color 0.2s, border-color 0.2s;
+  transition: background var(--t-press), color var(--t-press), border-color var(--t-press);
 }
+.play:active:not(:disabled) { background: var(--cell); }
+.play.playing:active:not(:disabled) { background: var(--accent-2); border-color: var(--accent-2); }
 .play .icon { width: 20px; height: 20px; }
 .play:not(:disabled):hover { border-color: var(--teal); }
 .play:disabled { color: var(--faint); background: var(--panel-2); }
@@ -584,18 +605,15 @@ body.has-session .settings:not(.open) .settings-body, .settings.collapsible:not(
 .wave.seekable { cursor: pointer; }
 .wave.loading::after {
   content: ""; position: absolute; inset: 35% 0;
-  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--teal) 30%, transparent), transparent);
-  background-size: 40% 100%; background-repeat: no-repeat;
-  animation: sweep 1.8s ease-in-out infinite;
+  --sweep: transparent; --sweep-lit: color-mix(in srgb, var(--teal) 30%, transparent);
   pointer-events: none;
 }
-@keyframes sweep { from { background-position: -40% 0; } to { background-position: 140% 0; } }
 .wave-tip {
   position: absolute; bottom: calc(100% + 8px); left: 0;
   transform: translateX(-50%);
   padding: 3px 7px; border-radius: var(--r-sm);
   font: 500 11px var(--font-mono); color: var(--text); background: var(--panel-3); border: 1px solid var(--line-strong);
-  opacity: 0; pointer-events: none; transition: opacity 0.15s;
+  opacity: 0; pointer-events: none; transition: opacity var(--t-press);
   white-space: nowrap;
 }
 .wave.hovering .wave-tip { opacity: 1; }
@@ -649,7 +667,7 @@ body.busy #detail { color: var(--accent); }
 .map-cells i {
   display: block; height: 34px; border-radius: 2px;
   background: color-mix(in srgb, var(--cell-on) calc(var(--v, 0) * 72%), var(--cell));
-  transition: background 0.2s;
+  transition: background var(--t-press);
 }
 .map-cells i.in { background: color-mix(in srgb, var(--accent) calc(18% + var(--v, 0) * 82%), var(--cell)); }
 @media (hover: hover) { .map-cells i:hover { outline: 1px solid var(--text); outline-offset: -1px; } }
@@ -701,7 +719,7 @@ body.busy #detail { color: var(--accent); }
   margin: 14px 0 0; padding: 10px 22px;
   background: var(--panel-2);
   border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
-  transition: top 0.45s var(--ease);
+  transition: top var(--t-move) var(--ease);
 }
 .find { flex: 1 1 220px; margin: 0; }
 .find input { height: 34px; padding-right: 104px; background: var(--bg); font-size: 14px; }
@@ -714,8 +732,8 @@ body.busy #detail { color: var(--accent); }
 .switch { display: inline-flex; align-items: center; gap: 9px; padding: 0 6px; font: 600 10.5px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); cursor: pointer; user-select: none; }
 .switch input { position: absolute; opacity: 0; pointer-events: none; }
 .switch .ts-icon { display: none; width: 16px; height: 16px; }
-.switch .track { width: 32px; height: 18px; border-radius: 3px; background: var(--cell); border: 1px solid var(--line-strong); position: relative; transition: background 0.25s; flex: none; }
-.switch .knob { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 2px; background: var(--muted); transition: transform 0.25s var(--ease), background 0.25s; }
+.switch .track { width: 32px; height: 18px; border-radius: 3px; background: var(--cell); border: 1px solid var(--line-strong); position: relative; transition: background var(--t-press); flex: none; }
+.switch .knob { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 2px; background: var(--muted); transition: transform var(--t-press) var(--ease), background var(--t-press); }
 .switch input:checked ~ .track { background: var(--accent-soft); border-color: var(--accent); }
 .switch input:checked ~ .track .knob { transform: translateX(14px); background: var(--accent); }
 .switch input:focus-visible ~ .track { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -724,7 +742,7 @@ body.busy #detail { color: var(--accent); }
 
 .tool-actions { display: flex; gap: 6px; }
 .menu { position: relative; }
-.menu .chev { width: 13px; height: 13px; transition: transform 0.25s var(--ease); }
+.menu .chev { width: 13px; height: 13px; transition: transform var(--t-pop) var(--ease); }
 .menu.open .chev { transform: rotate(180deg); }
 .menu-pop {
   position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
@@ -732,10 +750,18 @@ body.busy #detail { color: var(--accent); }
   border: 1px solid var(--line-strong); border-radius: var(--r);
   background: var(--panel-2);
   box-shadow: var(--shadow-pop);
-  opacity: 0; transform: translateY(-4px); pointer-events: none; visibility: hidden;
-  transition: opacity 0.2s, transform 0.2s var(--ease), visibility 0s 0.2s;
+  /* A menu unrolls from the edge it hangs from (the top, or the bottom when it opens above its
+     button) and rolls back up into it. Open, the clip stands clear of the shadow. */
+  -webkit-clip-path: inset(0 0 100% 0); clip-path: inset(0 0 100% 0);
+  pointer-events: none; visibility: hidden;
+  transition: -webkit-clip-path var(--t-press) var(--ease), clip-path var(--t-press) var(--ease), visibility 0s var(--t-press);
 }
-.menu.open .menu-pop { opacity: 1; transform: none; pointer-events: auto; visibility: visible; transition: opacity 0.2s, transform 0.2s var(--ease); }
+.menu-pop.up { -webkit-clip-path: inset(100% 0 0 0); clip-path: inset(100% 0 0 0); }
+.menu.open .menu-pop, .menu-pop.floating.open {
+  -webkit-clip-path: inset(-12px -40px -60px -40px); clip-path: inset(-12px -40px -60px -40px);
+  pointer-events: auto; visibility: visible;
+  transition: -webkit-clip-path var(--t-pop) var(--ease), clip-path var(--t-pop) var(--ease);
+}
 .menu-pop button {
   width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 16px;
   padding: 9px 10px; border: 0; border-radius: var(--r-sm); background: transparent; text-align: left;
@@ -743,7 +769,8 @@ body.busy #detail { color: var(--accent); }
 }
 .menu-pop button b { font-weight: 600; }
 .menu-pop button span { font: 11px var(--font-mono); color: var(--faint); }
-.menu-pop button:hover, .menu-pop button:focus-visible { background: var(--panel-3); }
+.menu-pop button { transition: background var(--t-press); }
+.menu-pop button:hover, .menu-pop button:focus-visible, .menu-pop button:active { background: var(--panel-3); }
 
 .log-head {
   display: grid; grid-template-columns: 72px 168px minmax(0, 1fr); gap: 0 18px;
@@ -764,7 +791,6 @@ body.busy #detail { color: var(--accent); }
 .para.cont { padding-top: 8px; }
 .para-body { display: contents; }
 .para > p, .para-body > p { grid-column: 3; }
-.para.fresh { animation: rise 0.5s var(--ease) both; }
 .ts {
   grid-column: 1; justify-self: start; align-self: start;
   height: max-content; margin-top: 3px; padding: 1px 0;
@@ -795,10 +821,8 @@ body.busy #detail { color: var(--accent); }
 .who[data-hue="other"] { --spk: var(--faint); }
 .who-edit { grid-column: 2; align-self: start; width: 100%; margin: 0; padding: 3px 6px; font: 700 13px/1.3 var(--font-ui); color: var(--text); background: var(--bg); border: 1px solid var(--accent); border-radius: var(--r-sm); outline: none; }
 
-.seg { border-radius: 2px; transition: background 0.3s, box-shadow 0.3s; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.seg { border-radius: 2px; transition: background var(--t-press), box-shadow var(--t-press); -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .seg.draft { color: var(--muted); }
-.seg.fresh { animation: ink 0.9s var(--ease) both; }
-@keyframes ink { from { opacity: 0; } }
 .transcript.playable .seg { cursor: pointer; }
 @media (hover: hover) { .transcript.playable .seg:hover { background: var(--panel-3); box-shadow: 0 0 0 2px var(--panel-3); } }
 .seg.playing { background: var(--accent-soft) !important; box-shadow: 0 0 0 2px var(--accent-soft) !important; }
@@ -817,14 +841,14 @@ body.busy #detail { color: var(--accent); }
 
 .empty { display: grid; gap: 12px; padding: 22px 22px 22px calc(22px + 72px + 18px); }
 .empty p { margin: 0 0 4px; color: var(--muted); font: 12px var(--font-mono); letter-spacing: 0.04em; }
-.skeleton { height: 12px; border-radius: 2px; background: linear-gradient(110deg, var(--panel-2) 30%, var(--panel-3) 50%, var(--panel-2) 70%); background-size: 250% 100%; animation: shimmer 1.8s linear infinite; }
+.skeleton { height: 12px; border-radius: 2px; --sweep: var(--panel-2); --sweep-lit: var(--panel-3); }
 .skeleton:nth-child(3) { width: 92%; } .skeleton:nth-child(4) { width: 97%; } .skeleton:nth-child(5) { width: 64%; }
 
 .tail { display: flex; align-items: center; gap: 12px; padding: 14px 22px 18px calc(22px + 72px + 18px); font: 11.5px var(--font-mono); letter-spacing: 0.04em; color: var(--accent); }
 .tail-bars { display: inline-flex; align-items: center; gap: 3px; height: 16px; }
-.tail-bars i { width: 3px; height: 100%; border-radius: 1px; background: var(--accent); animation: eq 0.8s ease-in-out infinite alternate; transform-origin: center; }
-@keyframes eq { from { transform: scaleY(0.4); } to { transform: scaleY(1.1); } }
-.tail-bars i:nth-child(2) { animation-delay: -0.2s; } .tail-bars i:nth-child(3) { animation-delay: -0.5s; } .tail-bars i:nth-child(4) { animation-delay: -0.35s; }
+.tail-bars i { width: 3px; height: 55%; border-radius: 1px; background: var(--accent); }
+/* (still: the words arriving above are what shows the work going on) */
+.tail-bars i:nth-child(2) { height: 100%; } .tail-bars i:nth-child(3) { height: 40%; } .tail-bars i:nth-child(4) { height: 75%; }
 
 .reader-foot { display: flex; justify-content: center; padding: 22px; }
 
@@ -842,7 +866,7 @@ body.busy #detail { color: var(--accent); }
   position: relative;
   display: grid; grid-template-columns: 40px minmax(0, 1fr) 88px 88px 34px; gap: 0 18px; align-items: center;
   padding: 10px 22px;
-  transition: background 0.15s;
+  transition: background var(--t-press);
 }
 @media (hover: hover) { .entry:hover { background: var(--panel-2); } }
 .entry .art { --size: 40px; width: 40px; }
@@ -858,25 +882,26 @@ body.busy #detail { color: var(--accent); }
 
 /* ---------- floating bits ---------- */
 
-.jump { position: fixed; z-index: 30; left: calc(50% + var(--rail-w) / 2); bottom: calc(26px + var(--bar) + var(--tabs)); transform: translateX(-50%); animation: pop 0.35s var(--ease) both; }
-@keyframes pop { from { opacity: 0; transform: translate(-50%, 10px); } }
+.jump { position: fixed; z-index: 30; left: calc(50% + var(--rail-w) / 2); bottom: calc(26px + var(--bar) + var(--tabs)); transform: translateX(-50%); animation: pop var(--t-pop) var(--ease) both; }
+@keyframes pop { from { opacity: 0; transform: translate(-50%, 12px); } }
 .jump .icon { color: var(--accent); }
 
 .toast {
   position: fixed; z-index: 95; left: calc(50% + var(--rail-w) / 2); bottom: calc(28px + var(--bar) + var(--tabs));
   display: flex; align-items: center; gap: 14px;
-  transform: translate(-50%, 20px); opacity: 0;
+  transform: translate(-50%, 12px); opacity: 0;
   padding: 10px 16px; border-radius: var(--r);
   background: var(--panel-3); color: var(--text); border: 1px solid var(--line-strong);
   box-shadow: var(--shadow-pop), inset 3px 0 0 var(--accent);
   font: 500 13px var(--font-mono);
-  transition: opacity 0.25s, transform 0.35s var(--ease);
+  /* up from the bottom, where it lives, and back down a step quicker */
+  transition: opacity var(--t-press) var(--ease), transform var(--t-press) var(--ease);
   pointer-events: none;
   max-width: calc(100% - 32px);
 }
-.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.show { opacity: 1; transform: translate(-50%, 0); transition-duration: var(--t-pop); }
 .toast.has-action.show { pointer-events: auto; }
-#toast-action { padding: 4px 2px; border: 0; background: none; color: var(--accent); font: 700 11.5px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; }
+#toast-action { position: relative; padding: 4px 2px; border: 0; background: none; color: var(--accent); font: 700 11.5px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; }
 
 .sel-pill { position: fixed; z-index: 50; left: calc(50% + var(--rail-w) / 2); bottom: calc(26px + var(--bar) + var(--tabs)); transform: translateX(-50%); padding: 0 6px 0 4px; gap: 4px; }
 .sel-pill button { height: 38px; padding: 0 12px; border: 0; background: transparent; color: var(--accent); font: inherit; font-weight: 700; }
@@ -1018,7 +1043,7 @@ body.busy #detail { color: var(--accent); }
 }
 
 /* "[Speech in Norwegian]": a note, not words anyone said */
-.seg.foreign { color: var(--faint); font-style: italic; font-size: 0.92em; }
+.seg.foreign { color: var(--faint); font-size: 0.92em; }
 
 /* ============================================================
    Clean-up studio (ui/studio.js)
@@ -1046,7 +1071,7 @@ body.busy .studio-status p { color: var(--accent); }
   display: grid; gap: 3px; text-align: left;
   padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-sm);
   background: var(--panel-2); box-shadow: inset 3px 0 0 var(--spk, var(--spk-0));
-  transition: background 0.15s, border-color 0.15s;
+  transition: background var(--t-press), border-color var(--t-press);
 }
 .finding:hover { background: var(--panel-3); border-color: var(--line-strong); }
 .finding b { font: 600 14px/1.3 var(--font-ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1110,7 +1135,7 @@ body.busy .studio-status p { color: var(--accent); }
 .mods.bypassed { opacity: 0.45; pointer-events: none; }
 .mods-group { grid-column: 1 / -1; margin: 6px 0 -2px; font: 600 10.5px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
 .mods-group:first-child { margin-top: 0; }
-.mod { display: grid; gap: 12px; align-content: start; padding: 14px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel); transition: border-color 0.2s, box-shadow 0.2s; }
+.mod { display: grid; gap: 12px; align-content: start; padding: 14px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel); transition: border-color var(--t-press), box-shadow var(--t-press); }
 .mod.on { border-color: var(--line-strong); box-shadow: inset 2px 0 0 var(--teal); }
 .mod-head { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start; }
 .mod-switch { padding: 0; margin-top: 2px; }
@@ -1213,9 +1238,8 @@ body:not(.view-transcribe) .pipeline-label, body:not(.view-transcribe) .steps, b
 body.has-player { --bar: 72px; }
 
 .pod, .pod-view { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-content: start; }
-.pod-card { padding: 0; animation: none; }
-/* a screen rises once when it is opened, not every time something in it is redrawn */
-.pod-view:not(.hidden) { animation: rise 0.4s var(--ease) both; }
+.pod-card { padding: 0; }
+/* A screen changes at once: no rise, no fade (see DESIGN.md). */
 .pod-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 16px; padding: 20px 22px 14px; }
 .pod-tools { display: flex; align-items: center; gap: 8px; }
 .pod-card > .hint { margin: 0 22px 16px; }
@@ -1226,11 +1250,12 @@ body.has-player { --bar: 72px; }
 .pod-empty p { margin: 0; max-width: 52ch; font-size: 14px; }
 .more { margin: 14px 22px 20px; }
 .back-link { display: inline-flex; align-items: center; gap: 4px; margin: 0 0 14px -5px; font: 600 10.5px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); text-decoration: none; }
-.back-link:hover { color: var(--text); }
+.back-link { position: relative; }
+.back-link:hover, .back-link:active { color: var(--text); }
 .back-link .icon { width: 15px; height: 15px; }
 .pod-card > .back-link { margin: 18px 0 -6px 17px; }
-.spinning .icon { animation: spin 0.9s linear infinite; }
-@keyframes spin { to { transform: rotate(-360deg); } }
+/* asking for what is new: the button rests until the answer is in (the line above it says so) */
+.spinning { color: var(--faint); pointer-events: none; }
 
 .tag {
   display: inline-block; margin-left: 8px; padding: 0 5px; vertical-align: 1px;
@@ -1247,7 +1272,7 @@ body.has-player { --bar: 72px; }
   display: grid; grid-template-columns: 44px minmax(0, 1fr) auto auto; gap: 0 14px; align-items: center;
   padding: 10px 12px 10px 22px;
   border-bottom: 1px solid var(--line);
-  transition: background 0.15s;
+  transition: background var(--t-press);
 }
 .ep-list > .ep:last-child { border-bottom: 0; }
 @media (hover: hover) { .ep:hover { background: var(--panel-2); } }
@@ -1267,6 +1292,10 @@ body.has-player { --bar: 72px; }
 .ep-bar { display: none; position: absolute; left: 80px; right: 0; bottom: -1px; height: 2px; }
 .ep.is-started .ep-bar, .ep.now .ep-bar { display: block; }
 .ep-bar span { display: block; height: 100%; background: var(--teal); }
+/* An episode's played part draws in along its length, once, the first time its list shows
+   (ui/pod.js); after that it changes as it is. */
+.draw-in { transform-origin: 0 50%; animation: draw-in var(--t-move) linear both; }
+@keyframes draw-in { from { transform: scaleX(0); } }
 .ep.now .ep-bar span { background: var(--accent); }
 .queue-now { padding-bottom: 6px; }
 .queue-now .kicker { margin: 0 22px 8px; color: var(--accent); }
@@ -1289,12 +1318,14 @@ body.has-player { --bar: 72px; }
 .tile-left { font: 11px var(--font-mono); color: var(--muted); }
 .tile .meter { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; margin: 0; border-radius: 0; }
 .tile .meter span { background: var(--teal); }
+.tile { transition: background var(--t-press); }
 .tile.now .meter span { background: var(--accent); }
 
 .show-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 16px 14px; padding: 2px 22px 22px; }
 .show-tile { position: relative; display: grid; gap: 8px; align-content: start; color: inherit; text-decoration: none; }
 .show-tile .art { width: 100%; }
-.show-tile:hover .art-img, .show-tile:hover .art-fallback { box-shadow: 0 0 0 1px var(--teal); }
+.show-tile:hover .art-img, .show-tile:hover .art-fallback, .show-tile:active .art-img, .show-tile:active .art-fallback { box-shadow: 0 0 0 1px var(--teal); }
+.show-tile:active .show-name { color: var(--text); }
 .show-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 12.5px; font-weight: 600; line-height: 1.3; }
 .show-count {
   position: absolute; z-index: 2; top: 6px; right: 6px;
@@ -1303,6 +1334,12 @@ body.has-player { --bar: 72px; }
   font: 600 10.5px var(--font-mono); color: var(--text);
   box-shadow: inset 2px 0 0 var(--teal);
 }
+
+/* A show's cover, tapped, travels to its place on the show's page (ui/pod.js travel, where the
+   browser has view transitions). The rest of the page changes at once, as screens do. */
+::view-transition-group(cover) { animation-duration: var(--t-move); animation-timing-function: var(--ease); }
+::view-transition-old(root), ::view-transition-old(cover) { display: none; }
+::view-transition-new(root), ::view-transition-new(cover) { animation: none; mix-blend-mode: normal; }
 
 .link-form { display: grid; gap: 16px; padding: 20px 22px; box-shadow: inset 3px 0 0 var(--accent); }
 .link-form .hint { margin-top: 8px; }
@@ -1348,16 +1385,18 @@ body.has-player { --bar: 72px; }
 .qr svg { display: block; width: 100%; height: 100%; }
 .notify-body { display: grid; gap: 10px; justify-items: start; padding: 0 22px 22px; }
 .notify-body .switch { padding: 0; }
+/* (two lines held while the device is checked, so the cards below stay where they are) */
+.notify-body .hint { min-height: 3em; }
+.pod-head .invisible { visibility: hidden; }
 
 /* ---------- the menu behind a row's three dots ---------- */
 
 .menu-pop.floating { position: fixed; z-index: 90; left: 0; top: 0; right: auto; min-width: 232px; max-width: calc(100vw - 16px); }
-.menu-pop.floating.open { opacity: 1; transform: none; pointer-events: auto; visibility: visible; transition: opacity 0.15s; }
 .menu-pop button.danger b { color: var(--danger); }
 
 /* ---------- the sheet: an episode, or the player opened up ---------- */
 
-.sheet-back { position: fixed; inset: 0; z-index: 70; background: color-mix(in srgb, var(--bg) 70%, transparent); }
+.sheet-back { position: fixed; inset: 0; z-index: 70; background: color-mix(in srgb, var(--bg) 70%, transparent); animation: shade-in var(--t-move) var(--ease); }
 .sheet-pane {
   position: fixed; z-index: 71; top: 0; right: 0; bottom: 0; width: min(470px, 100%);
   overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
@@ -1365,10 +1404,19 @@ body.has-player { --bar: 72px; }
   background: var(--panel); border-left: 1px solid var(--line-strong);
   box-shadow: var(--shadow-pop);
   outline: none;
-  animation: sheet-in 0.32s var(--ease) both;
+  /* In from the edge it lives at (the right; the bottom on a phone) and back to it, one motion
+     two ways (ui/dom.js). Let go short of closing, it slides back up. */
+  animation: sheet-in var(--t-move) var(--ease);
+  transition: transform var(--t-pop) var(--ease);
 }
-@keyframes sheet-in { from { opacity: 0; transform: translateX(28px); } }
-@keyframes sheet-up { from { opacity: 0; transform: translateY(36px); } }
+.sheet-pane.closing { animation: sheet-out var(--t-pop) var(--ease) forwards; pointer-events: none; }
+.sheet-back.closing { animation: shade-out var(--t-pop) var(--ease) forwards; pointer-events: none; }
+@keyframes sheet-in { from { transform: translateX(100%); } }
+@keyframes sheet-out { to { transform: translateX(100%); } }
+@keyframes sheet-up { from { transform: translateY(100%); } }
+@keyframes sheet-down { to { transform: translateY(100%); } }
+@keyframes shade-in { from { opacity: 0; } }
+@keyframes shade-out { to { opacity: 0; } }
 body.sheet-open { overflow: hidden; }
 .sheet-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .sheet-top .kicker { margin: 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1498,7 +1546,7 @@ a.sheet-show:hover { color: var(--text); }
   display: grid; grid-template-columns: minmax(170px, 1.1fr) auto minmax(200px, 2fr) auto; gap: 18px; align-items: center;
   padding: 0 max(18px, env(safe-area-inset-right)) 0 10px;
   background: var(--rail); border-top: 1px solid var(--line-strong);
-  animation: bar-in 0.4s var(--ease) both;
+  animation: bar-in var(--t-move) var(--ease) both;
 }
 @keyframes bar-in { from { transform: translateY(100%); } }
 .pb-line { display: none; }
@@ -1586,6 +1634,7 @@ a.sheet-show:hover { color: var(--text); }
   .link-box { grid-template-columns: minmax(0, 1fr); padding: 4px 16px 18px; }
   .link-form { padding: 16px; }
   .sheet-pane { left: 0; width: 100%; border-left: 0; padding: calc(12px + env(safe-area-inset-top)) 18px calc(26px + env(safe-area-inset-bottom)); animation-name: sheet-up; }
+  .sheet-pane.closing { animation-name: sheet-down; }
   .np-art { --size: 280px; width: min(300px, 72vw); }
 }
 
@@ -1596,12 +1645,71 @@ a.sheet-show:hover { color: var(--text); }
 button, a, label, select, summary, input[type="range"] { touch-action: manipulation; }
 .nav, .tabbar, .playbar, .play, .icon-btn, .tile, .show-tile, .ep-play, .sheet-top { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
 
+/* A press: a step in ground or colour, on the shortest step, never a change of size. (An
+   iPhone shows :active only on a page that listens for touches: ui/dom.js does.) */
+.ep:has(> .ep-main:active), .found:has(> .ep-main:active) { background: var(--panel-2); }
+.ep.now:has(> .ep-main:active) { background: var(--panel-3); }
+.tile:has(> .tile-main:active) { background: var(--panel-3); }
+@supports not selector(:has(a)) { .ep-main:active, .tile-main:active, .found .ep-main:active { opacity: 0.6; } }
+.pb-now:active { background: var(--panel); }
+.hit-main:active { background: var(--panel-2); color: var(--text); }
+.hit-ep-main:active .hit-ep-title, .show-about:active { color: var(--muted); }
+.chapter { transition: background var(--t-press); }
+.chapter:active { background: var(--panel-2); }
+.tabbar a:active, .nav a:active { color: var(--text); }
+.search-entry:active { border-color: var(--teal); color: var(--muted); }
+.chip-btn:active, .mini-seg button:active, .names-list button:active, .preset:active, .tab:active { color: var(--text); background: var(--panel-3); }
+.note-time:active { border-color: var(--teal); }
+a.sheet-show:active { color: var(--text); }
+
 /* iOS zooms the page into any field set smaller than this */
 @media (hover: none) and (pointer: coarse) {
   input[type="text"], input[type="search"], input:not([type]), textarea, select { font-size: 16px !important; }
-  .ep-main:active, .tile-main:active, .show-tile:active, .pb-now:active { opacity: 0.6; }
-  .ep-order .icon-btn.tiny { width: 38px; height: 44px; }
+}
+
+/* Made for a thumb: whatever is touched is at least 44 px both ways. Where the drawn control is
+   smaller and has room around it, its reach is widened into that room (the ::after below), so
+   the page keeps its spacing; where controls sit closer than that, they are made 44. */
+@media (pointer: coarse) {
+  .ep-play, .ep-more, #latest-refresh, .back-link, .note-time, a.ext, .file-pick, .paste,
+  #pod .btn, .ep-sheet .btn.small, #pod .segmented label, #toast-action { position: relative; }
+  .ep-play::after, .ep-more::after, #latest-refresh::after, .back-link::after, .note-time::after, a.ext::after,
+  .file-pick::after, .paste::after, #pod .btn::after, .ep-sheet .btn.small::after, #pod .segmented label::after, #toast-action::after {
+    content: ""; position: absolute;
+    top: min(0px, calc(50% - 22px)); bottom: min(0px, calc(50% - 22px));
+    left: min(0px, calc(50% - 22px)); right: min(0px, calc(50% - 22px));
+  }
+  /* (the show's name above an episode clips what overflows it: reached by its padding) */
+  a.sheet-show { padding: 14px 0; margin: -14px 0; }
+  .back-link { z-index: 2; }
+  .under .file-pick { display: inline-block; white-space: nowrap; }
+  .tile .play { width: 44px; height: 44px; }
+  #pod .segmented { row-gap: 10px; }
+  #pod .segmented span { min-width: 44px; text-align: center; }
+  #pod .actions, .ep-sheet .actions { row-gap: 12px; }
+  .ep-main, .found .ep-main, .hit-ep-main { min-height: 44px; }
+  .hit-ep-main { align-content: center; }
+  .ep-order .icon-btn.tiny { width: 44px; height: 44px; }
   .ep-more { width: 34px; height: 44px; }
+  .menu-pop button { min-height: 44px; }
+  .sheet-top .icon-btn { width: 44px; height: 44px; margin: -11px -13px -11px 0; }
+  .pb-transport .jump-btn { width: 44px; height: 44px; }
+  .show-search input { height: 44px; }
+  /* switches one under another: a row each, the air inside it */
+  #pod .switch.setting { min-height: 44px; }
+  /* the now-playing sheet's own controls: a thumb's width and height each. Seven speeds do not
+     fit at that width, so the two at the ends are left to the minus and plus beside them. */
+  .np-speeds .icon-btn { width: 44px; height: 44px; }
+  .np-speeds .mini-seg button { min-height: 44px; }
+  .np-speeds .mini-seg button:first-child, .np-speeds .mini-seg button:last-child { display: none; }
+  .np-sleeps button, .np-trims button { min-height: 44px; min-width: 44px; }
+  .np-sleeps, .np-trims { gap: 8px; }
+  .np .switch.setting { min-height: 44px; }
+  .np-actions .btn { height: 44px; }
+  .np-next-all { padding: 12px 0; margin: -12px 0; }
+  .show-opts { gap: 0; }
+  .show-opts .segmented { margin: 4px 0; }
+  .notify-body { gap: 4px; }
 }
 
 /* From the home screen the page runs under the status bar, whose text is always white there:
