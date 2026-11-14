@@ -75,6 +75,9 @@ export class Player extends EventTarget {
     this.savedAt = 0;
     this.busy = false;
     try { const v = Number(localStorage.getItem(VOLUME)); if (v > 0 && v <= 1) audio.volume = v; } catch {}
+    // Media to be listened to, with the screen locked too (iOS 17 and later ask; left to guess,
+    // they may treat a page's audio as sound effects, which go quiet in the background).
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
 
     const on = (type, fn) => audio.addEventListener(type, fn);
     on('loadedmetadata', () => this.arrive());
@@ -311,10 +314,13 @@ export class Player extends EventTarget {
       this.source = null;
       return this.play(this.item, { at: this.store.progress(this.item.id)?.done ? 0 : at });
     }
-    // Paused a while with the screen locked, iOS may have let go of the audio: it is given it again
-    // (still inside the press, so it may play), to start where it was.
+    // Paused with the screen locked, and played again from the lock screen or the AirPods without
+    // the app being opened, iOS lets the audio run on with its sound switched off (the time moves,
+    // nothing is heard). Given the audio afresh, inside the press, it switches the sound on again:
+    // the same file, from where it was. The same when iOS let go of the audio altogether.
     const a = this.audio;
-    if (this.pausedAt && (a.readyState === 0 || a.networkState === 3)) {
+    const away = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    if (this.pausedAt && (away || a.readyState === 0 || a.networkState === 3)) {
       this.wanted = Math.max(0, this.time - (this.store.settings.rewind ? rewindFor(Date.now() - this.pausedAt) : 0));
       this.asks = 0;
       a.src = this.source.src;

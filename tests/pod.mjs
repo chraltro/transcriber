@@ -363,6 +363,20 @@ async function run(name, options) {
       await press('play');
       await playing(1);
       check(true, 'and "pause" and "play" do as they say when the state is right');
+      // With the app in the background (the screen locked), play is given the audio afresh, from
+      // where it was paused: iOS otherwise runs it on without sound.
+      await page.evaluate(() => Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }));
+      await page.waitForTimeout(1100);
+      await press('pause');
+      await page.waitForFunction(() => document.querySelector('#audio').paused, null, { timeout: 5000 });
+      const at = (await audio()).t;
+      await page.evaluate(() => { window.__loads = 0; document.querySelector('#audio').addEventListener('loadstart', () => { window.__loads++; }); });
+      await page.waitForTimeout(1100);
+      await press('play');
+      await playing(Math.max(0.5, at - 1));
+      const again = { ...(await audio()), loads: await page.evaluate(() => window.__loads) };
+      check(again.loads >= 1 && !again.paused && again.t >= at - 1 && again.t < at + 6, `played again from the lock screen, the audio is given afresh and carries on where it was (${again.loads} load, ${at.toFixed(1)} s to ${again.t.toFixed(1)} s)`);
+      await page.evaluate(() => { delete document.visibilityState; });
     }
     await page.click('#pb-play');
 
