@@ -324,7 +324,8 @@ const dispatch = process.env.GH_DISPATCH_TOKEN ? async () => {
 const enhance = createEnhance({ dataDir: DATA, authorized: (req) => authorized(req, ENHANCE_WORKFLOW), log, site: SITE_URL, dispatch, key: process.env.ENHANCE_KEY || '' });
 // The podcast side: followed shows, positions and queue in step across devices, feeds read here
 // (server/pod.mjs). SYNC_KEY fixes the library's key; without it the first device to ask sets it.
-const pod = createPod({ dataDir: DATA, log, findFeed, seeds: SHOWS, key: process.env.SYNC_KEY || '', pollMinutes: POLL_MIN, allowPrivate: process.env.POD_ALLOW_PRIVATE === '1', freshSeconds: Number(process.env.POD_FRESH_SECONDS ?? 120),
+// (POD_SEED=0: the built-in shows are not followed from the start, for tests.)
+const pod = createPod({ dataDir: DATA, log, findFeed, seeds: process.env.POD_SEED === '0' ? [] : SHOWS, key: process.env.SYNC_KEY || '', pollMinutes: POLL_MIN, allowPrivate: process.env.POD_ALLOW_PRIVATE === '1', freshSeconds: Number(process.env.POD_FRESH_SECONDS ?? 120),
   transcribed: async () => new Set((await readIndex()).entries.map((e) => e.id)),
   workflow: async (req) => (req.headers.authorization ? authorized(req, WORKFLOW) : false),
   lookup: async (host) => (await dnsLookup(host, { all: true })).map((a) => a.address) });

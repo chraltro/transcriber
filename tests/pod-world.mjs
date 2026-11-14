@@ -134,7 +134,7 @@ export async function startWorld({ audioSeconds = 300 } = {}) {
 
   const port = await new Promise((resolve) => { const s = http.createServer().listen(0, () => { const { port: free } = s.address(); s.close(() => resolve(free)); }); });
   const logs = [];
-  const app = spawn(process.execPath, [path.join(ROOT, 'server/main.mjs')], { env: { ...process.env, DATA_DIR: data, PORT: String(port), POLL_MINUTES: '60', POD_ALLOW_PRIVATE: '1', POD_FRESH_SECONDS: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const app = spawn(process.execPath, [path.join(ROOT, 'server/main.mjs')], { env: { ...process.env, DATA_DIR: data, PORT: String(port), POLL_MINUTES: '60', POD_ALLOW_PRIVATE: '1', POD_FRESH_SECONDS: '0', POD_SEED: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
   app.stdout.on('data', (d) => logs.push(String(d)));
   app.stderr.on('data', (d) => logs.push(String(d)));
   const base = `http://localhost:${port}`;
