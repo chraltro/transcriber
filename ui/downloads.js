@@ -15,6 +15,7 @@ export class Downloads extends EventTarget {
     // Ids whose stored file turned out to be gone (the browser cleared it): lost, not removed by
     // the listener. What keeps episodes by itself (ui/autosave.js) tells the two apart by this.
     this.lost = new Set();
+    this.upgrading = new Set(); // saved copies being swapped for the server's (upgrade)
   }
 
   has(id) { return !!this.index[id]; }
@@ -37,7 +38,7 @@ export class Downloads extends EventTarget {
     for (const id of Object.keys(this.index)) if (!stored.has(keyOf(id))) { this.lost.add(id); delete this.index[id]; changed = true; }
     for (const url of stored) {
       const id = decodeURIComponent(url.split('id=')[1] || '');
-      if (!this.index[id] && !this.active.has(id)) await cache.delete(url);
+      if (!this.index[id] && !this.active.has(id) && !this.upgrading.has(id.replace(/&next$/, ''))) await cache.delete(url);
     }
     if (changed) this.save();
   }
@@ -85,6 +86,37 @@ export class Downloads extends EventTarget {
       try { await (await caches.open(CACHE)).delete(keyOf(ep.id)); } catch {}
       this.dispatchEvent(new Event('change'));
       if (err.name !== 'AbortError') throw err;
+    }
+  }
+
+  // A copy saved from the podcast's own host, once the library's server has the copy its
+  // transcript was made from: that one is saved in its place, so the transcript lines up with
+  // what plays and its ads are skipped (a host puts other ads in each download). The old copy
+  // stays until the new one is whole; if the server's cannot be had, nothing changes.
+  async upgrade(id) {
+    const had = this.index[id];
+    if (!had || had.from === 'server' || this.active.has(id) || this.upgrading.has(id)) return false;
+    this.upgrading.add(id);
+    const next = `${keyOf(id)}&next`;
+    let cache;
+    try {
+      cache = await caches.open(CACHE);
+      const { response, from } = await this.open(had.ep, AbortSignal.timeout(20 * 60e3));
+      if (from !== 'server') { response.body?.cancel?.().catch(() => {}); return false; }
+      let bytes = 0;
+      const counted = response.body.pipeThrough(new TransformStream({ transform: (chunk, out) => { bytes += chunk.length; out.enqueue(chunk); } }));
+      await cache.put(next, new Response(counted, { headers: { 'content-type': response.headers.get('content-type') || 'audio/mpeg' } }));
+      if (!this.index[id]) { await cache.delete(next); return false; } // removed meanwhile
+      await cache.put(keyOf(id), await cache.match(next));
+      await cache.delete(next);
+      this.index[id] = { ...this.index[id], bytes, from: 'server', at: Date.now() };
+      this.save();
+      return true;
+    } catch {
+      try { await cache?.delete(next); } catch {}
+      return false;
+    } finally {
+      this.upgrading.delete(id);
     }
   }
 

@@ -419,6 +419,42 @@ async function run(name, options) {
     }
     await page.click('#pb-play');
 
+    /* ---------- a saved copy from the podcast's host, once the server has transcribed it ---------- */
+    // Its ads are not the server's: online, the server's copy plays (ads skipped, the transcript in
+    // step), and the saved copy is swapped for the server's in the background.
+    {
+      await row('Why every container').locator('.ep-more').click();
+      await page.click('#row-menu button:has-text("Save for offline")');
+      await page.waitForSelector('#latest-list .ep:has-text("Why every container") .tag:has-text("Saved")', { timeout: 30000 });
+      await page.evaluate((id) => { const x = JSON.parse(localStorage.getItem('pod-downloads')); x[id].from = 'origin'; localStorage.setItem('pod-downloads', JSON.stringify(x)); }, world.transcribed);
+      await page.reload();
+      await page.waitForSelector('#playbar:not(.hidden)');
+      await page.waitForFunction((id) => JSON.parse(localStorage.getItem('pod-downloads') || '{}')[id]?.from === 'server', world.transcribed, { timeout: 30000 }).catch(() => {});
+      const swapped = await page.evaluate((id) => JSON.parse(localStorage.getItem('pod-downloads') || '{}')[id]?.from, world.transcribed);
+      check(swapped === 'server', `a copy saved from the podcast's host is swapped for the server's once the server has it (${swapped})`);
+      await page.evaluate((id) => { const x = JSON.parse(localStorage.getItem('pod-downloads')); x[id].from = 'origin'; localStorage.setItem('pod-downloads', JSON.stringify(x)); }, world.transcribed);
+      await page.reload();
+      await page.waitForSelector('#playbar:not(.hidden)');
+      await page.click('#pb-play');
+      await playing(1);
+      const src = (await audio()).src;
+      const from = await page.evaluate((id) => JSON.parse(localStorage.getItem('pod-downloads') || '{}')[id]?.from, world.transcribed);
+      // (Either the server's stream, or the saved copy once it has been swapped already: both are the server's.)
+      check(src.endsWith(`/library/${world.transcribed}.mp3`) || (src.startsWith('blob:') && from === 'server'), `played meanwhile, it is the server's copy that plays (${src.startsWith('blob:') ? `the saved copy, from ${from}` : src.split('/').slice(-2).join('/')})`);
+      await page.click('#pb-play');
+      await page.waitForFunction(() => document.querySelector('#audio').paused);
+      // (Not saved any more, for what follows.)
+      await row('Why every container').locator('.ep-more').click();
+      await page.click('#row-menu button:has-text("Remove the saved copy")');
+      await page.waitForFunction(() => !document.querySelector('#latest-list .ep:first-child .tag:not(.hot)')?.textContent.includes('Saved'), null, { timeout: 5000 }).catch(() => {});
+      // ...and the player on the server's stream again, where it was.
+      const t0 = (await audio()).t;
+      await page.click('#pb-play');
+      await playing(Math.max(0.5, t0 - 1));
+      await page.click('#pb-play');
+      await page.waitForFunction(() => document.querySelector('#audio').paused);
+    }
+
     /* ---------- searching every transcript ---------- */
     // (The world's one transcript says "It took ten years of committees to agree on twenty feet
     // and forty feet" at 2:20, "a steel box" at 0:12 and "the quay" in the sentence after.)

@@ -158,8 +158,14 @@ export class Player extends EventTarget {
   async resolve(item) {
     if (item.file || item.blob) return this.quick(item);
     if (this.downloads.has(item.id)) {
+      // A copy saved from the podcast's own host has other ads than the server's, which its
+      // transcript was made from: online, the server's is played (ads skipped, the transcript in
+      // step); offline, the saved one.
+      const synced = this.downloads.info(item.id)?.from === 'server';
+      const server = !synced && navigator.onLine !== false ? this.remote(item) : null;
+      if (server?.kind === 'server') return server;
       const blob = await this.downloads.blob(item.id);
-      if (blob) return { src: URL.createObjectURL(blob), kind: 'download', synced: this.downloads.info(item.id)?.from === 'server', own: true };
+      if (blob) return { src: URL.createObjectURL(blob), kind: 'download', synced, own: true };
     }
     if (item.key) {
       const blob = await this.cachedAudio(item.key).catch(() => null);

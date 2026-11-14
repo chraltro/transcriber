@@ -913,6 +913,7 @@ body:not([data-tab="transcript"]) .jump, body:not([data-tab="transcript"]) .sel-
 .jump { position: fixed; z-index: 30; left: calc(50% + var(--rail-w) / 2); bottom: calc(26px + var(--bar) + var(--tabs)); transform: translateX(-50%); animation: pop var(--t-pop) var(--ease) both; }
 @keyframes pop { from { opacity: 0; transform: translate(-50%, 12px); } }
 .jump .icon { color: var(--accent); }
+.jump { white-space: nowrap; }
 
 .toast {
   position: fixed; z-index: 95; left: calc(50% + var(--rail-w) / 2); bottom: calc(28px + var(--bar) + var(--tabs));

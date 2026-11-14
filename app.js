@@ -2009,6 +2009,20 @@ const podcasts = new PodStore({
   },
 });
 const downloads = new Downloads({ open: openEpisodeAudio });
+// Saved copies from a podcast's own host are swapped for the server's once it has transcribed
+// them (ui/downloads.js upgrade), one at a time, when the transcripts are known and online.
+let upgradingSaved = false;
+async function upgradeSaved() {
+  if (upgradingSaved || navigator.onLine === false || navigator.connection?.saveData) return;
+  upgradingSaved = true;
+  try {
+    for (const id of downloads.ids) {
+      if (downloads.info(id)?.from !== 'server' && podcasts.transcripts.get(id)?.audio) await downloads.upgrade(id);
+    }
+  } finally { upgradingSaved = false; }
+}
+podcasts.addEventListener('transcripts', () => upgradeSaved());
+window.addEventListener('online', () => upgradeSaved());
 const player = new Player({ audio, store: podcasts, downloads, cachedAudio, adsFor, quietFor, shapeFor });
 // The newest episodes of the shows that ask for it, saved on this device by themselves.
 const autosave = new Autosave({ store: podcasts, downloads, player });
