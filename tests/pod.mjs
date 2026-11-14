@@ -112,10 +112,20 @@ async function run(name, options) {
     check((await page.locator('#show-list .ep').count()) === 3, 'a show can be looked at before it is followed');
     await page.click('#show-head .btn.primary');
     await page.waitForSelector('#show-head .btn:has-text("Following")');
-    // Its new episodes transcribed on the server, and the last three as well.
-    await page.click('#show-head .show-opts .switch:has-text("Transcribe new episodes")');
-    await page.click('#show-head .backfill label:has-text("3")');
+    // Its new episodes transcribed on the server, and the last three as well: in the show's own
+    // settings, behind a button, so the page is the show and its episodes.
+    check(!(await page.locator('#show-head .switch, #show-head .segmented').count()) && await page.locator('#show-head .show-settings').isVisible(), "a show's page carries its settings behind a button, not on the page");
+    await page.click('#show-head .show-settings');
+    await page.waitForSelector('.show-sheet .switch');
+    await page.click('.show-sheet .switch:has-text("Transcribe new episodes")');
+    await page.click('.show-sheet .backfill label:has-text("3")');
     await page.waitForTimeout(400);
+    await shot('3b-show-settings');
+    await noSideScroll('show settings');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.show-sheet', { state: 'detached' });
+    const showSays = await page.locator('#show-head .show-settings').textContent();
+    check(/Show settings.*transcribed/.test(showSays), `and the button says what is on (${showSays})`);
     await shot('3-show');
     await noSideScroll('show');
     await page.locator('#show-list .ep', { hasText: 'Kaldtvannskorallene' }).locator('.ep-main').click();
@@ -169,24 +179,44 @@ async function run(name, options) {
     /* ---------- the player opened up ---------- */
     await page.click('#pb-open');
     await page.waitForSelector('.np');
+    // Under the transport, one row of buttons, each saying where its control stands; a tap opens
+    // that control under the row, one at a time, and a second tap puts it away.
+    const tools = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.np-tool')].map((b) => [b.dataset.tool, b.querySelector('.np-tool-value').textContent])));
+    const panelOpen = () => page.evaluate(() => [...document.querySelectorAll('.np-panel')].filter((x) => !x.classList.contains('hidden')).map((x) => x.dataset.tool).join());
+    const t0 = await tools();
+    check(t0.speed === '1×' && t0.sleep === 'Off' && t0.trim === 'Off' && t0.skips === 'Skipped' && t0.next === 'None' && (await panelOpen()) === '', `under the transport, a row of buttons says where each control stands, none of them open (${JSON.stringify(t0)})`);
+    await page.click('.np-tool-speed');
+    check((await panelOpen()) === 'speed' && (await page.locator('.np-tool-speed').getAttribute('aria-expanded')) === 'true', 'the speed button opens the speed control');
     await page.click('.np-speeds button[data-rate="1.5"]');
     check((await audio()).rate === 1.5, 'speed 1.5');
+    check((await tools()).speed === '1.5×', `and its button says so (${(await tools()).speed})`);
+    await page.click('.np-tool-sleep');
+    check((await panelOpen()) === 'sleep', 'the sleep button opens the sleep timer in its place: one control at a time');
     await page.click('.np-sleeps button[data-sleep="30"]');
     check(/Pauses in (29:5\d|30:00)/.test(await page.locator('.np-sleep-state').textContent()), 'a sleep timer counts down');
+    check(/^(30|29) min$/.test((await tools()).sleep), `and its button says how long is left (${(await tools()).sleep})`);
+    await page.click('.np-tool-skips');
     const note = await page.locator('.np-skips-note').textContent();
-    check(/1 ad break marked/.test(note), `the sheet says what it knows about ads (${note})`);
+    check(/1 ad break marked/.test(note) && await page.locator('.np-skips-note').isVisible(), `the ads button opens what the sheet knows about ads (${note})`);
     await page.waitForTimeout(350);
     await shot('6-player');
     await noSideScroll('player');
+    await page.click('.np-tool-skips');
+    check((await panelOpen()) === '' && (await page.locator('.np-tool-skips').getAttribute('aria-expanded')) === 'false', 'pressed again, a button puts its control away');
+    await page.click('.np-tool-sleep');
     await page.click('.np-sleeps button[data-sleep="0"]');
+    await page.click('.np-tool-speed');
     await page.click('.np-speeds button[data-rate="1"]');
+    check((await tools()).sleep === 'Off' && (await tools()).speed === '1×', 'and the buttons follow the controls back');
 
     /* ---------- pauses, shortened ---------- */
     // (The world's audio stops for half a second every few seconds, and for two and a half
     // every 45: at 42.5, inside the ad, at 87.5, and so on.)
     const trimNote = () => page.locator('.np-trim-note').textContent();
-    check(/longest pause to leave alone/.test(await trimNote()), 'pauses are left as they are until a limit is picked');
+    await page.click('.np-tool-trim');
+    check(/longest pause to leave alone/.test(await trimNote()) && await page.locator('.np-trim-note').isVisible(), 'pauses are left as they are until a limit is picked');
     await page.click('.np-trims button[data-trim="0.8"]');
+    check((await tools()).trim === '0.8 s', `the pauses button says the limit picked (${(await tools()).trim})`);
     await page.waitForFunction(() => /longer than 0\.8 s/.test(document.querySelector('.np-trim-note').textContent), null, { timeout: 10000 });
     check(/^6 pauses in this episode are longer than 0\.8 s/.test(await trimNote()), `the server's list of where its copy goes quiet is used (${await trimNote()})`);
     await page.evaluate(() => { document.querySelector('#audio').currentTime = 81; });
@@ -462,6 +492,25 @@ async function run(name, options) {
     check(queued.join(' | ') === 'Kanonen i Oslofjorden | A bakery in 1911', `the queue, "play next" first (${queued.join(' | ')})`);
     await shot('7-queue');
     await noSideScroll('queue');
+    {
+      // What is saved on the device is Up next's other tab.
+      const qTabs = () => page.evaluate(() => [...document.querySelectorAll('#queue-tabs label')].map((l) => `${l.querySelector('span').firstChild.textContent} ${l.querySelector('.seg-count')?.textContent || ''}`.trim()).join(' | '));
+      check((await qTabs()) === 'Up next 2 | Saved 1', `Up next has two tabs, each with how many it holds (${await qTabs()})`);
+      await page.click('#queue-tabs label:has-text("Saved")');
+      await page.waitForSelector('#pod-queue .ep:has-text("Cranes, and the people under them")');
+      check((await page.evaluate(() => [location.hash, [...document.querySelectorAll('#pod-queue h2')].map((x) => x.textContent).join()].join(' '))) === '#/queue/saved Saved for offline', 'the Saved tab lists what is saved on this device, in its place, the tab in the address');
+      await page.click('#queue-tabs label:has-text("Up next")');
+      await page.waitForSelector('#pod-queue ol .ep');
+      // The same queue, from the now-playing sheet.
+      await page.click('#pb-open');
+      await page.waitForSelector('.np');
+      const upNext = (await tools()).next;
+      await page.click('.np-tool-next');
+      const listed = await page.locator('.np-next .np-next-title').allTextContents();
+      check(upNext === '2' && listed.join(' | ') === 'Kanonen i Oslofjorden | A bakery in 1911', `the player's Up next button says how many are queued and opens them (${upNext}: ${listed.join(' | ')})`);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.np', { state: 'detached' });
+    }
     // The episode ends: the next one starts by itself.
     await page.evaluate(() => { const x = document.querySelector('#audio'); x.currentTime = x.duration - 1.5; x.play().catch(() => {}); });
     await page.waitForFunction(() => document.querySelector('#pb-title').textContent === 'Kanonen i Oslofjorden', null, { timeout: 20000 });
@@ -494,12 +543,21 @@ async function run(name, options) {
       const chapterRows = () => page.evaluate(() => [...document.querySelectorAll('.ep-sheet .chapter')].map((b) => `${b.querySelector('.chapter-time').textContent} ${b.querySelector('.chapter-title').textContent}${b.getAttribute('aria-current') === 'true' ? ' *' : ''}`));
       await row('What the tide tables leave out').locator('.ep-main').click();
       await page.waitForSelector('.ep-sheet .chapter-list');
-      await page.waitForSelector('.ep-sheet .notes li');
+      await page.waitForSelector('.ep-sheet .notes li', { state: 'attached' });
       check((await chapterRows()).join(' | ') === '0:00 Low water | 1:15 Reading a tide table | 2:30 Storm surges | 3:45 What the harbour master knows', `an episode's chapters file is listed in its sheet, without what is kept out of the list (${(await chapterRows()).join(' | ')})`);
-      check(await page.evaluate(() => { const c = document.querySelector('.ep-sheet .chapters-box'); return c.compareDocumentPosition(document.querySelector('.ep-sheet .notes-box')) === Node.DOCUMENT_POSITION_FOLLOWING; }), 'the chapters come above the notes');
+      check(await page.evaluate(() => { const c = document.querySelector('.ep-sheet .chapters-box'); return c.compareDocumentPosition(document.querySelector('.ep-sheet .notes-box')) === Node.DOCUMENT_POSITION_FOLLOWING; }), 'the chapters come before the notes');
+      const epTabs = () => page.evaluate(() => ({ tabs: [...document.querySelectorAll('.ep-sheet .sheet-tabs:not(.hidden) label')].map((l) => l.textContent).join(' | '), chapters: !document.querySelector('.ep-sheet .chapters-box').classList.contains('hidden'), notes: !document.querySelector('.ep-sheet .notes-box').classList.contains('hidden'), under: document.querySelector('.ep-sheet .sheet-actions').compareDocumentPosition(document.querySelector('.ep-sheet .sheet-tabs')) === Node.DOCUMENT_POSITION_FOLLOWING }));
+      let tabs = await epTabs();
+      check(tabs.tabs === 'Chapters 4 | Notes' && tabs.chapters && !tabs.notes && tabs.under, `with chapters and notes, they are two tabs under the actions, the chapters open (${JSON.stringify(tabs)})`);
       await page.waitForTimeout(400);
       await shot('8b-chapters');
       await noSideScroll('chapters');
+      await page.click('.ep-sheet .sheet-tabs label:has-text("Notes")');
+      await page.waitForSelector('.ep-sheet .notes li');
+      tabs = await epTabs();
+      check(!tabs.chapters && tabs.notes, `the Notes tab puts the notes in the chapters' place (${JSON.stringify(tabs)})`);
+      await shot('8d-notes-tab');
+      await page.click('.ep-sheet .sheet-tabs label:has-text("Chapters")');
       await page.click('.ep-sheet .chapter:has-text("Storm surges")');
       await playing(150);
       a = await audio();
@@ -559,7 +617,7 @@ async function run(name, options) {
       await row('The pilot who boards at night').locator('.ep-main').click();
       await page.waitForSelector('.ep-sheet .notes li');
       await page.waitForTimeout(300);
-      check(!(await page.locator('.ep-sheet .chapters-box').isVisible()) && (await page.locator('.ep-sheet .chapter').count()) === 0, 'an episode with two times in its notes has no chapters');
+      check(!(await page.locator('.ep-sheet .chapters-box').isVisible()) && (await page.locator('.ep-sheet .chapter').count()) === 0 && !(await page.locator('.ep-sheet .sheet-tabs').isVisible()), 'an episode with two times in its notes has no chapters, and its notes no tabs');
       await page.keyboard.press('Escape');
       await page.waitForSelector('.ep-sheet', { state: 'detached' });
     }
@@ -587,6 +645,7 @@ async function run(name, options) {
     // Nobody listed where this copy goes quiet: the device listens through it itself.
     await page.click('#pb-open');
     await page.waitForSelector('.np');
+    await page.click('.np-tool-trim');
     await page.waitForFunction(() => /longer than 0\.8 s/.test(document.querySelector('.np-trim-note').textContent), null, { timeout: 30000 }).catch(() => {});
     check(/^6 pauses/.test(await page.locator('.np-trim-note').textContent()), `the pauses of a saved episode are found on the device (${await page.locator('.np-trim-note').textContent()})`);
     await page.keyboard.press('Escape');
@@ -600,6 +659,7 @@ async function run(name, options) {
     await playing(130);
     await page.click('#pb-open');
     await page.waitForSelector('.np');
+    await page.click('.np-tool-trim');
     await page.waitForSelector('.np-trim-save:not(.hidden)');
     check(/saved on this device/.test(await page.locator('.np-trim-note').textContent()), `a streamed episode says what finding its pauses takes (${await page.locator('.np-trim-note').textContent()})`);
     await page.click('.np-trim-save');
@@ -625,7 +685,21 @@ async function run(name, options) {
 
     /* ---------- a second device joins, and the two stay in step ---------- */
     await page.click(mobile ? '#tabbar [data-nav=settings]' : '#nav [data-nav=settings]');
-    await page.waitForSelector('.qr svg path');
+    await page.waitForSelector('#settings-tabs');
+    {
+      // Settings is a tab at a time, the tab in the address.
+      const tabState = () => page.evaluate(() => ({ hash: location.hash, on: document.querySelector('#settings-tabs input:checked')?.value, cards: [...document.querySelectorAll('#pod-settings h2')].map((x) => x.textContent).join(', ') }));
+      let st = await tabState();
+      check(st.on === 'playback' && st.cards === 'Playback', `Settings opens on its first tab, Playback, alone (${JSON.stringify(st)})`);
+      await page.click('#settings-tabs label:has-text("Storage")');
+      await page.waitForFunction(() => location.hash === '#/settings/storage');
+      st = await tabState();
+      check(st.on === 'storage' && st.cards === 'Saved for offline', `a tab is in the address, and shows that tab alone (${JSON.stringify(st)})`);
+      await page.evaluate(() => { location.hash = '#/settings/library'; });
+      await page.waitForSelector('.qr svg path');
+      st = await tabState();
+      check(st.on === 'library' && /^Your library, Move your shows/.test(st.cards), `and the address opens the tab it names (${JSON.stringify(st)})`);
+    }
     await shot('9-settings');
     await noSideScroll('settings');
     const link = await page.evaluate(() => localStorage.getItem('pod-key')).then((k) => `${world.base}/#link=${k}`);
@@ -679,6 +753,7 @@ async function run(name, options) {
       }, { endpoint: world.pushUrl('phone'), p256dh: phone.publicKey, auth: phone.auth });
       await page.click(mobile ? '#tabbar [data-nav=settings]' : '#nav [data-nav=settings]');
       await page.reload();
+      await page.click('#settings-tabs label:has-text("Notifications")');
       await page.waitForSelector('#settings-notify input:not([disabled])', { timeout: 15000 });
       check(!(await page.locator('#settings-notify input').isChecked()), 'notifications start off');
       await page.click('#settings-notify .switch');
@@ -889,11 +964,27 @@ async function run(name, options) {
         await page.click('#show-grid .show-tile:has-text("Fjordfunn")');
         await page.waitForSelector('#show-list .ep');
         await page.waitForTimeout(500); // (the cover has arrived)
+        // A show's page opens with its episodes in view: the first row whole above the player.
+        const fold = await page.evaluate(() => { const r = document.querySelector('#show-list .ep').getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), bar: Math.round(document.querySelector('#playbar').getBoundingClientRect().top), y: scrollY }; });
+        check(fold.y === 0 && fold.top > 0 && fold.bottom <= fold.bar, `a show's page opens with its first episode in view, above the player (the row from ${fold.top} to ${fold.bottom} px, the player from ${fold.bar} px)`);
         await screen('a show');
-        for (const [nav, sel, name] of [['queue', '#pod-queue .ep', 'Up next'], ['settings', '#pod-settings .qr svg', 'Settings']]) {
-          await page.click(`#tabbar [data-nav=${nav}]`);
+        await page.click('#show-head .show-settings');
+        await page.waitForSelector('.show-sheet .keep-newest');
+        await page.waitForTimeout(400); // (in)
+        short.push(...(await reach('#sheet')).map((x) => `show settings: ${x}`));
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.show-sheet', { state: 'detached' });
+        await page.click('#tabbar [data-nav=queue]');
+        await page.waitForSelector('#pod-queue .ep');
+        await screen('Up next');
+        await page.click('#queue-tabs label:has-text("Saved")');
+        await page.waitForFunction(() => location.hash === '#/queue/saved');
+        await screen('Up next, saved');
+        await page.click('#tabbar [data-nav=settings]');
+        for (const [tab, sel] of [['Playback', '#pod-settings .switch'], ['Library', '#pod-settings .qr svg'], ['Storage', '#pod-settings .switch'], ['Notifications', '#settings-notify']]) {
+          await page.click(`#settings-tabs label:has-text("${tab}")`);
           await page.waitForSelector(sel);
-          await screen(name);
+          await screen(`Settings, ${tab}`);
         }
         await page.evaluate(() => { location.hash = '#/add'; });
         await page.fill('#pod-add input[type=search]', 'the long');
@@ -903,13 +994,38 @@ async function run(name, options) {
         await page.fill('#pod-search input', 'committees');
         await page.waitForSelector('#search-results .hit');
         await screen('Search');
-        // ...and in the now-playing sheet.
+        // ...and in the now-playing sheet, with each of its controls open in turn.
         await page.click('#pb-open');
         await page.waitForSelector('.np');
         await page.waitForTimeout(450); // (in)
         short.push(...(await reach('#sheet')).map((x) => `player: ${x}`));
+        for (const tool of await page.evaluate(() => [...document.querySelectorAll('.np-tool')].map((b) => b.dataset.tool))) {
+          await page.click(`.np-tool-${tool}`);
+          short.push(...(await reach('#sheet')).map((x) => `player, ${tool}: ${x}`));
+        }
         await page.keyboard.press('Escape');
         await page.waitForSelector('.np', { state: 'detached' });
+
+        // On an iPhone from its home screen the now-playing sheet is one screen: 844 px, less the
+        // status bar's 47 and the home indicator's 34 it keeps clear of (390 by 763 here, where
+        // those are not there). With a control open it runs a little over.
+        await page.setViewportSize({ width: 390, height: 763 });
+        await page.click('#pb-open');
+        await page.waitForSelector('.np');
+        await page.waitForTimeout(450); // (in)
+        const fit = () => page.evaluate(() => { const p = document.querySelector('#sheet'); return { h: p.scrollHeight, room: p.clientHeight, art: document.querySelector('.np-art').offsetWidth }; });
+        const closed = await fit();
+        const opened = [];
+        for (const tool of await page.evaluate(() => [...document.querySelectorAll('.np-tool')].map((b) => b.dataset.tool))) {
+          await page.click(`.np-tool-${tool}`);
+          opened.push([tool, (await fit()).h + 81]);
+        }
+        await shot('6g-player-fits');
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.np', { state: 'detached' });
+        await page.setViewportSize(options.viewport);
+        check(closed.h <= closed.room, `the now-playing sheet fits an iPhone's 844 px with no control open (${closed.h + 81} px, the cover ${closed.art} px)`);
+        check(opened.every(([, hh]) => hh <= 844 + 96), `and runs at most a row of buttons over with one open (${opened.map(([t, hh]) => `${t} ${hh}`).join(', ')} px)`);
         check(!short.length, `on a phone every control is at least 44 px both ways${short.length ? `, not: ${short.join('; ')}` : ''}`);
       }
     }
@@ -962,6 +1078,7 @@ async function run(name, options) {
     /* ---------- shows out, as a file ---------- */
     if (!mobile) {
       await page.click('#nav [data-nav=settings]');
+      await page.click('#settings-tabs label:has-text("Library")');
       const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#pod-settings button:has-text("Export 3 shows")')]);
       const opml = await readFile(await dl.path(), 'utf8');
       check(dl.suggestedFilename() === 'shows.opml' && SHOWS.every((s) => opml.includes(world.feedUrl(s.slug))), 'the shows export as OPML');
@@ -976,9 +1093,17 @@ async function run(name, options) {
       const kept = (ids, hand = []) => until(`(() => { const d = JSON.parse(localStorage.getItem('pod-downloads') || '{}'); const auto = Object.keys(d).filter((id) => d[id].auto && id.length === 16).sort().join(); return auto === ${JSON.stringify([...ids].sort().join())} && ${JSON.stringify(hand)}.every((id) => d[id] && !d[id].auto); })()`, `${ids} by themselves`);
       await page.click(mobile ? '#tabbar [data-nav=listen]' : '#nav [data-nav=listen]');
       await page.click('#show-grid .show-tile:has-text("Fjordfunn")');
-      await page.waitForSelector('#show-head .keep-newest');
+      await page.waitForSelector('#show-head .show-settings');
       await page.waitForSelector('#show-list .ep:has-text("Kanonen i Oslofjorden")');
-      await page.click('#show-head .keep-newest label:has-text("2")');
+      await page.click('#show-head .show-settings');
+      await page.waitForSelector('.show-sheet .keep-newest');
+      await page.click('.show-sheet .keep-newest label:has-text("2")');
+      await page.waitForTimeout(400);
+      await shot('12-keep-newest');
+      await noSideScroll('keep the newest');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.show-sheet', { state: 'detached' });
+      check(/2 kept/.test(await page.locator('#show-head .show-settings').textContent()), `the show's settings button says how many it keeps (${await page.locator('#show-head .show-settings').textContent()})`);
       check(await kept([first, second]), 'set to keep the newest two, the two newest not played are saved by themselves');
       await page.waitForSelector('#show-list .ep:has-text("Kaldtvannskorallene") .tag:has-text("Saved")');
       check(await page.evaluate(() => JSON.parse(localStorage.getItem('pod-keep-newest') || '{}')), 'the choice is kept on this device');
@@ -990,11 +1115,8 @@ async function run(name, options) {
       await page.locator('#show-list .ep', { hasText: 'Kanonen i Oslofjorden' }).locator('.ep-more').click();
       await page.click('#row-menu button:has-text("Save for offline")');
       check(await kept([second, third], [first]), 'an episode saved by hand is saved as such');
-      await page.evaluate(() => document.querySelector('#show-head .switch')?.scrollIntoView({ block: 'start' }));
-      await page.waitForTimeout(400);
-      await shot('12-keep-newest');
-      await noSideScroll('keep the newest');
       await page.click(mobile ? '#tabbar [data-nav=settings]' : '#nav [data-nav=settings]');
+      await page.click('#settings-tabs label:has-text("Storage")');
       await page.waitForSelector('#pod-settings .kept-note');
       const note = await page.locator('#pod-settings .kept-note').textContent();
       check(/the newest 2 of Fjordfunn\./.test(note) && /2 episodes saved that way/.test(note) && await page.locator('#pod-settings button:has-text("Stop keeping episodes by themselves")').isVisible(), `Settings says what is kept by itself (${note})`);
@@ -1002,8 +1124,10 @@ async function run(name, options) {
       await page.waitForTimeout(400);
       await shot('13-keep-settings');
       await page.goBack();
-      await page.waitForSelector('#show-head .keep-newest');
-      await page.click('#show-head .keep-newest label:has-text("None")');
+      await page.waitForSelector('#show-head .show-settings');
+      await page.click('#show-head .show-settings');
+      await page.waitForSelector('.show-sheet .keep-newest');
+      await page.click('.show-sheet .keep-newest label:has-text("None")');
       check(await kept([], [first]), 'turned to none, what was saved by itself goes, and what was saved by hand stays');
       check(Object.keys(await index()).includes(first), 'the one saved by hand is still on the device');
     }

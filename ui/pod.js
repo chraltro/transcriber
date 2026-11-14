@@ -11,6 +11,9 @@ import { notifyCard } from './notify.js';
 
 const $ = (id) => document.getElementById(id);
 const PAGE = 60;
+// Settings, a tab at a time: what plays how; the library and the devices that share it; what is
+// kept on this device; notifications on this device.
+const SETTINGS_TABS = [['playback', 'Playback'], ['library', 'Library'], ['storage', 'Storage'], ['notifications', 'Notifications']];
 const IS_IOS = typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 const pref = {
   get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
@@ -44,9 +47,9 @@ export class Pod {
     store.addEventListener('sync', () => this.status());
     player.addEventListener('item', () => { this.paintRows(); this.counts(); if (this.view === 'queue') this.queue(); if (this.view === 'home') this.drawStarted(); });
     player.addEventListener('state', () => this.paintRows());
-    downloads.addEventListener('change', () => { this.paintRows(); if (this.view === 'queue') this.queue(); if (this.view === 'settings') this.settings(); });
+    downloads.addEventListener('change', () => { this.paintRows(); if (this.view === 'queue') this.queue(); if (this.view === 'settings' && this.settingsTab() === 'storage') this.settings(); });
     downloads.addEventListener('progress', (e) => this.paintRows(e.detail));
-    this.autosave.addEventListener('change', () => { if (this.view === 'settings') this.settings(); });
+    this.autosave.addEventListener('change', () => { if (this.view === 'settings' && this.settingsTab() === 'storage') this.settings(); });
     window.addEventListener('hashchange', () => this.route());
     window.addEventListener('online', () => this.status());
     window.addEventListener('offline', () => this.status());
@@ -88,7 +91,7 @@ export class Pod {
     const changed = view !== this.view || arg !== this.arg;
     this.view = view;
     this.arg = arg;
-    if (changed) this.drawn = new Set();
+    if (changed) { this.drawn = new Set(); this.settingsFirst = ''; }
     if (sheetOpen() && changed) closeSheet();
     this.onView(view);
     if (view === 'home') this.home();
@@ -540,7 +543,7 @@ export class Pod {
     root.replaceChildren(
       h('section.card.pod-card.show-head', { id: 'show-head' }),
       h('section.card.pod-card', {},
-        h('div.pod-head', {},
+        h('div.pod-head.show-list-head', {},
           h('div', {}, h('p.kicker', { id: 'show-count', text: 'Episodes' }), h('h2', { text: 'Episodes' })),
           h('div.search-field.show-search', {}, icon('search'), h('input', { type: 'search', placeholder: 'Search this show', 'aria-label': 'Search this show', oninput: (e) => { this.showQuery = e.target.value; this.showSearch(); } }))),
         h('div', { id: 'show-list' }, h('p.pod-none', { text: 'Reading the feed…' }))));
@@ -575,7 +578,8 @@ export class Pod {
     if (!sub) return;
     const feed = this.showFeed;
     const about = sub.description || feed?.description || '';
-    const desc = h('p.show-about', { text: about, onclick: (e) => e.currentTarget.classList.toggle('open') });
+    // Two lines of it; a tap reads the rest (where there is more than two lines).
+    const desc = h('p.show-about', { text: about, onclick: (e) => this.aboutToggle(e.currentTarget), onkeydown: (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.currentTarget.getAttribute('role') === 'button') { e.preventDefault(); this.aboutToggle(e.currentTarget); } } });
     // The cover drawn last time stays, if it is the same picture: redrawn, it would blink.
     const pic = sub.art || feed?.art || '';
     const kept = box.querySelector('.show-art');
@@ -584,16 +588,65 @@ export class Pod {
       ? h('button.btn.ghost', { type: 'button', onclick: (e) => this.showMenu(e.currentTarget) }, icon('check'), h('span', { text: 'Following' }), icon('down', 'icon chev'))
       : h('button.btn.primary', { type: 'button', onclick: () => { store.follow({ ...sub, title: sub.title || feed?.title, art: sub.art || feed?.art, lang: sub.lang || feed?.lang }); this.toast(`Following ${sub.title || 'the show'}`); this.showHead(); } }, icon('plus'), h('span', { text: 'Follow' }));
     const latest = feed?.episodes?.[0];
+    // The show in a few lines, so its episodes start on the first screen of a phone: the cover
+    // small beside the name, two lines about it, its buttons in one row, and its own settings
+    // behind one button.
     box.replaceChildren(...[
       h('a.back-link', { href: '#/' }, icon('prev'), h('span', { text: 'Listen' })),
       h('div.show-top', {}, art,
-        h('div.show-info', {},
+        h('div.show-id', {},
           h('p.kicker', { text: [sub.author || feed?.author, followed ? `Following since ${whenText(followed.addedAt).toLowerCase()}` : 'Not followed'].filter(Boolean).join(' · ') }),
-          h('h1.show-title', { text: sub.title || feed?.title || 'Show' }),
-          about ? desc : null,
-          h('div.actions', {}, follow,
-            latest ? h('button.btn.ghost', { type: 'button', onclick: () => this.playOrPause(store.decorate(latest, id)) }, icon('play'), h('span', { text: 'Play the latest' })) : null))),
-      followed && store.server.linked ? h('div.show-opts', {},
+          h('h1.show-title', { text: sub.title || feed?.title || 'Show' })),
+        about ? desc : null,
+        h('div.actions.show-actions', {}, follow,
+          latest ? h('button.btn.ghost', { type: 'button', onclick: () => this.playOrPause(store.decorate(latest, id)) }, icon('play'), h('span', { text: 'Play the latest' })) : null),
+        followed ? h('button.btn.ghost.show-settings', { type: 'button', 'aria-haspopup': 'dialog', onclick: () => this.showSettings() },
+          icon('sliders'), h('span', { text: 'Show settings' }), h('small', { text: this.showSettingsText(followed) })) : null),
+      feed?.failed ? h('p.hint.warn', { text: `The feed didn't answer last time (${feed.failed}); this is what was read before.` }) : null,
+    ].filter(Boolean));
+    if (about) requestAnimationFrame(() => this.aboutToggle(desc, false));
+    if (art !== kept) this.artInto(art, { art: sub.art || feed?.art, title: sub.title, show: sub.title });
+    this.showTitle = sub.title || feed?.title || 'Show';
+    this.status();
+  }
+
+  // The show's description: clamped to two lines, and where that hides some of it, a button that
+  // shows the rest (and takes it back). flip false only sets it up.
+  aboutToggle(p, flip = true) {
+    if (!p.isConnected) return;
+    if (flip && p.getAttribute('role') === 'button') p.classList.toggle('open');
+    const open = p.classList.contains('open');
+    if (open || p.scrollHeight > p.clientHeight + 1) {
+      p.setAttribute('role', 'button');
+      p.tabIndex = 0;
+      p.setAttribute('aria-expanded', String(open));
+    } else for (const a of ['role', 'tabindex', 'aria-expanded']) p.removeAttribute(a);
+  }
+
+  // What the show's settings are now, on the button that opens them: what is on, in a few words.
+  showSettingsText(sub) {
+    const keep = this.autosave.keepOf(sub.id);
+    const linked = this.store.server.linked;
+    return [
+      linked && sub.notify !== false ? 'notifications' : '',
+      linked && sub.transcribe ? 'transcribed' : '',
+      keep ? `${keep} kept` : '',
+    ].filter(Boolean).join(', ').replace(/^./, (c) => c.toUpperCase());
+  }
+
+  // A followed show's own settings, in a sheet: notifications, transcribing on the server, and
+  // how many of its newest episodes this device keeps.
+  showSettings() {
+    const { store } = this;
+    const id = this.showId;
+    const followed = store.show(id);
+    if (!followed) return;
+    const sheet = h('div.show-sheet', {},
+      h('div.sheet-top', {},
+        h('p.kicker', { text: followed.title || 'Show' }),
+        h('button.icon-btn', { type: 'button', 'aria-label': 'Close', onclick: () => closeSheet() }, icon('x'))),
+      h('h2', { id: 'sheet-title', text: 'Show settings' }),
+      store.server.linked ? h('div.show-opts', {},
         h('label.switch.setting', {},
           h('input', { type: 'checkbox', checked: followed.notify !== false, onchange: (e) => { store.updateShow(id, { notify: e.target.checked }); this.toast(e.target.checked ? 'You will be told about new episodes' : 'No more notifications for this show'); } }),
           h('span.track', {}, h('span.knob')), h('span.switch-label', { text: 'Tell me about new episodes' })),
@@ -602,22 +655,16 @@ export class Pod {
           h('span.track', {}, h('span.knob')), h('span.switch-label', { text: 'Transcribe new episodes' })),
         h('fieldset.segmented.backfill', {}, h('legend', { text: 'And the last' }),
           ...[0, 1, 3, 5, 10].map((n) => h('label', {}, h('input', { type: 'radio', name: 'backfill', value: String(n), checked: (followed.backfill || 0) === n, onchange: () => { store.updateShow(id, { backfill: n }); this.toast(n ? `The last ${n === 1 ? 'episode' : `${n} episodes`} will be transcribed too` : 'Only what you ask for'); } }), h('span', { text: n ? String(n) : 'None' })))),
-        h('p.hint', { text: 'The server does this. New episodes are ready an hour or two after they come out, older ones as time allows. A transcribed episode can be read along with, and its ads are marked and skipped. Any single episode can be asked for from its own page.' }),
-        this.keepNewest(id),
-        this.keepHint()) : null,
-      followed && !store.server.linked ? h('div.show-opts', {}, this.keepNewest(id), this.keepHint()) : null,
-      feed?.failed ? h('p.hint.warn', { text: `The feed didn't answer last time (${feed.failed}); this is what was read before.` }) : null,
-    ].filter(Boolean));
-    if (art !== kept) this.artInto(art, { art: sub.art || feed?.art, title: sub.title, show: sub.title });
-    this.showTitle = sub.title || feed?.title || 'Show';
-    this.status();
+        h('p.hint', { text: 'The server does this. New episodes are ready an hour or two after they come out, older ones as time allows. A transcribed episode can be read along with, and its ads are marked and skipped. Any single episode can be asked for from its own page.' })) : null,
+      h('div.show-opts', {}, this.keepNewest(id), this.keepHint()));
+    openSheet(sheet, { name: 'show' });
   }
 
   // How many of the show's newest episodes this device keeps saved by itself (ui/autosave.js).
   keepNewest(id) {
     const { autosave } = this;
     return h('fieldset.segmented.keep-newest', {}, h('legend', { text: 'Keep the newest saved on this device' }),
-      ...CHOICES.map((n) => h('label', {}, h('input', { type: 'radio', name: 'keep-newest', value: String(n), checked: autosave.keepOf(id) === n, onchange: () => { autosave.set(id, n); this.toast(n ? `The newest ${n === 1 ? 'episode is' : `${n} episodes are`} kept on this device` : 'Episodes of this show are no longer kept by themselves'); } }), h('span', { text: n ? String(n) : 'None' }))));
+      ...CHOICES.map((n) => h('label', {}, h('input', { type: 'radio', name: 'keep-newest', value: String(n), checked: autosave.keepOf(id) === n, onchange: () => { autosave.set(id, n); this.showHead(); this.toast(n ? `The newest ${n === 1 ? 'episode is' : `${n} episodes are`} kept on this device` : 'Episodes of this show are no longer kept by themselves'); } }), h('span', { text: n ? String(n) : 'None' }))));
   }
 
   keepHint() {
@@ -690,17 +737,21 @@ export class Pod {
       return li;
     });
     const saved = downloads.ids.map((id) => downloads.info(id).ep).filter(Boolean).map((e) => store.decorate(e));
-    root.replaceChildren(
-      h('section.card.pod-card', {},
+    // Two tabs: what plays next, and what is saved on this device.
+    const tab = this.arg === 'saved' ? 'saved' : 'next';
+    root.replaceChildren(...[
+      this.viewTabs('queue', [['next', 'Up next', eps.length], ['saved', 'Saved', saved.length]], tab, 'Up next or saved'),
+      tab !== 'next' ? null : h('section.card.pod-card', {},
         h('div.pod-head', {},
           h('div', {}, h('p.kicker', { text: eps.length ? `${eps.length} episode${eps.length === 1 ? '' : 's'}${total ? ` · ${lengthText(total)}` : ''}` : 'Plays one after the other' }), h('h2', { text: 'Up next' })),
           eps.length ? h('button.btn.ghost.small', { type: 'button', onclick: () => store.queueClear() }, h('span', { text: 'Clear the queue' })) : null),
         now ? h('div.queue-now', {}, h('p.kicker', { text: player.playing ? 'Playing' : 'In the player' }), h('ul.ep-list', {}, this.row(store.decorate(now)))) : null,
         eps.length ? h('ol.ep-list', {}, rows) : h('p.pod-none', { text: 'Nothing queued. Use Play next or Add to the queue on any episode, and it plays when this one ends.' })),
-      h('section.card.pod-card', {},
+      tab !== 'saved' ? null : h('section.card.pod-card', {},
         h('div.pod-head', {},
           h('div', {}, h('p.kicker', { text: saved.length ? `On this device · ${fmtBytes(downloads.bytes)}` : 'On this device' }), h('h2', { text: 'Saved for offline' }))),
-        saved.length ? this.list(saved) : h('p.pod-none', { text: 'Nothing saved. Save an episode before a flight or a tunnel and it plays without a connection.' })));
+        saved.length ? this.list(saved) : h('p.pod-none', { text: 'Nothing saved. Save an episode before a flight or a tunnel and it plays without a connection.' })),
+    ].filter(Boolean));
   }
 
   /* ---------- finding a show ---------- */
@@ -777,6 +828,14 @@ export class Pod {
     const actions = h('div.actions.sheet-actions');
     const notes = h('div.notes-box', {}, h('p.pod-none', { text: ep.summary || '' }));
     const chapters = h('div.chapters-box.hidden');
+    // With both chapters and notes, one at a time under two tabs (chapters first); with one of
+    // them, just that.
+    const tab = (which) => {
+      chapters.classList.toggle('hidden', which !== 'chapters');
+      notes.classList.toggle('hidden', which !== 'notes');
+    };
+    const tabs = h('fieldset.segmented.sheet-tabs.hidden', {}, h('legend.sr-only', { text: 'Chapters or notes' }),
+      ...[['chapters', 'Chapters'], ['notes', 'Notes']].map(([v, label]) => h('label', {}, h('input', { type: 'radio', name: 'ep-tab', value: v, checked: v === 'chapters', onchange: () => tab(v) }), h('span', { text: label }))));
     const draw = () => {
       const prog = store.progress(ep.id);
       const status = statusOf(prog);
@@ -806,7 +865,7 @@ export class Pod {
         ep.sub && store.show(ep.sub) ? h('a.kicker.sheet-show', { href: `#/show/${ep.sub}`, text: ep.show || 'Show' }) : h('p.kicker', { text: ep.show || 'Episode' }),
         h('button.icon-btn', { type: 'button', 'aria-label': 'Close', onclick: () => closeSheet() }, icon('x'))),
       h('div.sheet-head', {}, art, h('div', {}, h('h2', { id: 'sheet-title', text: ep.title }), h('p.sheet-meta'))),
-      actions, chapters, notes,
+      actions, tabs, chapters, notes,
       ep.link && /^https?:/.test(ep.link) ? h('a.ext', { href: ep.link, target: '_blank', rel: 'noopener noreferrer' }, icon('external'), h('span', { text: 'The episode\'s own page' })) : null);
     this.artInto(art, ep);
     this.episodeActions = draw;
@@ -827,6 +886,12 @@ export class Pod {
       mark();
     }
     if (got.html) notes.replaceChildren(notesNode(got.html, { timeOf: timeIn, onTime: (t) => player.play(ep, { at: t }) }));
+    if (got.chapters.length && (got.html || ep.summary)) {
+      tabs.querySelector('input[value=chapters] + span').textContent = `Chapters ${got.chapters.length}`;
+      tabs.classList.remove('hidden');
+      sheet.classList.add('tabbed');
+      tab('chapters');
+    }
   }
 
   // An episode's chapters, each a button that plays it from there. A long list shows its first
@@ -863,10 +928,33 @@ export class Pod {
     ];
   }
 
+  // A screen's tabs: a segmented control at its top, the tab in the address (#/settings/storage).
+  // A tab changes the screen at once and takes the place of the last in the history, so the
+  // back gesture leaves the screen rather than going through its tabs.
+  viewTabs(view, tabs, on, label) {
+    return h('fieldset.segmented.view-tabs', { id: `${view}-tabs` }, h('legend.sr-only', { text: label }),
+      ...tabs.map(([v, text, count]) => h('label', {}, h('input', { type: 'radio', name: `${view}-tab`, value: v, checked: v === on, onchange: () => {
+        history.replaceState(history.state, '', `${location.pathname}${location.search}#/${view}/${v}`);
+        this.route();
+      } }), h('span', {}, text, count ? h('b.seg-count', { text: String(count) }) : null))));
+  }
+
+  // The tab the address names; with none, Playback, or Library on a device not yet linked to
+  // the library there is (where "Link it under Settings" sends it).
+  settingsTab() {
+    if (SETTINGS_TABS.some(([v]) => v === this.arg)) return this.arg;
+    const { server } = this.store;
+    // (Chosen as the screen opens, and kept while it is open: linking it there leaves it there.)
+    this.settingsFirst ||= server.there && !server.offline && !server.linked ? 'library' : 'playback';
+    return this.settingsFirst;
+  }
+
   settings() {
     const root = $('pod-settings');
     const { store, downloads } = this;
     const s = store.settings;
+    const tab = this.settingsTab();
+    const top = this.viewTabs('settings', SETTINGS_TABS, tab, 'Which settings');
     const pick = (legend, name, options, value, set) => h('fieldset.segmented', {}, h('legend', { text: legend }),
       ...options.map(([v, label]) => h('label', {}, h('input', { type: 'radio', name, value: String(v), checked: value === v, onchange: () => set(v) }), h('span', { text: label }))));
     const flip = (label, on, set, hint) => h('div.setting-row', {},
@@ -883,8 +971,17 @@ export class Pod {
         flip('Skip ads', s.skipAds, (v) => store.set({ skipAds: v }), 'Where an episode has a transcript, the sponsor reads in it are jumped over as they come up, with an undo each time.'),
         pick('Shorten pauses', 'trim', [[0, 'Off'], [0.5, 'Over 0.5 s'], [0.8, 'Over 0.8 s'], [1.2, 'Over 1.2 s'], [2, 'Over 2 s']], s.trim || 0, (v) => store.set({ trim: v })),
         h('p.hint', { text: 'Pauses longer than this are cut down to it. That takes out the dead air of a call\'s delay and leaves the pauses people make on purpose. It works for episodes the server has transcribed and for episodes saved on this device.' }),
-        flip('Go back a little after a pause', s.rewind, (v) => store.set({ rewind: v }), 'A few seconds after minutes away, up to 25 after a day.'),
-        flip('Keep saved episodes once played', s.keepDownloads, (v) => store.set({ keepDownloads: v }))));
+        flip('Go back a little after a pause', s.rewind, (v) => store.set({ rewind: v }), 'A few seconds after minutes away, up to 25 after a day.')));
+    if (tab === 'playback') { root.replaceChildren(top, playback); return; }
+    if (tab === 'notifications') { root.replaceChildren(top, notifyCard(this)); return; }
+
+    const storage = h('section.card.pod-card', {},
+      h('div.pod-head', {}, h('div', {}, h('p.kicker', { text: 'On this device' }), h('h2', { text: 'Saved for offline' }))),
+      h('p.hint', { text: downloads.ids.length ? `${downloads.ids.length} episode${downloads.ids.length === 1 ? '' : 's'}, ${fmtBytes(downloads.bytes)}. They are listed under Up next.` : 'No episodes are saved on this device.' }),
+      downloads.ids.length ? h('div.actions', {}, h('button.btn.ghost.small', { type: 'button', onclick: async () => { await downloads.clear(); this.toast('Saved episodes removed'); } }, icon('trash'), h('span', { text: 'Remove them all' }))) : null,
+      this.keptNote(),
+      flip('Keep saved episodes once played', s.keepDownloads, (v) => store.set({ keepDownloads: v }), 'Otherwise a saved episode goes from this device once it has been played.'));
+    if (tab === 'storage') { root.replaceChildren(top, storage); return; }
 
     const library = h('section.card.pod-card', { id: 'settings-library' },
       h('div.pod-head', {}, h('div', {}, h('p.kicker', { text: 'Shows, positions and the queue' }), h('h2', { text: 'Your library' }))));
@@ -930,11 +1027,6 @@ export class Pod {
               h('button.btn.ghost.small', { type: 'button', onclick: async () => { await store.unlink(); this.toast('This device is no longer linked'); } }, h('span', { text: 'Unlink this device' }))))));
     }
 
-    const storage = h('section.card.pod-card', {},
-      h('div.pod-head', {}, h('div', {}, h('p.kicker', { text: 'On this device' }), h('h2', { text: 'Saved for offline' }))),
-      h('p.hint', { text: downloads.ids.length ? `${downloads.ids.length} episode${downloads.ids.length === 1 ? '' : 's'}, ${fmtBytes(downloads.bytes)}. They are listed under Up next.` : 'No episodes are saved on this device.' }),
-      downloads.ids.length ? h('div.actions', {}, h('button.btn.ghost.small', { type: 'button', onclick: async () => { await downloads.clear(); this.toast('Saved episodes removed'); } }, icon('trash'), h('span', { text: 'Remove them all' }))) : null,
-      this.keptNote());
 
     const file = h('input', { type: 'file', accept: '.opml,.xml,text/xml,text/x-opml,application/xml', onchange: async (e) => {
       const f = e.target.files[0];
@@ -961,6 +1053,6 @@ export class Pod {
       h('div.pod-head', {}, h('div', {}, h('p.kicker', { text: 'iPhone and iPad' }), h('h2', { text: 'Put it on the home screen' }))),
       h('p.hint', { text: 'In Safari, tap Share, then Add to Home Screen. It then opens like an app, keeps playing with the screen locked, and what it stores is not cleared after a week away. Link it once more from inside the app if it starts out empty.' })) : null;
 
-    root.replaceChildren(...[playback, notifyCard(this), library, storage, shows, install].filter(Boolean));
+    root.replaceChildren(...[top, library, shows, install].filter(Boolean));
   }
 }

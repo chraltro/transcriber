@@ -1402,13 +1402,24 @@ body.has-player { --bar: 72px; }
 /* ---------- a show ---------- */
 
 .show-head { padding: 18px 22px 20px; }
-.show-top { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 22px; align-items: start; }
+/* the cover beside the name; under the name, two lines about the show, its buttons in one row,
+   and the button to its own settings (the last row takes what the cover leaves over) */
+.show-top { display: grid; grid-template-columns: 128px minmax(0, 1fr); grid-template-rows: auto auto auto 1fr; column-gap: 22px; align-items: start; }
 .show-art { --size: 128px; width: 128px; }
-.show-info { min-width: 0; }
-.show-title { margin: 0 0 8px; font-size: clamp(1.45rem, 1.1rem + 1.3vw, 2.05rem); line-height: 1.12; overflow-wrap: anywhere; }
-.show-about { margin: 0; max-width: 72ch; font-size: 14px; color: var(--muted); cursor: pointer; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.show-top > .show-art { grid-row: 1 / -1; }
+.show-top > :not(.show-art) { grid-column: 2; min-width: 0; }
+.show-title { margin: 0; font-size: clamp(1.45rem, 1.1rem + 1.3vw, 2.05rem); line-height: 1.12; overflow-wrap: anywhere; }
+.show-about { margin: 8px 0 0; max-width: 72ch; font-size: 14px; line-height: 1.6; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.show-about[role="button"] { cursor: pointer; }
 .show-about.open { display: block; }
+.show-actions { flex-wrap: nowrap; margin-top: 14px; }
 .show-opts { display: grid; gap: 8px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+/* the show's own settings: behind this button, in a sheet (ui/pod.js showSettings) */
+.show-settings { display: flex; width: min(100%, 440px); margin-top: 10px; justify-content: flex-start; }
+.show-settings > span { flex: none; }
+.show-settings > small { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+.show-sheet { display: grid; gap: 4px; }
+.show-sheet h2 { margin: 0; font-size: 1.2rem; }
 .show-opts .switch { padding: 0; justify-self: start; }
 .show-opts .segmented legend { width: auto; margin-right: 12px; }
 .hint.warn { margin-top: 12px; color: var(--danger); }
@@ -1431,6 +1442,17 @@ body.has-player { --bar: 72px; }
 
 #pod-settings .settings-body { padding: 0 22px 22px; }
 .setting-row { display: grid; gap: 4px; }
+.pod-card > .setting-row { margin: 0 22px 20px; }
+/* a screen's tabs (Settings, Up next) and an episode's (chapters, notes): one segmented control,
+   the tab in the address for a screen; a tab changes at once, as a screen does */
+.view-tabs, .sheet-tabs { flex-wrap: nowrap; }
+.view-tabs { justify-self: start; }
+.view-tabs label, .sheet-tabs label { flex: 1 1 auto; min-width: 0; }
+.view-tabs span, .sheet-tabs span { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; padding: 6px 14px; white-space: nowrap; }
+.seg-count { font: 500 11px var(--font-mono); color: var(--faint); }
+.sheet-tabs { padding-top: 16px; border-top: 1px solid var(--line); }
+.ep-sheet.tabbed .chapters-box, .ep-sheet.tabbed .notes-box { padding-top: 0; border-top: 0; }
+.ep-sheet.tabbed .chapters-box h3 { display: none; }
 .link-box { display: grid; grid-template-columns: 148px minmax(0, 1fr); gap: 20px; align-items: start; padding: 4px 22px 22px; }
 .link-box h3 { margin: 0 0 6px; font: 700 14.5px/1.3 var(--font-slab); }
 .link-box .actions { margin-top: 12px; }
@@ -1539,11 +1561,26 @@ a.sheet-show:hover { color: var(--text); }
 .np-transport .jump-btn .icon { width: 36px; height: 36px; }
 .np-transport .jump-btn b { font-size: 10px; }
 .np-jump { justify-self: center; }
-.np-block { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
-.np-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.np-head h3 { margin: 0; font: 700 14.5px/1.3 var(--font-slab); }
-.np-head b { font: 500 12px var(--font-mono); color: var(--accent); font-variant-numeric: tabular-nums; }
-.np-head a { font-size: 13px; color: var(--muted); }
+/* under the transport, one row: each button says where its control stands (marked, as a
+   switched-on chip is, when that is other than the usual) and opens it in the panel under the
+   row, one at a time, at once. Its second tap, or the panel's own button, puts it away. */
+.np-tools { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; padding-top: 14px; border-top: 1px solid var(--line); }
+.np-tool {
+  min-width: 0; min-height: 48px; display: grid; align-content: center; justify-items: center; gap: 3px; padding: 6px 4px;
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--panel-2); color: var(--muted);
+  transition: background var(--t-press), border-color var(--t-press), color var(--t-press);
+}
+.np-tool-label, .np-tool-value { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-tool-label { font: 600 9.5px/1.2 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+.np-tool-value { font: 500 13px/1.2 var(--font-mono); font-variant-numeric: tabular-nums; }
+.np-tool.on { color: var(--text); box-shadow: inset 3px 0 0 var(--teal); }
+.np-tool[aria-expanded="true"] { color: var(--text); background: var(--panel-3); border-color: var(--teal); }
+@media (hover: hover) { .np-tool:hover { color: var(--text); border-color: color-mix(in srgb, var(--text) 30%, transparent); } }
+.np-tool:active { color: var(--text); background: var(--cell); }
+.np-panel { display: grid; gap: 10px; }
+.np.panel-open .np-actions { display: none; }
+.np-state { margin: 0; font: 500 12px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.np-next-all { justify-self: start; font-size: 13px; color: var(--muted); }
 .np-speeds { display: flex; align-items: center; gap: 6px; }
 .np-speeds .mini-seg { flex: 1; justify-content: space-between; flex-wrap: nowrap; }
 .np-speeds .mini-seg button { flex: 1; padding: 6px 0; }
@@ -1552,14 +1589,16 @@ a.sheet-show:hover { color: var(--text); }
 .sign { font: 600 19px/1 var(--font-ui); }
 .np .switch { padding: 0; justify-self: start; }
 .np-skips.off { opacity: 0.6; }
-.np-volume { grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; color: var(--muted); }
+.np-volume { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; color: var(--muted); }
 .np-next { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; counter-reset: next; }
 .np-next li { display: grid; gap: 1px; min-width: 0; }
 .np-next li.empty { font-size: 13.5px; color: var(--muted); }
 .np-next-title { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .np-next-show { font: 11px var(--font-mono); color: var(--faint); }
-.np-actions { display: grid; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
-.np-actions .btn { justify-content: flex-start; }
+/* the transcript, the notes, taking it out: side by side, a word or two a line */
+.np-actions { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 6px; }
+.np-actions .btn { height: auto; min-height: 48px; min-width: 0; padding: 6px 8px; gap: 6px; white-space: normal; text-align: center; font-size: 13px; line-height: 1.25; }
+.np-actions .btn .icon { flex: none; width: 16px; height: 16px; }
 
 /* ---------- the score: the position control, drawn as the whole episode (ui/score.js) ----------
    Bars, colours, the sponsor read, the chapter ticks and the position are drawn on the canvas;
@@ -1675,14 +1714,37 @@ a.sheet-show:hover { color: var(--text); }
   .show-grid { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 76px; gap: 12px; padding: 2px 16px 18px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; scroll-padding-left: 16px; }
   .show-grid::-webkit-scrollbar { display: none; }
   .show-grid:has(.pod-empty) { grid-auto-flow: row; grid-auto-columns: auto; }
-  .show-head { padding: 14px 16px 16px; }
-  .show-top { grid-template-columns: 84px minmax(0, 1fr); gap: 14px; }
-  .show-art { --size: 84px; width: 84px; }
-  .show-search { flex: 1 1 100%; }
+  .show-head { padding: 12px 16px 16px; }
+  .show-head > .back-link { margin-bottom: 8px; }
+  /* the small cover beside the name; the rest across the card under them */
+  .show-top { grid-template-columns: 64px minmax(0, 1fr); grid-template-rows: none; column-gap: 14px; }
+  .show-top > .show-art { grid-row: 1; }
+  .show-top > .show-id { align-self: center; }
+  .show-top > :not(.show-art, .show-id) { grid-column: 1 / -1; }
+  .show-art { --size: 64px; width: 64px; }
+  .show-id .kicker { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .show-title { font-size: 1.3rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .show-about { margin-top: 10px; }
+  .show-actions { margin-top: 12px; }
+  .show-actions .btn { height: 32px; padding: 0 12px; font-size: 13px; gap: 6px; }
+  .show-actions .btn .icon { width: 15px; height: 15px; }
+  /* the episodes' count and the search on one line (the heading is there for a screen reader) */
+  .show-list-head { flex-wrap: nowrap; align-items: center; }
+  .show-list-head > :first-child { flex: none; }
+  .show-list-head .kicker { margin: 0; }
+  .show-list-head h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .show-search { flex: 1 1 auto; min-width: 0; }
+  .show-search input { min-width: 0; }
   .search-field.big { margin: 0 16px; }
   .found { grid-template-columns: 48px minmax(0, 1fr) auto; gap: 12px; padding: 10px 16px; }
   .found .art { --size: 48px; width: 48px; }
   #pod-settings .settings-body { padding: 0 16px 18px; }
+  .pod-card > .setting-row { margin: 0 16px 18px; }
+  .view-tabs { justify-self: stretch; }
+  .view-tabs span { padding: 6px 8px; }
+  .show-settings { width: 100%; }
+  /* (three side by side: a word or two a line, no room for the icons) */
+  .np-actions .btn .icon { display: none; }
   .notify-body { padding: 0 16px 18px; }
   .link-box { grid-template-columns: minmax(0, 1fr); padding: 4px 16px 18px; }
   .link-form { padding: 16px; }
@@ -1690,7 +1752,11 @@ a.sheet-show:hover { color: var(--text); }
   .sheet-pane.closing { animation-name: sheet-down; }
   /* (As large as the screen's height leaves room for: on a short one the cover gives way, so
      the play button under the strip is never pushed off the bottom.) */
-  .np-art { --size: 280px; width: min(300px, 72vw, max(120px, calc(100vh - 430px))); width: min(300px, 72vw, max(120px, calc(100svh - 430px))); }
+  .np-art { --size: 280px; width: min(300px, 72vw, max(120px, calc(100vh - 430px))); width: min(300px, 72vw, max(120px, calc(100svh - 430px))); margin: 0; }
+  /* (closer together, so the cover can stay as large as it can: ui/playerui.js fit) */
+  .np { gap: 12px; }
+  .np > .sheet-top { margin-bottom: 4px; }
+  .np-tools { padding-top: 12px; }
 }
 
 /* ============================================================
@@ -1727,9 +1793,9 @@ a.sheet-show:active { color: var(--text); }
    the page keeps its spacing; where controls sit closer than that, they are made 44. */
 @media (pointer: coarse) {
   .ep-play, .ep-more, #latest-refresh, .back-link, .note-time, a.ext, .file-pick, .paste,
-  #pod .btn, .ep-sheet .btn.small, #pod .segmented label, #toast-action { position: relative; }
+  #pod .btn, .ep-sheet .btn.small, #pod .segmented label, .sheet-pane .segmented label, #toast-action { position: relative; }
   .ep-play::after, .ep-more::after, #latest-refresh::after, .back-link::after, .note-time::after, a.ext::after,
-  .file-pick::after, .paste::after, #pod .btn::after, .ep-sheet .btn.small::after, #pod .segmented label::after, #toast-action::after {
+  .file-pick::after, .paste::after, #pod .btn::after, .ep-sheet .btn.small::after, #pod .segmented label::after, .sheet-pane .segmented label::after, #toast-action::after {
     content: ""; position: absolute;
     top: min(0px, calc(50% - 22px)); bottom: min(0px, calc(50% - 22px));
     left: min(0px, calc(50% - 22px)); right: min(0px, calc(50% - 22px));
@@ -1741,8 +1807,10 @@ a.sheet-show:active { color: var(--text); }
   .tile .play { width: 44px; height: 44px; }
   /* (two rows of options: a thumb's height each with a little to spare, so one row's reach
      never meets the next whatever a browser rounds to) */
-  #pod .segmented { row-gap: 12px; }
-  #pod .segmented span { min-width: 44px; text-align: center; }
+  #pod .segmented, .sheet-pane .segmented { row-gap: 12px; }
+  #pod .segmented span, .sheet-pane .segmented span { min-width: 44px; text-align: center; }
+  .view-tabs span, .sheet-tabs span { min-height: 44px; }
+  .show-settings { height: 44px; }
   #pod .actions, .ep-sheet .actions { row-gap: 12px; }
   .ep-main, .found .ep-main, .hit-ep-main { min-height: 44px; }
   .hit-ep-main { align-content: center; }
@@ -1753,7 +1821,7 @@ a.sheet-show:active { color: var(--text); }
   .pb-transport .jump-btn { width: 44px; height: 44px; }
   .show-search input { height: 44px; }
   /* switches one under another: a row each, the air inside it */
-  #pod .switch.setting { min-height: 44px; }
+  #pod .switch.setting, .sheet-pane .switch.setting { min-height: 44px; }
   /* the now-playing sheet's own controls: a thumb's width and height each. Seven speeds do not
      fit at that width, so the two at the ends are left to the minus and plus beside them. */
   .np-speeds .icon-btn { width: 44px; height: 44px; }
@@ -1762,7 +1830,6 @@ a.sheet-show:active { color: var(--text); }
   .np-sleeps button, .np-trims button { min-height: 44px; min-width: 44px; }
   .np-sleeps, .np-trims { gap: 8px; }
   .np .switch.setting { min-height: 44px; }
-  .np-actions .btn { height: 44px; }
   .np-next-all { padding: 12px 0; margin: -12px 0; }
   .show-opts { gap: 0; }
   .show-opts .segmented { margin: 4px 0; }

@@ -21,7 +21,7 @@ function blocked(store) {
   const { server } = store;
   if (!server.there) return 'This copy of the app has no server behind it, so nothing can send it notifications.';
   if (server.offline) return 'The server is not answering right now. Try again when it is back.';
-  if (!server.linked) return 'Link this device to your library first, under Your library below.';
+  if (!server.linked) return 'Link this device to your library first, under Library at the top.';
   if (!window.isSecureContext || !('serviceWorker' in navigator)) return 'This browser cannot get notifications from the app.';
   if (!('PushManager' in window) || !('Notification' in window)) {
     if (IS_IOS && !navigator.standalone) return 'Add the app to the home screen to get notifications. In Safari, tap Share, then Add to Home Screen, and open it from there.';
@@ -41,7 +41,7 @@ function blocked(store) {
 // pod: the screens (ui/pod.js), for its store and toast.
 export function notifyCard(pod) {
   const { store, toast } = pod;
-  const ON = 'New episodes of the shows you follow show up on this device. A show can be left out on its own page.';
+  const ON = 'New episodes of the shows you follow show up on this device. A show can be left out under Show settings on its page.';
   const OFF = 'A notification on this device when a show you follow has a new episode.';
   const input = h('input', { type: 'checkbox', disabled: true });
   const hint = h('p.hint', { text: 'Checking this device…' });

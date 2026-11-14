@@ -1,6 +1,7 @@
 // What the player looks like: the bar along the bottom, and the sheet it opens into (cover,
-// chapter, position, speed, sleep timer, ads, what is up next). The playing itself is ui/player.js;
-// the position control, drawn as the whole episode, is ui/score.js.
+// chapter, position, and under them one row of buttons for speed, sleep timer, pauses, ads and
+// what is up next, each saying where it stands and opening its control). The playing itself is
+// ui/player.js; the position control, drawn as the whole episode, is ui/score.js.
 import { h, icon, setIcon, openSheet, closeSheet, sheetOpen } from './dom.js';
 import { fmtTime } from '../lib/text.js';
 import { leftText, fmtSpeed, nextSpeed, SPEEDS } from '../lib/playback.js';
@@ -10,6 +11,9 @@ import { Score } from './score.js';
 import { cutSeconds } from '../lib/quiet.js';
 
 const $ = (id) => document.getElementById(id);
+// The row of buttons in the sheet, each opening its control in a panel under the row. (An iPhone
+// sets the volume with its own buttons only: no volume there.)
+const TOOLS = [['speed', 'Speed'], ['sleep', 'Sleep'], ['trim', 'Pauses'], ['skips', 'Ads'], ['next', 'Up next'], ['volume', 'Volume']];
 const IS_IOS = typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 
 export class PlayerUI {
@@ -44,7 +48,7 @@ export class PlayerUI {
     player.addEventListener('error', (e) => toast(e.detail.message));
     store.addEventListener('change', (e) => {
       const keys = e.detail.keys || [];
-      if (keys.includes('settings') || keys.some((k) => k.startsWith('subs/'))) { this.rate(); this.jumps(); this.trims(); }
+      if (keys.includes('settings') || keys.some((k) => k.startsWith('subs/'))) { this.rate(); this.jumps(); this.trims(); this.ads(); }
       if (keys.includes('queue') && this.sheet) this.upNext();
     });
     setInterval(() => { if (player.sleep) this.sleepDraw(); }, 1000);
@@ -139,7 +143,7 @@ export class PlayerUI {
     $('pb-speed').textContent = fmtSpeed(r);
     $('pb-speed').classList.toggle('on', Math.abs(r - 1) > 0.001);
     if (!this.sheet) return;
-    this.sheet.querySelector('.np-rate').textContent = fmtSpeed(r);
+    this.toolValue('speed', fmtSpeed(r), Math.abs(r - 1) > 0.001);
     for (const b of this.sheet.querySelectorAll('.np-speeds button[data-rate]')) b.setAttribute('aria-pressed', String(Math.abs(Number(b.dataset.rate) - r) < 0.001));
     const own = this.sheet.querySelector('.np-own input');
     if (own) own.checked = !!this.store.show(this.player.item?.sub)?.speed;
@@ -157,6 +161,7 @@ export class PlayerUI {
     sw.checked = this.store.settings.skipAds;
     sw.disabled = !player.breaks;
     this.sheet.querySelector('.np-skips').classList.toggle('off', !player.breaks);
+    this.toolValue('skips', !player.breaks ? 'None' : this.store.settings.skipAds ? 'Skipped' : 'Played', !!player.breaks && this.store.settings.skipAds);
     note.textContent = player.breaks
       ? `${player.breaks.length} ad break${player.breaks.length === 1 ? '' : 's'} marked, ${fmtTime(adSeconds(player.breaks))} in all`
       : player.source && !player.source.synced && this.hasTranscript(player.item)
@@ -169,6 +174,7 @@ export class PlayerUI {
     if (!this.sheet) return;
     const { player, store } = this;
     const limit = store.settings.trim || 0;
+    this.toolValue('trim', limit ? `${limit} s` : 'Off', !!limit);
     for (const b of this.sheet.querySelectorAll('.np-trims button')) b.setAttribute('aria-pressed', String(Number(b.dataset.trim) === limit));
     const state = this.sheet.querySelector('.np-trim-state');
     const note = this.sheet.querySelector('.np-trim-note');
@@ -176,7 +182,8 @@ export class PlayerUI {
     this.shownTrim = player.trimmed;
     state.dataset.saved = player.trimmed.toFixed(2);
     const over = `${limit} s`;
-    state.textContent = !limit ? 'Off' : player.trimmed >= 1 ? `${fmtTime(player.trimmed)} saved` : `over ${over}`;
+    state.textContent = !limit ? 'Off' : player.trimmed >= 1 ? `${fmtTime(player.trimmed)} saved` : 'Nothing cut yet';
+    state.classList.toggle('hidden', !limit);
     let offer = false;
     if (!limit) note.textContent = 'Pick the longest pause to leave alone. Anything longer is cut down to that, so the dead air of a call\'s delay goes and the pauses people make on purpose stay.';
     else if (player.finding != null) note.textContent = `Listening through the episode for its pauses: ${Math.round(player.finding * 100)}%`;
@@ -212,7 +219,11 @@ export class PlayerUI {
     if (!this.sheet) return;
     const { sleep } = this.player;
     const left = this.player.sleepLeft;
-    this.sheet.querySelector('.np-sleep-state').textContent = !sleep ? 'Off' : sleep.end ? 'When this episode ends' : `Pauses in ${fmtTime(left)}`;
+    const state = this.sheet.querySelector('.np-sleep-state');
+    state.textContent = !sleep ? 'Off' : sleep.end ? 'When this episode ends' : `Pauses in ${fmtTime(left)}`;
+    state.classList.toggle('hidden', !sleep);
+    // (On the button, whole minutes: it changes once a minute, not every second.)
+    this.toolValue('sleep', !sleep ? 'Off' : sleep.end ? 'At end' : left >= 60 ? `${Math.ceil(left / 60)} min` : `${Math.ceil(left)} s`, !!sleep);
     for (const b of this.sheet.querySelectorAll('.np-sleeps button')) {
       const v = b.dataset.sleep;
       b.setAttribute('aria-pressed', String(v === 'end' ? !!sleep?.end : v === '0' ? !sleep : sleep?.minutes === Number(v)));
@@ -222,9 +233,34 @@ export class PlayerUI {
   upNext() {
     const list = this.sheet?.querySelector('.np-next');
     if (!list) return;
-    const next = this.store.queue.filter((e) => e.id !== this.player.item?.id).slice(0, 3);
+    const all = this.store.queue.filter((e) => e.id !== this.player.item?.id);
+    const next = all.slice(0, 3);
+    this.toolValue('next', all.length ? String(all.length) : 'None', all.length > 0);
     list.replaceChildren(...(next.length ? next.map((e) => h('li', {}, h('span.np-next-title', { text: e.title }), h('span.np-next-show', { text: e.show || '' }))) : [h('li.empty', { text: 'Nothing queued. This episode is the last.' })]));
     this.sheet.querySelector('.np-next-all').classList.toggle('hidden', !next.length);
+  }
+
+  // A button in the row under the transport: where its control stands, and whether that is
+  // other than the usual (marked as a switched-on chip is).
+  toolValue(name, text, on) {
+    const b = this.sheet?.querySelector(`.np-tool[data-tool="${name}"]`);
+    if (!b) return;
+    b.querySelector('.np-tool-value').textContent = text;
+    b.classList.toggle('on', on);
+  }
+
+  // One control open at a time, under the row, at once (a panel is not a sheet: it does not
+  // slide), in the place of the three buttons under it while it is open, so the sheet stays
+  // about one screen. '' puts the open one away.
+  toolOpen(name) {
+    const { sheet } = this;
+    if (!sheet) return;
+    this.openTool = name;
+    for (const b of sheet.querySelectorAll('.np-tool')) b.setAttribute('aria-expanded', String(b.dataset.tool === name));
+    for (const p of sheet.querySelectorAll('.np-panel')) p.classList.toggle('hidden', p.dataset.tool !== name);
+    sheet.classList.toggle('panel-open', !!name);
+    const panel = name && sheet.querySelector(`.np-panel[data-tool="${name}"]`);
+    if (panel) panel.scrollIntoView({ block: 'nearest' });
   }
 
   /* ---------- the sheet ---------- */
@@ -234,6 +270,10 @@ export class PlayerUI {
     if (!player.item) return;
     const jump = (cls, name, fn) => h(`button.icon-btn.jump-btn.${cls}`, { type: 'button', onclick: fn }, icon(name), h('b'));
     const seg = (cls, items) => h(`div.mini-seg.${cls}`, {}, items);
+    const tools = TOOLS.filter(([name]) => name !== 'volume' || !IS_IOS);
+    // A control's panel, under the row: the control, and a line on where it stands where the
+    // button above has no room for all of it. (Its button, pressed again, puts it away.)
+    const panel = (name, title, ...kids) => h(`div.np-panel.np-panel-${name}.hidden`, { id: `np-panel-${name}`, role: 'region', 'aria-label': title, dataset: { tool: name } }, ...kids);
     const sheet = h('div.np', {},
       h('div.sheet-top', {},
         h('p.kicker', { text: 'Now playing' }),
@@ -258,8 +298,11 @@ export class PlayerUI {
         jump('jump-fwd', 'fwd', () => player.skip(store.settings.fwd))),
       h('button.btn.primary.np-jump.hidden', { type: 'button', onclick: () => player.skipAd() }, icon('skip'), h('span', { text: 'Skip this ad' })),
 
-      h('div.np-block', {},
-        h('div.np-head', {}, h('h3', { text: 'Speed' }), h('b.np-rate')),
+      // The rest, one row: each button says where its control stands and opens it under the row.
+      h('div.np-tools', {}, tools.map(([name, label]) => h(`button.np-tool.np-tool-${name}`, { type: 'button', dataset: { tool: name }, 'aria-expanded': 'false', 'aria-controls': `np-panel-${name}`, onclick: () => this.toolOpen(this.openTool === name ? '' : name) },
+        h('span.np-tool-label', { text: label }), h('b.np-tool-value')))),
+
+      panel('speed', 'Speed',
         h('div.np-speeds', {},
           h('button.icon-btn', { type: 'button', 'aria-label': 'Slower', onclick: () => player.setSpeed(player.rateFor() - 0.1) }, h('span.sign', { text: '−' })),
           seg('', SPEEDS.filter((s) => s <= 2.5).map((s) => h('button', { type: 'button', dataset: { rate: String(s) }, 'aria-pressed': 'false', text: fmtSpeed(s), onclick: () => player.setSpeed(s) }))),
@@ -268,48 +311,68 @@ export class PlayerUI {
           h('input', { type: 'checkbox', onchange: (e) => { store.updateShow(player.item.sub, { speed: e.target.checked ? player.rateFor() : undefined }); player.applyRate(); this.rate(); } }),
           h('span.track', {}, h('span.knob')), h('span.switch-label', { text: 'Its own speed for this show' })) : null),
 
-      h('div.np-block', {},
-        h('div.np-head', {}, h('h3', { text: 'Sleep timer' }), h('b.np-sleep-state')),
+      panel('sleep', 'Sleep timer',
+        h('p.np-state.np-sleep-state'),
         seg('np-sleeps', [['Off', '0'], ['15 min', '15'], ['30 min', '30'], ['45 min', '45'], ['1 h', '60'], ['End of episode', 'end']].map(([label, v]) =>
           h('button', { type: 'button', dataset: { sleep: v }, 'aria-pressed': 'false', text: label, onclick: () => { player.setSleep(v === 'end' ? 'end' : Number(v)); this.sleepDraw(); } })))),
 
-      h('div.np-block', {},
-        h('div.np-head', {}, h('h3', { text: 'Shorten pauses' }), h('b.np-trim-state')),
+      panel('trim', 'Shorten pauses',
+        h('p.np-state.np-trim-state'),
         seg('np-trims', [['Off', 0], ['0.5 s', 0.5], ['0.8 s', 0.8], ['1.2 s', 1.2], ['2 s', 2]].map(([label, v]) =>
           h('button', { type: 'button', dataset: { trim: String(v) }, 'aria-pressed': 'false', text: label, onclick: () => { store.set({ trim: v }); this.trims(); } }))),
         h('p.hint.np-trim-note'),
         h('button.btn.ghost.small.np-trim-save.hidden', { type: 'button', onclick: () => { this.saveOffline(player.item); this.trims(); } }, icon('download'), h('span', { text: 'Save the episode on this device' }))),
 
-      h('div.np-block', {},
+      panel('skips', 'Ads',
         h('label.switch.setting.np-skips', {},
           h('input', { type: 'checkbox', onchange: (e) => store.set({ skipAds: e.target.checked }) }),
           h('span.track', {}, h('span.knob')), h('span.switch-label', { text: 'Skip ads' })),
         h('p.hint.np-skips-note')),
 
-      IS_IOS ? null : h('div.np-block.np-volume', {},
-        icon('volume'),
-        (() => {
-          const v = h('input', { type: 'range', min: '0', max: '100', step: '1', value: String(Math.round(player.audio.volume * 100)), 'aria-label': 'Volume' });
-          const paint = () => v.style.setProperty('--pct', `${v.value}%`);
-          v.addEventListener('input', () => { player.setVolume(Number(v.value) / 100); paint(); });
-          paint();
-          return v;
-        })()),
+      panel('next', 'Up next',
+        h('ol.np-next'),
+        h('a.np-next-all', { href: '#/queue', text: 'Open the queue', onclick: () => closeSheet() })),
 
-      h('div.np-block', {},
-        h('div.np-head', {}, h('h3', { text: 'Up next' }), h('a.np-next-all', { href: '#/queue', text: 'Open the queue', onclick: () => closeSheet() })),
-        h('ol.np-next')),
+      IS_IOS ? null : panel('volume', 'Volume',
+        h('div.np-volume', {},
+          icon('volume'),
+          (() => {
+            const v = h('input', { type: 'range', min: '0', max: '100', step: '1', value: String(Math.round(player.audio.volume * 100)), 'aria-label': 'Volume' });
+            const paint = () => { v.style.setProperty('--pct', `${v.value}%`); this.toolValue('volume', `${v.value}%`, false); };
+            v.addEventListener('input', () => { player.setVolume(Number(v.value) / 100); paint(); });
+            paint();
+            return v;
+          })())),
 
+      // What else there is to do with it: three buttons side by side.
       h('div.np-actions', {},
         h('button.btn.ghost.np-transcript', { type: 'button', onclick: () => { const it = player.item; closeSheet({ then: () => this.openTranscript(it) }); } }, icon('lines'), h('span')),
         h('button.btn.ghost.np-details', { type: 'button', onclick: () => this.openEpisode(player.item) }, icon('alert'), h('span', { text: 'Episode notes' })),
-        h('button.btn.ghost', { type: 'button', onclick: () => { closeSheet(); player.stop(); } }, icon('x'), h('span', { text: 'Take it out of the player' }))));
+        h('button.btn.ghost.np-out', { type: 'button', onclick: () => { closeSheet(); player.stop(); } }, icon('x'), h('span', { text: 'Take it out of the player' }))));
     this.sheet = sheet;
+    this.openTool = '';
     this.nowKey = '';
     this.sheetScrub = new Score(sheet.querySelector('.np-strip'), { player, onPreview: (t) => { sheet.querySelector('.np-cur').textContent = fmtTime(t); this.nowDraw(t); } });
-    openSheet(sheet, { name: 'player', closed: () => { this.sheetScrub?.destroy(); this.sheet = null; this.sheetScrub = null; } });
+    openSheet(sheet, { name: 'player', closed: () => { this.sheetScrub?.destroy(); this.sheet = null; this.sheetScrub = null; removeEventListener('resize', this.refit); } });
     this.fill();
     player.wantShape();
+    this.refit ||= () => this.fit();
+    addEventListener('resize', this.refit);
+  }
+
+  // On a phone the whole sheet is one screen, its panels put away: the cover gives way to the
+  // rest (down to 120 px) when the title, the screen or the line under the strip leave too
+  // little room. Measured as it opens and when the episode changes, never while a panel is
+  // open, so nothing moves under a finger.
+  fit() {
+    const { sheet } = this;
+    const art = sheet?.querySelector('.np-art');
+    if (!art || this.openTool) return;
+    art.style.width = '';
+    const pane = sheet.parentElement;
+    if (!pane || !matchMedia('(max-width: 640px)').matches) return;
+    const over = pane.scrollHeight - pane.clientHeight;
+    if (over > 0) art.style.width = `${Math.max(120, Math.floor(art.offsetWidth - over))}px`;
   }
 
   fill() {
@@ -321,6 +384,7 @@ export class PlayerUI {
     this.artInto(sheet.querySelector('.np-art'), item);
     sheet.querySelector('.np-transcript span').textContent = this.hasTranscript(item) ? 'Read the transcript' : 'Make a transcript';
     sheet.querySelector('.np-details').classList.toggle('hidden', !item.sub && !item.url);
+    this.toolValue('volume', `${Math.round(player.audio.volume * 100)}%`, false);
     this.jumps();
     this.state();
     this.rate();
@@ -331,5 +395,6 @@ export class PlayerUI {
     this.chapterDraw();
     this.marks();
     this.time();
+    this.fit();
   }
 }
