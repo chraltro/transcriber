@@ -13,6 +13,7 @@ import { buildPrompt, extractTerms } from '../lib/context.js';
 import { detectLanguage } from '../lib/langid.js';
 import { correctText } from '../lib/glossary.js';
 import { secondLevels, encodeLevels } from '../lib/levels.js';
+import { QuietFinder } from '../lib/quiet.js';
 import { wordCount } from '../lib/paragraphs.js';
 
 const RATE = 16000;
@@ -38,6 +39,7 @@ export async function transcribeEpisode(ep, models, { tmpFile, onProgress = () =
   const promptState = {};
   const segments = [];
   const levels = [];
+  const finder = new QuietFinder(RATE); // where it goes quiet, for the player to shorten pauses
   let voices = [];
   let done = false;
   let failure = null;
@@ -76,6 +78,7 @@ export async function transcribeEpisode(ep, models, { tmpFile, onProgress = () =
   let blockLen = 0;
   const hand = async (samples, final) => {
     levels.push(...secondLevels(samples));
+    finder.push(samples);
     await stream.push(id, samples, final);
     while (!failure && stream.job && stream.job.pending.length > AHEAD) await sleep(250);
   };
@@ -133,5 +136,6 @@ export async function transcribeEpisode(ep, models, { tmpFile, onProgress = () =
     speakerNames: {},
     took: (Date.now() - t0) / 1000,
     audioExt: ext,
+    quiet: finder.finish(), // (filed beside the transcript, not in it: server/ci.mjs)
   };
 }

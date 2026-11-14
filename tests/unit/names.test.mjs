@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { nameGroups, glossaryFor } from '../../lib/names.js';
-import { isAd } from '../../lib/ads.js';
+import { isAd } from '../../lib/pitch.js';
 import { correctText, parseGlossary } from '../../lib/glossary.js';
 
 const TEXT = 'Today with Sayash Kapoor and Arvind Narayanan. Later Sayosh Kapoor said no, and Sayash Kapoor agreed. '

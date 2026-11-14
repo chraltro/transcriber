@@ -4,7 +4,8 @@
 // headphones' buttons (Media Session), and jumps over the ads a transcript has marked.
 // What it decides (where to resume, which ad to skip) is in lib/playback.js.
 import { resumeAt, rewindFor, finished, skipAt } from '../lib/playback.js';
-import { breakAt } from '../lib/adbreaks.js';
+import { breakAt } from '../lib/breaks.js';
+import { cutsFor, cutIndex } from '../lib/quiet.js';
 
 const IS_IOS = typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 const NOW = 'pod-now';
@@ -27,10 +28,20 @@ function silence() {
 export class Player extends EventTarget {
   // store: ui/podstore.js; downloads: ui/downloads.js; cachedAudio(key) -> the copy an open
   // transcript was made from, if it is still kept; adsFor(item, source) -> [[start, end], ...]
-  // for that copy of the audio, or null.
-  constructor({ audio, store, downloads, cachedAudio, adsFor }) {
+  // for that copy of the audio, or null; quietFor(item, source, progress) -> where that copy
+  // goes quiet (lib/quiet.js), or null when it can't be read.
+  constructor({ audio, store, downloads, cachedAudio, adsFor, quietFor = async () => null }) {
     super();
-    Object.assign(this, { audio, store, downloads, cachedAudio, adsFor });
+    Object.assign(this, { audio, store, downloads, cachedAudio, adsFor, quietFor });
+    this.quiet = null; // where the audio in the player goes quiet
+    this.cuts = []; // what of that is jumped over, at the listener's limit
+    this.finding = null; // how far the search for quiet has got (0 to 1), while it runs
+    this.trimmed = 0; // seconds of pause left out of this episode so far
+    this.seekCost = 0.1; // what a jump costs here, measured: shorter cuts are not worth making
+    this.cutCost = 0.1; // ...and what it was, and the speed, when the cuts were last worked out
+    this.cutRate = 1;
+    this.sought = false;
+    this.trimLimit = 0;
     this.item = null;
     this.source = null;
     this.breaks = null;
@@ -56,12 +67,21 @@ export class Player extends EventTarget {
     on('canplay', () => this.arrive(true));
     on('durationchange', () => this.emit('time'));
     on('timeupdate', () => this.tick());
-    on('playing', () => { this.unlocked = true; this.busy = false; this.pausedAt = 0; this.state(); });
+    on('playing', () => { this.unlocked = true; this.busy = false; this.pausedAt = 0; this.state(); this.fine(); });
     on('play', () => this.state());
-    on('pause', () => { if (this.source) { this.pausedAt = Date.now(); this.save(); } this.state(); });
+    on('pause', () => { if (this.source) { this.pausedAt = Date.now(); this.save(); } this.state(); this.fine(); });
     on('waiting', () => { this.busy = true; this.emit('state'); });
-    on('seeked', () => { this.position(); this.emit('time'); });
-    on('ratechange', () => { this.position(); this.emit('rate'); });
+    on('seeked', () => {
+      // A jump over a pause: how long it took is what the next ones have to be worth.
+      if (this.jumpedAt) {
+        this.seekCost = this.seekCost * 0.7 + ((performance.now() - this.jumpedAt) / 1000) * 0.3;
+        this.jumpedAt = 0;
+        if (this.seekCost > this.cutCost * 1.6 || this.seekCost < this.cutCost * 0.5) this.recut();
+      }
+      this.position();
+      this.emit('time');
+    });
+    on('ratechange', () => { this.position(); this.emit('rate'); if (this.quiet && Math.abs(this.rate - this.cutRate) > 0.01) this.recut(); });
     on('ended', () => this.ended());
     on('error', () => this.failed());
 
@@ -70,7 +90,7 @@ export class Player extends EventTarget {
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') leave(); });
     store.addEventListener('change', (e) => {
       const keys = e.detail.keys || [];
-      if (keys.some((k) => k === 'settings' || k.startsWith('subs/'))) { this.applyRate(); this.handlers(); }
+      if (keys.some((k) => k === 'settings' || k.startsWith('subs/'))) { this.applyRate(); this.handlers(); this.retrim(); }
       if (keys.includes('queue')) { this.prepare(); this.handlers(); }
       // Played on another device meanwhile: a paused episode here follows it.
       if (e.detail.remote && this.item && audio.paused && keys.includes(`progress/${this.item.id}`)) {
@@ -126,8 +146,9 @@ export class Player extends EventTarget {
   /* ---------- starting and stopping ---------- */
 
   // Plays `item` ({ id, title, show, art, url, ... }), from `at` seconds or from where it was left.
-  async play(item, { at = null } = {}) {
-    this.wantPlay = true;
+  // autoplay: false puts it in the player without starting it.
+  async play(item, { at = null, autoplay = true } = {}) {
+    this.wantPlay = autoplay;
     if (this.item?.id === item.id && this.source && !this.audio.error) {
       if (at != null) this.seek(at, { user: true });
       return this.resume();
@@ -166,6 +187,7 @@ export class Player extends EventTarget {
     this.applyRate();
     this.metadata();
     this.loadAds();
+    this.loadQuiet();
     this.prepare();
     // Paused while it was being found: it is in the player, and stays quiet.
     if (!this.wantPlay) { this.busy = false; this.state(); return false; }
@@ -179,6 +201,11 @@ export class Player extends EventTarget {
     this.inBreak = -1;
     this.keep = -1;
     this.lastSkip = null;
+    this.quiet = null;
+    this.cuts = [];
+    this.finding = null;
+    this.sought = false;
+    this.trimmed = 0;
     this.wanted = at ?? resumeAt(progress, Date.now(), { rewind: this.store.settings.rewind });
     this.at = this.wanted;
     this.known = progress?.d || item.duration || 0;
@@ -253,6 +280,9 @@ export class Player extends EventTarget {
     this.source = null;
     this.item = null;
     this.breaks = null;
+    this.quiet = null;
+    this.cuts = [];
+    this.fine();
     this.busy = false;
     try { localStorage.removeItem(NOW); } catch {}
     if ('mediaSession' in navigator) { try { navigator.mediaSession.metadata = null; navigator.mediaSession.playbackState = 'none'; } catch {} }
@@ -412,10 +442,83 @@ export class Player extends EventTarget {
     this.emit('time');
   }
 
+  /* ---------- pauses, shortened ---------- */
+
+  // Finds where this copy of the audio goes quiet, when the listener wants pauses shortened.
+  async loadQuiet() {
+    const { item, source } = this;
+    this.trimLimit = this.store.settings.trim || 0;
+    if (!this.trimLimit || !source || this.quiet || this.sought) { this.recut(); return; }
+    let quiet = null;
+    this.sought = true; // once per copy of the audio: a search that found nothing is not run again
+    this.finding = 0;
+    this.emit('quiet');
+    try {
+      quiet = await this.quietFor(item, source, (f) => { if (this.item === item && this.source === source) { this.finding = f; this.emit('quiet'); } });
+    } catch {}
+    if (this.item !== item || this.source !== source) return;
+    this.finding = null;
+    this.quiet = quiet || null;
+    this.recut();
+  }
+
+  // The limit changed (or was switched on or off).
+  retrim() {
+    const limit = this.store.settings.trim || 0;
+    if (limit === this.trimLimit) return;
+    if (limit && !this.quiet && this.source && this.finding == null) this.loadQuiet();
+    else { this.trimLimit = limit; this.recut(); }
+  }
+
+  // (The limit is in the episode's own seconds; what a jump costs is in the listener's, so at
+  // twice the speed it is twice as much of the episode.)
+  recut() {
+    this.cutCost = this.seekCost;
+    this.cutRate = this.rate;
+    this.cuts = this.quiet && this.trimLimit ? cutsFor(this.quiet, this.trimLimit, this.seekCost * this.rate) : [];
+    this.fine();
+    this.emit('quiet');
+  }
+
+  // The player's own clock ticks four times a second, too coarse for a half-second pause:
+  // while there are pauses to shorten and it is playing, a finer one runs.
+  fine() {
+    const need = this.cuts.length > 0 && this.playing;
+    if (need && !this.fineTimer) this.fineTimer = setInterval(() => this.trim(), 60);
+    if (!need && this.fineTimer) { clearInterval(this.fineTimer); this.fineTimer = 0; }
+  }
+
+  trim() {
+    if (!this.cuts.length || !this.source || this.wanted != null || this.audio.paused || this.audio.seeking) return;
+    const t = this.audio.currentTime;
+    const cut = this.cuts[cutIndex(this.cuts, t)];
+    if (!cut || t < cut[0] || cut[1] - t < this.cutCost * this.cutRate + 0.12) return;
+    if (this.breaks && breakAt(this.breaks, t) >= 0) return; // an ad is dealt with as an ad
+    const to = this.duration ? Math.min(cut[1], this.duration - 0.3) : cut[1];
+    if (to <= t) return;
+    this.trimmed += to - t;
+    this.jumpedAt = performance.now();
+    this.audio.currentTime = to;
+  }
+
+  // The same episode from the copy now saved on the device (where its pauses can be found),
+  // without losing its place.
+  reattach() {
+    if (!this.item || !this.source) return;
+    const at = this.time;
+    const playing = this.playing;
+    const item = this.item;
+    this.save();
+    this.release();
+    this.source = null;
+    return this.play(item, { at, autoplay: playing });
+  }
+
   /* ---------- while it plays ---------- */
 
   tick() {
     if (!this.source || this.wanted != null) return;
+    this.trim();
     const t = this.audio.currentTime;
     if (this.breaks) {
       const now = breakAt(this.breaks, t);

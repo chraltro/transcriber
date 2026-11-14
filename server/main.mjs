@@ -22,7 +22,8 @@ import { SHOWS, idOf, metaOf, markdownOf, adsOf } from './shows.mjs';
 import { verifyGithubToken } from './oidc.mjs';
 import { createEnhance } from './enhance.mjs';
 import { createPod } from './pod.mjs';
-import { ADS_VERSION } from '../lib/adbreaks.js';
+import { ADS_VERSION } from '../lib/breaks.js';
+import { QUIET_VERSION } from '../lib/quiet.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = process.env.DATA_DIR || '/data';
@@ -71,10 +72,18 @@ async function readIndex() {
   return index;
 }
 
+// Where a transcript's audio goes quiet is filed beside it (<id>.quiet.json: { v, quiet }), for
+// the player to shorten pauses with; the index says which transcripts have it.
+const quietFile = (id) => path.join(LIB, `${id}.quiet.json`);
+const quietVersion = async (id) => Number((await readJson(quietFile(id), null))?.v) || undefined;
+const validQuiet = (value) => Number.isInteger(value?.v) && Array.isArray(value.quiet) && value.quiet.length <= 50000
+  && value.quiet.every((r) => Array.isArray(r) && r.length === 2 && Number.isFinite(r[0]) && Number.isFinite(r[1]) && r[0] >= 0 && r[1] > r[0]);
+
 function addToIndex(entry) {
   // Where the ads are goes into the index, so the player can skip them without the transcript.
   const meta = metaOf({ ...entry, ads: adsOf(entry), adsV: ADS_VERSION });
   return withIndex(async () => {
+    meta.quiet = entry.audio ? await quietVersion(entry.id) : undefined;
     const index = await readIndex();
     index.entries = [meta, ...index.entries.filter((e) => e.id !== entry.id)].sort((a, b) => b.createdAt - a.createdAt);
     await writeJson(path.join(LIB, 'index.json'), index);
@@ -171,6 +180,8 @@ async function work() {
         await rename(path.join(DATA, 'episode.audio'), path.join(LIB, audioFile));
         entry.audio = `library/${audioFile}`;
         delete entry.audioExt;
+        await writeJson(quietFile(entry.id), { v: QUIET_VERSION, quiet: entry.quiet || [] });
+        delete entry.quiet;
         await writeJson(path.join(LIB, `${entry.id}.json`), entry);
         await writeFile(path.join(LIB, `${entry.id}.md`), markdownOf(entry));
         await addToIndex(entry);
@@ -201,6 +212,7 @@ async function pruneAudio() {
   for (const meta of index.entries) {
     if (!meta.audio || Date.now() - (meta.transcribedAt || 0) < AUDIO_DAYS * 864e5) continue;
     await rm(path.join(LIB, path.basename(meta.audio)), { force: true });
+    await rm(quietFile(meta.id), { force: true }); // (it was about that copy of the audio)
     const file = path.join(LIB, `${meta.id}.json`);
     const entry = await readJson(file, null);
     if (entry) { delete entry.audio; await writeJson(file, entry); }
@@ -209,7 +221,7 @@ async function pruneAudio() {
   if (!gone.size) return;
   await withIndex(async () => {
     const fresh = await readIndex();
-    for (const meta of fresh.entries) if (gone.has(meta.id)) delete meta.audio;
+    for (const meta of fresh.entries) if (gone.has(meta.id)) { delete meta.audio; delete meta.quiet; }
     await writeJson(path.join(LIB, 'index.json'), fresh);
   });
 }
@@ -353,7 +365,7 @@ async function route(req, res) {
   if (p.startsWith('/api/library/')) { await upload(req, res, p.slice('/api/library/'.length)); return; }
   if (p.startsWith('/library/')) {
     const name = p.slice('/library/'.length);
-    if (!/^[\w-]+\.(json|md|mp3|m4a)$/.test(name)) { res.writeHead(404); res.end(); return; }
+    if (!/^[\w-]+\.(json|md|mp3|m4a)$|^[0-9a-f]{16}\.quiet\.json$/.test(name)) { res.writeHead(404); res.end(); return; }
     if (name === 'index.json' && !(await stat(path.join(LIB, name)).catch(() => null))) {
       res.writeHead(200, { 'content-type': TYPES['.json'] });
       res.end('{"entries":[]}');
@@ -388,18 +400,32 @@ async function authorized(req, workflow = WORKFLOW) {
   }
 }
 
-// PUT /api/library/<id>.mp3|m4a|md, then <id>.json (which lists it), or status.json.
+// PUT /api/library/<id>.mp3|m4a|md|quiet.json, then <id>.json (which lists it), or status.json.
+// (<id>.quiet.json may also come later, for a transcript that is already listed.)
 async function upload(req, res, name) {
   const done = (code, text) => { res.writeHead(code, { 'content-type': 'text/plain' }); res.end(text); };
   if (req.method !== 'PUT') return done(405, 'PUT only');
   if (!(await authorized(req))) return done(401, 'Unauthorized');
-  if (!/^[0-9a-f]{16}\.(json|md|mp3|m4a)$|^status\.json$/.test(name)) return done(400, 'Bad name');
+  if (!/^[0-9a-f]{16}\.(quiet\.json|json|md|mp3|m4a)$|^status\.json$/.test(name)) return done(400, 'Bad name');
   const file = path.join(LIB, name);
   const tmp = `${file}.part`;
   try {
     await pipe(req, createWriteStream(tmp));
     if (name.endsWith('.json')) {
       const value = JSON.parse(await readFile(tmp, 'utf8'));
+      if (name.endsWith('.quiet.json')) {
+        if (!validQuiet(value)) throw new Error('Not a list of quiet stretches');
+        await rename(tmp, file);
+        const id = name.slice(0, 16);
+        await withIndex(async () => {
+          const index = await readIndex();
+          const meta = index.entries.find((e) => e.id === id);
+          if (!meta?.audio || meta.quiet === value.v) return;
+          meta.quiet = value.v;
+          await writeJson(path.join(LIB, 'index.json'), index);
+        });
+        return done(200, 'ok');
+      }
       if (name !== 'status.json') {
         if (!Array.isArray(value.segments) || value.id !== name.slice(0, 16)) throw new Error('Not a transcript');
         await rename(tmp, file);

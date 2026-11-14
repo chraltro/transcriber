@@ -32,12 +32,47 @@
   <script>
     (function () {
       var errors = [];
+      var blocked = '';
+      var probed = false;
+      var store = null;
+      try { store = window.sessionStorage; store.getItem('x'); } catch (e) { store = null; }
+      var tries = store ? Number(store.getItem('boot-tries')) || 0 : 0;
       var show = function () {
-        if (window.__appStarted) return;
-        var box = document.getElementById('boot-fail');
-        document.getElementById('boot-why').textContent = errors.length ? errors.slice(0, 3).join(' / ') : 'Its script never ran. Loading it again usually fixes that.';
-        box.hidden = false;
+        // (Not while the page is on its way out: a reload cuts files off mid-load.)
+        if (window.__appStarted || window.__leaving) return;
+        document.getElementById('boot-why').textContent = blocked || (errors.length ? errors.slice(0, 3).join(' / ') : 'Its script never ran. Loading it again usually fixes that.');
+        if (tries > 0 && navigator.serviceWorker && navigator.serviceWorker.controller) document.getElementById('boot-reload').textContent = 'Load it without the copy kept on this device';
+        document.getElementById('boot-fail').hidden = false;
+        probe();
       };
+      // Which file is it? What app.js loads is asked for, one file at a time, until one fails.
+      var probe = function () {
+        if (probed || !window.fetch || !errors.length) return;
+        probed = true;
+        var seen = {};
+        var queue = [new URL('app.js', location.href).href];
+        var n = 0;
+        var name = function (url) { return url.slice(new URL('.', location.href).href.length); };
+        var next = function () {
+          if (!queue.length || n++ > 150) return;
+          var url = queue.shift();
+          fetch(url, { cache: 'no-store' }).then(function (res) {
+            if (!res.ok) { blocked = name(url) + ' did not load: the server answered ' + res.status + '.'; return show(); }
+            return res.text().then(function (text) {
+              var re = /(?:import|export)\s[^'";]*?from\s*['"](\.[^'"]+)['"]|import\s*['"](\.[^'"]+)['"]/g;
+              var m;
+              while ((m = re.exec(text))) { var u = new URL(m[1] || m[2], url).href; if (!seen[u]) { seen[u] = 1; queue.push(u); } }
+              next();
+            });
+          }).catch(function () {
+            blocked = navigator.onLine === false ? 'There is no connection, and no copy of the app is kept on this device yet.'
+              : name(url) + ' was kept from loading. If a content blocker is on, it is the likely cause: allow this site in it, then load the app again.';
+            show();
+          });
+        };
+        next();
+      };
+      window.addEventListener('pagehide', function () { window.__leaving = true; });
       window.addEventListener('error', function (e) {
         if (window.__appStarted) return;
         var where = e.filename ? ' (' + String(e.filename).split('/').pop() + ':' + e.lineno + ')' : e.target && e.target.src ? ' (could not load ' + String(e.target.src).split('/').pop() + ')' : '';
@@ -50,11 +85,15 @@
         setTimeout(show, 1500);
       });
       setTimeout(show, 8000);
-      // Loading it again drops the service worker and the copies it keeps, so every file is fetched anew.
+      // Loading it again drops the service worker and the copies it keeps, so every file is
+      // fetched anew. When that was tried and didn't help, the worker is left off on this
+      // device as well (coi-sw.js), and the page loads as it does in a browser without one.
       document.getElementById('boot-reload').addEventListener('click', function () {
-        var go = function () { location.reload(); };
+        var go = function () { window.__leaving = true; location.reload(); };
         var tasks = [];
         try {
+          if (store) store.setItem('boot-tries', String(tries + 1));
+          if (tries > 0) localStorage.setItem('pod-no-worker', JSON.stringify({ v: window.__workerVersion || '', at: Date.now() }));
           if (window.caches) tasks.push(caches.keys().then(function (keys) { return Promise.all(keys.filter(function (k) { return k.indexOf('transcriber-shell') === 0; }).map(function (k) { return caches.delete(k); })); }));
           if (navigator.serviceWorker) tasks.push(navigator.serviceWorker.getRegistrations().then(function (regs) { return Promise.all(regs.map(function (r) { return r.unregister(); })); }));
         } catch (e) {}
@@ -486,11 +525,11 @@
     </div>
     <div class="pb-scrub">
       <span class="pb-time" id="pb-cur">0:00</span>
-      <div class="scrub" id="pb-scrub"><div class="scrub-ads" aria-hidden="true"></div><input type="range" min="0" max="1000" value="0" step="1" aria-label="Position in the episode"></div>
+      <div class="scrub" id="pb-scrub"><div class="scrub-marks" aria-hidden="true"></div><input type="range" min="0" max="1000" value="0" step="1" aria-label="Position in the episode"></div>
       <span class="pb-time" id="pb-left"></span>
     </div>
     <div class="pb-tools">
-      <button type="button" class="btn ghost small hidden" id="pb-ad">Skip ad</button>
+      <button type="button" class="btn ghost small hidden" id="pb-jump">Skip ad</button>
       <button type="button" class="chip-btn" id="pb-speed" aria-label="Playback speed">1×</button>
       <a class="icon-btn" href="#/queue" id="pb-queue" aria-label="Up next"><svg class="icon"><use href="#i-queue"/></svg></a>
     </div>

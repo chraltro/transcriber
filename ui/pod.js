@@ -741,6 +741,8 @@ export class Pod {
         pick('Lock screen', 'lock', [['skip', 'Back and forward'], ['episodes', 'Previous and next']], s.lockButtons || 'skip', (v) => store.set({ lockButtons: v })),
         h('p.hint', { text: 'What the buttons beside play do on the lock screen, in the car and on headphones. An iPhone shows one pair or the other.' }),
         flip('Skip ads', s.skipAds, (v) => store.set({ skipAds: v }), 'Where an episode has a transcript, the sponsor reads in it are jumped over as they come up, with an undo each time.'),
+        pick('Shorten pauses', 'trim', [[0, 'Off'], [0.5, 'Over 0.5 s'], [0.8, 'Over 0.8 s'], [1.2, 'Over 1.2 s'], [2, 'Over 2 s']], s.trim || 0, (v) => store.set({ trim: v })),
+        h('p.hint', { text: 'Pauses longer than this are cut down to it: the dead air of a call\'s delay goes, the pauses people make on purpose stay. It works for episodes the server has transcribed and for episodes saved on this device.' }),
         flip('Go back a little after a pause', s.rewind, (v) => store.set({ rewind: v }), 'A few seconds after minutes away, up to 25 after a day.'),
         flip('Keep saved episodes once played', s.keepDownloads, (v) => store.set({ keepDownloads: v }))));
 

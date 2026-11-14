@@ -7,13 +7,13 @@ import { toSrt, toVtt } from './lib/subtitles.js';
 import { tidy, plainText, wordCount, startsParagraph, markdown } from './lib/paragraphs.js';
 import { guessNames, speakerName, labelParts, hostFromShow, Voices, minorVoices, OTHER } from './lib/speakers.js';
 import { nameGroups, glossaryFor } from './lib/names.js';
-import { isAd } from './lib/ads.js';
+import { isAd } from './lib/pitch.js';
 import { id3Length, parseId3 } from './lib/id3.js';
 import { encodeLevels, decodeLevels } from './lib/levels.js';
 import { Waveform } from './ui/waveform.js';
 import { extractTerms } from './lib/context.js';
 import { correctText, parseGlossary } from './lib/glossary.js';
-import { listEntries, getEntry, saveEntry, deleteEntry } from './ui/library.js';
+import { listEntries, getEntry, saveEntry, deleteEntry, getFeed, putFeed } from './ui/library.js';
 import { SpeakerMap } from './ui/speakermap.js';
 import { speakerMap, talkTime, selection } from './lib/speakermap.js';
 import { Studio } from './ui/studio.js';
@@ -24,9 +24,10 @@ import { Downloads } from './ui/downloads.js';
 import { Player } from './ui/player.js';
 import { PlayerUI } from './ui/playerui.js';
 import { Pod } from './ui/pod.js';
-import { adBreaks } from './lib/adbreaks.js';
+import { adBreaks } from './lib/breaks.js';
 import { subId } from './lib/podstate.js';
 import { summaryOf } from './lib/feed.js';
+import { QuietFinder, QUIET_VERSION } from './lib/quiet.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -1706,7 +1707,7 @@ function restoreTranscript(segments) {
 }
 
 const countWords = (t) => t.split(/\s+/).filter(Boolean).length;
-const markAd = (para) => para.el.classList.toggle('ad', isAd(para.p.textContent));
+const markAd = (para) => para.el.classList.toggle('plug', isAd(para.p.textContent));
 
 function addSegment(seg, { fresh = true, into = null } = {}) {
   if (!seg.text || !seg.text.trim()) return;
@@ -1956,7 +1957,12 @@ const podcasts = new PodStore({
   },
 });
 const downloads = new Downloads({ open: openEpisodeAudio });
-const player = new Player({ audio, store: podcasts, downloads, cachedAudio, adsFor });
+const player = new Player({ audio, store: podcasts, downloads, cachedAudio, adsFor, quietFor });
+// An episode saved while it plays is played from the saved copy from then on, where its pauses
+// can be found (if the listener has pauses shortened).
+downloads.addEventListener('change', () => {
+  if (player.item && player.source && !player.source.own && downloads.has(player.item.id) && podcasts.settings.trim && !player.quiet) player.reattach();
+});
 
 // What the player calls the audio of the transcript on screen: the episode's id when it comes
 // from a followed show, else one made from where the audio is kept.
@@ -2084,6 +2090,45 @@ async function adsFor(item, source) {
   return entry?.segments ? adBreaks(entry.segments) : null;
 }
 
+// Where the copy of the audio in the player goes quiet (lib/quiet.js), for shortening pauses.
+// The server found it in the copy it transcribed; in a copy on this device (saved for offline,
+// or the audio of a transcript) it is found here, by listening through the file once. Either
+// way it is kept, and it holds for that copy only: a show's host puts different ads in every
+// download, so the same episode fetched twice does not go quiet in the same places.
+async function quietFor(item, source, progress) {
+  const servers = source.kind === 'server' || (source.kind === 'download' && source.synced);
+  if (servers) {
+    const key = `quiet:server:${item.id}`;
+    if (podcasts.transcripts.get(item.id)?.quiet) {
+      try {
+        const res = await fetch(`library/${encodeURIComponent(item.id)}.quiet.json`);
+        const found = res.ok ? await res.json() : null;
+        if (Array.isArray(found?.quiet)) { putFeed({ id: key, v: found.v, quiet: found.quiet, at: Date.now() }).catch(() => {}); return found.quiet; }
+      } catch {}
+    }
+    const kept = await getFeed(key).catch(() => null);
+    if (kept?.quiet) return kept.quiet;
+  }
+  if (!source.own) return null; // streamed: there is no file here to listen through
+  const blob = item.file || item.blob || (await downloads.blob(item.id)) || (item.key ? await cachedAudio(item.key).catch(() => null) : null);
+  if (!blob) return null;
+  const key = `quiet:own:${item.id}`;
+  const kept = await getFeed(key).catch(() => null);
+  if (kept?.v === QUIET_VERSION && kept.size === blob.size) return kept.quiet;
+  const finder = new QuietFinder(SAMPLE_RATE);
+  let total = 0;
+  let done = 0;
+  for await (const piece of decodePieces(blob, (t) => { total = t; })) {
+    if (player.item?.id !== item.id) return null; // the listener moved on
+    finder.push(piece);
+    done += piece.length / SAMPLE_RATE;
+    progress(total ? Math.min(1, done / total) : 0);
+  }
+  const quiet = finder.finish();
+  putFeed({ id: key, v: QUIET_VERSION, size: blob.size, quiet, at: Date.now() }).catch(() => {});
+  return quiet;
+}
+
 /* ---------- transcripts and the podcast screens ---------- */
 
 // Transcripts kept in this browser, by the episode (or pasted link) they are of.
@@ -2177,7 +2222,11 @@ const playerUI = new PlayerUI({
   // With none yet, the episode's own sheet has the ways of getting one.
   openTranscript: (item) => (transcriptOf(item) || sessionId() === item.id ? openEpisodeTranscript(item) : pod.episode(item)),
   openEpisode: (item) => pod.episode(item),
+  saveOffline: (item) => pod.save(item),
+  isSaved: (item) => downloads.has(item.id),
+  isSaving: (item) => downloads.progress(item.id) != null,
 });
+downloads.addEventListener('change', () => playerUI.trims());
 
 const pod = new Pod({
   store: podcasts, player, playerUI, downloads, artInto, toast, searchShows, showFromLink, transcriptOf,
@@ -3490,6 +3539,7 @@ async function init() {
   player.restore();
   pod.route();
   window.__appStarted = true; // index.html shows a message when this never happens
+  try { sessionStorage.removeItem('boot-tries'); } catch {}
   downloads.verify();
   // The server, if this copy of the app has one: the library, and (for the clean-up studio)
   // voice regeneration. A static copy (GitHub Pages) has neither.

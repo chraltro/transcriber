@@ -11,6 +11,8 @@ import { findFeed, readFeed } from './feeds.mjs';
 import { transcribeEpisode } from './transcribe.mjs';
 import { SHOWS, markdownOf, notesWithHosts } from './shows.mjs';
 import { planQueue } from './plan.mjs';
+import { quietOfAudio } from './quiet.mjs';
+import { QUIET_VERSION } from '../lib/quiet.js';
 import { correctText } from '../lib/glossary.js';
 import { extractTerms } from '../lib/context.js';
 import { MODELS, dtypeFor } from '../lib/models.js';
@@ -111,6 +113,24 @@ for (const meta of index.entries) {
   }
 }
 
+// Transcripts made before the player could shorten pauses get the list of where their audio
+// goes quiet, from the copy of the audio the site keeps: a few minutes' worth each run.
+const QUIET_MIN = Number(process.env.QUIET_MINUTES || 6);
+const quietStart = Date.now();
+let listened = 0;
+for (const meta of index.entries) {
+  if (DRY || !meta.audio || (meta.quiet || 0) >= QUIET_VERSION) continue;
+  if (Date.now() - quietStart > QUIET_MIN * 60000) break;
+  try {
+    const quiet = await quietOfAudio(`${SITE}/${meta.audio}`);
+    await put(`${meta.id}.quiet.json`, JSON.stringify({ v: QUIET_VERSION, quiet }), 'application/json');
+    listened++;
+  } catch (err) {
+    log(`couldn't find the pauses in ${meta.id}: ${err.message}`);
+  }
+}
+if (listened) log(`found the pauses in ${listened} earlier episode${listened === 1 ? '' : 's'}`);
+
 if (!queue.length || DRY) {
   log(DRY ? `dry run: ${queue.map((q) => `${q.show}: ${q.title}`).join(' | ') || 'nothing'}` : 'nothing new');
   process.exit(0);
@@ -158,7 +178,10 @@ for (const [i, ep] of queue.entries()) {
     delete entry.audioExt;
     entry.fixes = FIXES;
     entry.audio = `library/${audioName}`;
+    const quiet = entry.quiet || [];
+    delete entry.quiet;
     await put(audioName, await readFile(tmpFile), entry.audio.endsWith('m4a') ? 'audio/mp4' : 'audio/mpeg');
+    await put(`${entry.id}.quiet.json`, JSON.stringify({ v: QUIET_VERSION, quiet }), 'application/json');
     await put(`${entry.id}.md`, markdownOf(entry), 'text/markdown');
     await put(`${entry.id}.json`, JSON.stringify(entry), 'application/json'); // last: this lists it
     speed = Math.min(1.5, (entry.total / entry.took) * 0.9);

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { adBreaks, breakAt, adSeconds } from '../../lib/adbreaks.js';
-import { adCues, isAd } from '../../lib/ads.js';
+import { adBreaks, breakAt, adSeconds } from '../../lib/breaks.js';
+import { adCues, isAd } from '../../lib/pitch.js';
 import { skipAt } from '../../lib/playback.js';
 
 // Sentences as the transcriber delivers them: timed, with the 30 second window they came from.

@@ -12,6 +12,8 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const SHOTS = join(ROOT, 'ui-shots');
 // ENGINE=webkit runs it in Safari's engine, which is what an iPhone has whatever the browser.
 const WEBKIT = process.env.ENGINE === 'webkit';
+// What content blockers' lists go for in an address (after EasyList's general rules).
+const BLOCKED = [/[/._-]ads?[/._-]/i, /\/ad[a-z]+\.(js|css)$/i, /[/._-](adv|advert\w*|sponsor\w*|banner|promo|track(ing|er)?|analytics|pixel|beacon|popup)[/._-]/i];
 const launch = () => (WEBKIT ? webkit.launch() : chromium.launch({ ...(process.env.CHROME ? { executablePath: process.env.CHROME } : {}), args: ['--autoplay-policy=no-user-gesture-required'] }));
 
 const failures = [];
@@ -131,7 +133,7 @@ async function run(name, options) {
     let a = await audio();
     check(a.src.endsWith(`/library/${world.transcribed}.mp3`), `a transcribed episode plays the copy its transcript was made from (${a.src.split('/').slice(-2).join('/')})`);
     check(await page.locator('#playbar').isVisible(), 'the player is along the bottom');
-    check((await page.locator('#playbar .scrub-ads i').count()) === (mobile ? 1 : 1), 'the ad is marked on the position slider');
+    check((await page.locator('#playbar .scrub-marks i').count()) === (mobile ? 1 : 1), 'the ad is marked on the position slider');
     await page.evaluate(() => { document.querySelector('#audio').currentTime = 38; });
     await page.waitForFunction(() => document.querySelector('#audio').currentTime > 76, null, { timeout: 15000 });
     a = await audio();
@@ -150,13 +152,33 @@ async function run(name, options) {
     check((await audio()).rate === 1.5, 'speed 1.5');
     await page.click('.np-sleeps button[data-sleep="30"]');
     check(/Pauses in (29:5\d|30:00)/.test(await page.locator('.np-sleep-state').textContent()), 'a sleep timer counts down');
-    const note = await page.locator('.np-ads-note').textContent();
+    const note = await page.locator('.np-skips-note').textContent();
     check(/1 ad break marked/.test(note), `the sheet says what it knows about ads (${note})`);
     await page.waitForTimeout(350);
     await shot('6-player');
     await noSideScroll('player');
     await page.click('.np-sleeps button[data-sleep="0"]');
     await page.click('.np-speeds button[data-rate="1"]');
+
+    /* ---------- pauses, shortened ---------- */
+    // (The world's audio stops for half a second every few seconds, and for two and a half
+    // every 45: at 42.5, inside the ad, at 87.5, and so on.)
+    const trimNote = () => page.locator('.np-trim-note').textContent();
+    check(/longest pause to leave alone/.test(await trimNote()), 'pauses are left as they are until a limit is picked');
+    await page.click('.np-trims button[data-trim="0.8"]');
+    await page.waitForFunction(() => /longer than 0\.8 s/.test(document.querySelector('.np-trim-note').textContent), null, { timeout: 10000 });
+    check(/^6 pauses in this episode are longer than 0\.8 s/.test(await trimNote()), `the server's list of where its copy goes quiet is used (${await trimNote()})`);
+    await page.evaluate(() => { document.querySelector('#audio').currentTime = 81; });
+    await page.waitForFunction(() => document.querySelector('#audio').currentTime > 86.5, null, { timeout: 15000 });
+    const before = Number(await page.locator('.np-trim-state').getAttribute('data-saved'));
+    await page.waitForFunction(() => document.querySelector('#audio').currentTime > 90, null, { timeout: 15000 });
+    const left = Number(await page.locator('.np-trim-state').getAttribute('data-saved'));
+    check(before === 0, `a pause of half a second is not touched (${before} s left out by 86 s)`);
+    check(left > 1.3 && left < 2.1, `one of two and a half seconds is cut down to the limit (${left} s left out)`);
+    check(/saved$/.test(await page.locator('.np-trim-state').textContent()), `and the sheet says what that saved (${await page.locator('.np-trim-state').textContent()})`);
+    await page.waitForTimeout(300);
+    await shot('6b-pauses');
+    await noSideScroll('pauses');
     await page.keyboard.press('Escape');
     await page.waitForSelector('.np', { state: 'detached' });
 
@@ -227,8 +249,33 @@ async function run(name, options) {
     await playing(0.3);
     a = await audio();
     check(a.src.startsWith('blob:'), `${WEBKIT ? 'the saved copy is the one played' : 'offline, the saved copy plays'}`);
+    // Nobody listed where this copy goes quiet: the device listens through it itself.
+    await page.click('#pb-open');
+    await page.waitForSelector('.np');
+    await page.waitForFunction(() => /longer than 0\.8 s/.test(document.querySelector('.np-trim-note').textContent), null, { timeout: 30000 }).catch(() => {});
+    check(/^6 pauses/.test(await page.locator('.np-trim-note').textContent()), `the pauses of a saved episode are found on the device (${await page.locator('.np-trim-note').textContent()})`);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.np', { state: 'detached' });
     await page.click('#pb-play');
     await A.ctx.setOffline(false);
+
+    // A streamed episode has no file here to listen through: saving it gets one, and the
+    // player moves over to the saved copy where it is.
+    await row('The pilot who boards at night').locator('.ep-play').click();
+    await playing(130);
+    await page.click('#pb-open');
+    await page.waitForSelector('.np');
+    await page.waitForSelector('.np-trim-save:not(.hidden)');
+    check(/saved on this device/.test(await page.locator('.np-trim-note').textContent()), `a streamed episode says what finding its pauses takes (${await page.locator('.np-trim-note').textContent()})`);
+    await page.click('.np-trim-save');
+    await page.waitForFunction(() => document.querySelector('#audio').currentSrc.startsWith('blob:') && /longer than 0\.8 s/.test(document.querySelector('.np-trim-note').textContent), null, { timeout: 30000 }).catch(() => {});
+    a = await audio();
+    check(a.src.startsWith('blob:') && a.t >= 130 && a.t < 160 && !a.paused && /^6 pauses/.test(await page.locator('.np-trim-note').textContent()), `saved from the player, it plays on from the saved copy, its pauses found (${a.t.toFixed(0)} s, ${await page.locator('.np-trim-note').textContent()})`);
+    await page.click('.np-trims button[data-trim="0"]');
+    check((await page.locator('.np-trim-state').textContent()) === 'Off', 'and off is off');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.np', { state: 'detached' });
+    await page.click('#pb-play');
 
     /* ---------- a second device joins, and the two stay in step ---------- */
     await page.click(mobile ? '#tabbar [data-nav=settings]' : '#nav [data-nav=settings]');
@@ -272,7 +319,7 @@ async function run(name, options) {
     await row('Why every container').locator('.ep-more').click();
     await page.click('#row-menu button:has-text("Read the transcript")');
     await page.waitForSelector('#transcript .seg');
-    check(await page.evaluate(() => document.body.classList.contains('view-transcribe') && document.querySelectorAll('#transcript .para.ad').length > 0), 'the transcript opens on the transcript side, its ad marked');
+    check(await page.evaluate(() => document.body.classList.contains('view-transcribe') && document.querySelectorAll('#transcript .para.plug').length > 0), 'the transcript opens on the transcript side, its ad marked');
     await page.locator('#transcript .seg', { hasText: 'It took ten years of committees' }).click();
     await playing(139);
     await page.waitForSelector('#transcript .seg.playing');
@@ -308,9 +355,32 @@ async function run(name, options) {
 
 // With its service worker, the app opens again without a connection.
 async function offline() {
-  console.log('\n=== offline start');
+  console.log('\n=== starting');
   const world = await startWorld({ audioSeconds: 30 });
   const browser = await launch();
+  // A content blocker (Safari on an iPhone has them, and so has the app on its home screen)
+  // drops files whose address looks like an ad's. One dropped file of the app's script and
+  // nothing starts: the page is there, styled, and no button does anything.
+  {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    await ctx.route('**/*', (route) => (BLOCKED.some((re) => re.test(new URL(route.request().url()).pathname)) ? route.abort('blockedbyclient') : route.continue()));
+    const page = await ctx.newPage();
+    await page.goto(world.base);
+    await page.waitForTimeout(3500);
+    const state = await page.evaluate(() => ({ started: !!window.__appStarted, why: document.querySelector('#boot-fail').hidden ? '' : document.querySelector('#boot-why').textContent }));
+    check(state.started && !state.why, `with a content blocker on, the app starts${state.why ? ` (${state.why})` : ''}`);
+    await ctx.close();
+    // ...and when a file is kept from loading all the same, the page says which.
+    const ctx2 = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+    await ctx2.route('**/lib/playback.js', (route) => route.abort('blockedbyclient'));
+    const page2 = await ctx2.newPage();
+    await page2.goto(world.base);
+    await page2.waitForSelector('#boot-fail:not([hidden])', { timeout: 10000 }).catch(() => {});
+    await page2.waitForFunction(() => /playback\.js/.test(document.querySelector('#boot-why').textContent), null, { timeout: 10000 }).catch(() => {});
+    const why = await page2.locator('#boot-why').textContent();
+    check(/^lib\/playback\.js was kept from loading/.test(why), `a file that is kept from loading is named (${why})`);
+    await ctx2.close();
+  }
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const page = await ctx.newPage();
   try {
@@ -330,12 +400,14 @@ async function offline() {
     const again = await page.evaluate(() => !!window.__appStarted && !!document.querySelector('#tabbar a.on'));
     check(again, 'and on the next start, with every file passing through the worker');
     await page.waitForTimeout(1500);
-    const kept = await page.evaluate(async () => (await (await caches.open('transcriber-shell-2')).keys()).map((r) => new URL(r.url).pathname));
+    const kept = await page.evaluate(async () => (await (await caches.open('transcriber-shell-3')).keys()).map((r) => new URL(r.url).pathname));
     check(kept.includes('/') && kept.includes('/app.js') && kept.includes('/ui/pod.js') && !kept.some((p) => p.startsWith('/api/') || p.startsWith('/library/')), `the app's own files are kept, the server's answers are not (${kept.length} files)`);
-    await ctx.setOffline(true);
+    // (WebKit as the test browser builds it fails every load while "offline", its own worker's
+    // answers included, so there the server is taken away instead.)
+    if (WEBKIT) await world.stopApp(); else await ctx.setOffline(true);
     await page.reload();
     await page.waitForSelector('#show-grid', { timeout: 15000 });
-    check(/Offline|not answering/.test(await page.locator('#top-status').textContent()), 'offline, the app still opens and says so');
+    check(/Offline|not answering/.test(await page.locator('#top-status').textContent()), `${WEBKIT ? 'with the server gone' : 'offline'}, the app still opens and says so (${await page.locator('#top-status').textContent()})`);
   } catch (err) {
     check(false, `the offline start got through (${err.message.split('\n')[0]})`);
   } finally {

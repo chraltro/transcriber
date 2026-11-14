@@ -9,12 +9,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { QuietFinder, QUIET_VERSION } from '../lib/quiet.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const idOf = (guid) => createHash('sha1').update(guid).digest('hex').slice(0, 16);
 const DAY = 864e5;
 
-// Speech-like audio: bursts of a warbling tone, 8 kHz 16-bit mono WAV.
+// Speech-like audio: bursts of a warbling tone with half a second between them, and every 45
+// seconds a pause of two and a half (42.5 to 45, 87.5 to 90, ...). 8 kHz 16-bit mono WAV.
 export function wav(seconds, pitch = 180) {
   const rate = 8000;
   const n = rate * seconds;
@@ -24,7 +26,7 @@ export function wav(seconds, pitch = 180) {
   buf.writeUInt32LE(rate * 2, 28); buf.writeUInt16LE(2, 32); buf.writeUInt16LE(16, 34); buf.write('data', 36); buf.writeUInt32LE(n * 2, 40);
   for (let i = 0; i < n; i++) {
     const t = i / rate;
-    const v = t % 4.5 < 4 ? Math.sin(2 * Math.PI * (pitch + 40 * Math.sin(t * 3)) * t) * 0.25 : 0;
+    const v = t % 4.5 < 4 && t % 45 < 42.5 ? Math.sin(2 * Math.PI * (pitch + 40 * Math.sin(t * 3)) * t) * 0.25 : 0;
     buf.writeInt16LE(Math.round(v * 32767), 44 + i * 2);
   }
   return buf;
@@ -129,8 +131,12 @@ export async function startWorld({ audioSeconds = 300 } = {}) {
   };
   await writeFile(path.join(lib, `${id}.json`), JSON.stringify(entry));
   await writeFile(path.join(lib, `${id}.mp3`), audio); // (a WAV under the name the server keeps audio by)
+  // ...and where that audio goes quiet, as the transcribing leaves it beside the transcript.
+  const finder = new QuietFinder(8000);
+  finder.push(Float32Array.from(new Int16Array(audio.buffer, audio.byteOffset + 44, (audio.length - 44) / 2), (v) => v / 32768));
+  await writeFile(path.join(lib, `${id}.quiet.json`), JSON.stringify({ v: QUIET_VERSION, quiet: finder.finish() }));
   const { metaOf } = await import('../server/shows.mjs');
-  await writeFile(path.join(lib, 'index.json'), JSON.stringify({ entries: [metaOf(entry)] }));
+  await writeFile(path.join(lib, 'index.json'), JSON.stringify({ entries: [metaOf({ ...entry, quiet: QUIET_VERSION })] }));
 
   const port = await new Promise((resolve) => { const s = http.createServer().listen(0, () => { const { port: free } = s.address(); s.close(() => resolve(free)); }); });
   const logs = [];
@@ -147,6 +153,8 @@ export async function startWorld({ audioSeconds = 300 } = {}) {
     feedUrl: (slug) => `${worldBase}/feed/${slug}.xml`,
     // A new episode comes out.
     publish: (slug, title, seconds = 1800) => { (state.extra[slug] ||= []).unshift([title, 0, seconds]); },
+    // The app's server goes away (the page is then on its own).
+    stopApp: () => new Promise((resolve) => { app.once('exit', resolve); app.kill(); }),
     close: async () => { app.kill(); world.close(); await rm(data, { recursive: true, force: true }); },
   };
 }

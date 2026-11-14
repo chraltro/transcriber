@@ -86,7 +86,7 @@ async function run(name, contextOptions, audio) {
     rows: document.querySelectorAll('#map-grid .map-row').length,
     labels: [...document.querySelectorAll('#map-grid .map-label')].map((x) => x.textContent),
     talk: document.querySelectorAll('#talk-list li').length,
-    ads: document.querySelectorAll('.para.ad').length,
+    ads: document.querySelectorAll('.para.plug').length,
     library: !!indexedDB,
   }));
   check(done.chips.includes('Derek Thompson') && done.chips.includes('Anna Berg'), `speakers named from introductions (${done.chips.join(', ')})`);

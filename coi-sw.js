@@ -16,16 +16,20 @@ if (typeof window === 'undefined') {
   // only stands in for a file the network fails on); when the network fails or takes more than a
   // few seconds, the page and everything it loads come from the kept copies, so a start is
   // never half one version of the app and half another.
-  // Not kept: the server's answers (api/), transcripts and audio (library/, enhance/), and
-  // anything asked for in byte ranges.
-  const SHELL = 'transcriber-shell-2';
+  // Not kept, and not touched at all: the server's answers (api/), transcripts and audio
+  // (library/, enhance/), and anything asked for in byte ranges. Those go to the network as if
+  // this worker were not there.
+  const SHELL = 'transcriber-shell-3';
+  // Safari's engine (every browser on an iPhone) doesn't isolate a page on these headers, so
+  // there they would be for nothing: the network's own answers are handed on as they are.
+  const PLAIN = /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|Edg\//.test(navigator.userAgent);
   const SLOW_MS = 4000;
   const scope = new URL(self.registration.scope).pathname;
   const live = new Map(); // page (client id) -> did it come from the network?
 
   self.addEventListener('install', () => self.skipWaiting());
-  // Copies kept by an earlier version of this worker go: they were kept with headers that
-  // described the packed file, not the unpacked one in them.
+  // Copies kept by an earlier version of this worker go (they were answers this worker had
+  // rebuilt; what is kept now is the network's own).
   self.addEventListener('activate', (e) => e.waitUntil(
     caches.keys().then((keys) => Promise.all(keys.filter((k) => k.startsWith('transcriber-shell') && k !== SHELL).map((k) => caches.delete(k)))).catch(() => {}).then(() => self.clients.claim())
   ));
@@ -57,16 +61,14 @@ if (typeof window === 'undefined') {
     const key = page ? url.origin + url.pathname : req;
     const kept = await cache.match(key);
     const given = { up: false }; // given up on: an answer that comes late is not kept either
-    const fresh = () => fetch(req).then((res) => (res.status === 304 ? whole(req) : res)).then((res) => {
+    const out = (res) => (PLAIN ? res : isolated(res));
+    const fresh = () => fetch(req).then((res) => (!PLAIN && res.status === 304 ? whole(req) : res)).then((res) => {
       // Keeping a copy must never cost the page its file: the copy is taken from the network's
       // own answer, and whatever goes wrong with it stays here.
       try {
-        if (res.status === 200 && !given.up) {
-          const copy = isolated(res.clone());
-          cache.put(key, copy).catch(() => {});
-        }
+        if (res.status === 200 && !given.up) cache.put(key, out(res.clone())).catch(() => {});
       } catch {}
-      return isolated(res);
+      return out(res);
     });
     if (page) {
       if (live.size > 40) live.delete(live.keys().next().value);
@@ -90,12 +92,25 @@ if (typeof window === 'undefined') {
     if (req.cache === 'only-if-cached' && req.mode !== 'same-origin') return;
     const rel = url.pathname.startsWith(scope) ? url.pathname.slice(scope.length) : url.pathname;
     const ours = req.method === 'GET' && !req.headers.has('range') && !/^(api|library|enhance)\//.test(rel);
+    if (!ours) return;
     // (If keeping copies fails in some way of its own, the file still comes from the network.)
-    e.respondWith(ours ? shell(e, url).catch(() => fetch(req).then(isolated)) : fetch(req).then(isolated));
+    e.respondWith(shell(e, url).catch(() => fetch(req)));
   });
 } else {
   (() => {
-    if (window.crossOriginIsolated || !window.isSecureContext || !('serviceWorker' in navigator)) return;
+    if (!window.isSecureContext || !('serviceWorker' in navigator)) return;
+    // A worker the app would not start under on this device is left off (index.html decides,
+    // when loading it again didn't help), until a newer one comes or three days have passed.
+    const VERSION = '3';
+    window.__workerVersion = VERSION;
+    try {
+      const off = JSON.parse(localStorage.getItem('pod-no-worker') || 'null');
+      if (off && off.v === VERSION && Date.now() - off.at < 3 * 864e5) {
+        navigator.serviceWorker.getRegistrations().then((regs) => regs.forEach((r) => r.unregister())).catch(() => {});
+        return;
+      }
+    } catch {}
+    if (window.crossOriginIsolated) return;
     // Already controlled but still not isolated: the browser doesn't support it. Don't loop.
     if (navigator.serviceWorker.controller) return;
     // sessionStorage throws in some privacy modes; without it there is no loop guard, so do nothing.
@@ -107,6 +122,7 @@ if (typeof window === 'undefined') {
       // Never throw away work in progress; isolation then kicks in on the next visit.
       if (window.__transcriberBusy) return;
       store.setItem('coi-reloaded', '1');
+      window.__leaving = true; // (the files this cuts off mid-load are not a failed start)
       location.reload();
     };
     navigator.serviceWorker.register(document.currentScript.src).then((reg) => {

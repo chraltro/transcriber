@@ -763,8 +763,8 @@ body.busy #detail { color: var(--accent); }
 ::highlight(search-current) { background-color: var(--accent); color: var(--accent-ink); }
 
 /* sponsor reads */
-.para.ad p { color: var(--muted); }
-.para.ad p::before {
+.para.plug p { color: var(--muted); }
+.para.plug p::before {
   content: "Ad"; display: inline-block; margin-right: 8px; padding: 0 5px; vertical-align: 1px;
   border: 1px solid var(--line-strong); border-radius: 2px;
   font: 600 9.5px/1.7 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint);
@@ -1364,7 +1364,7 @@ a.sheet-show:hover { color: var(--text); }
 .np-transport .jump-btn { width: 52px; height: 52px; }
 .np-transport .jump-btn .icon { width: 36px; height: 36px; }
 .np-transport .jump-btn b { font-size: 10px; }
-.np-skipad { justify-self: center; }
+.np-jump { justify-self: center; }
 .np-block { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
 .np-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .np-head h3 { margin: 0; font: 700 14.5px/1.3 var(--font-slab); }
@@ -1373,10 +1373,11 @@ a.sheet-show:hover { color: var(--text); }
 .np-speeds { display: flex; align-items: center; gap: 6px; }
 .np-speeds .mini-seg { flex: 1; justify-content: space-between; flex-wrap: nowrap; }
 .np-speeds .mini-seg button { flex: 1; padding: 6px 0; }
-.np-sleeps button { padding: 6px 10px; }
+.np-sleeps button, .np-trims button { padding: 6px 10px; }
+.np-trim-save { justify-self: start; }
 .sign { font: 600 19px/1 var(--font-ui); }
 .np .switch { padding: 0; justify-self: start; }
-.np-ads.off { opacity: 0.6; }
+.np-skips.off { opacity: 0.6; }
 .np-volume { grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; color: var(--muted); }
 .np-next { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; counter-reset: next; }
 .np-next li { display: grid; gap: 1px; min-width: 0; }
@@ -1390,8 +1391,8 @@ a.sheet-show:hover { color: var(--text); }
 
 .scrub { position: relative; height: 26px; }
 .scrub input { position: relative; z-index: 1; display: block; }
-.scrub-ads { position: absolute; z-index: 2; left: 7px; right: 7px; top: 50%; height: 4px; margin-top: -2px; pointer-events: none; }
-.scrub-ads i { position: absolute; top: 0; bottom: 0; border-radius: 1px; background: var(--spk-1); }
+.scrub-marks { position: absolute; z-index: 2; left: 7px; right: 7px; top: 50%; height: 4px; margin-top: -2px; pointer-events: none; }
+.scrub-marks i { position: absolute; top: 0; bottom: 0; border-radius: 1px; background: var(--spk-1); }
 
 /* ---------- the player, along the bottom ---------- */
 
@@ -1451,7 +1452,7 @@ a.sheet-show:hover { color: var(--text); }
   .playbar { left: 0; bottom: var(--tabs); height: 62px; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; padding: 0 8px 0 4px; }
   .pb-line { display: block; position: absolute; left: 0; right: 0; top: -1px; height: 2px; background: var(--line); }
   .pb-line span { display: block; height: 100%; width: 0; background: var(--accent); }
-  .pb-scrub, #pb-back, .pb-tools > :not(#pb-ad) { display: none; }
+  .pb-scrub, #pb-back, .pb-tools > :not(#pb-jump) { display: none; }
   .pb-art { --size: 42px; width: 42px; }
   .pb-now { grid-template-columns: 42px minmax(0, 1fr); gap: 10px; }
 }

@@ -11,6 +11,7 @@ The transcriber is the **Transcribe** section (`#/transcribe`): paste a podcast 
 - **A show's page**: its episodes, a search, and Play the latest.
 - **Up next**: the queue. **Play next** puts an episode first, and when one ends the next starts.
 - **The player**: back 15 and forward 30 seconds (changeable in Settings), speed from 0.8x to 3x with an optional speed per show, and a sleep timer. Each episode's position is remembered, and after a pause it picks up a few seconds earlier (up to 25 after a day). Keys: `k` or space plays and pauses, `j` goes back, `l` forward.
+- **Shorten pauses**: pick the longest pause to leave alone (0.5, 0.8, 1.2 or 2 seconds) and anything longer is cut down to that, so the dead air of a call's delay goes and the pauses people make on purpose stay. Where the audio goes quiet is found from the audio itself (`lib/quiet.js`): by the transcribing for episodes the server has, on the device for episodes saved for offline. A streamed episode has to be saved first; the player offers to.
 - **Episode notes** come from the feed, and times in them (`12:34`) start the episode there.
 - **Save for offline** keeps an episode on the device, listed under Up next.
 
@@ -23,7 +24,7 @@ The transcriber is the **Transcribe** section (`#/transcribe`): paste a podcast 
 
 ## Skipping ads
 
-Ads are found from an episode's transcript (`lib/adbreaks.js`, built on `lib/ads.js`). When a transcript is uploaded, its ad breaks are stored in the server's library index.
+Ads are found from an episode's transcript (`lib/breaks.js`, built on `lib/pitch.js`). When a transcript is uploaded, its ad breaks are stored in the server's library index.
 
 - Breaks are marked on the position slider and skipped as they come up, with an **Undo**.
 - Skipping happens only when the copy being played is the one the transcript was made from (the server's copy).
@@ -137,7 +138,7 @@ Both `npm` runs happen in GitHub Actions on every push to a `claude/**` branch t
 - `lib/enhance/`: the clean-up itself (DSP, modules, analysis, encoding); `ui/studio.js` is its page
 - `lib/`: the logic both use, kept free of the DOM so it can be unit tested (MP3/WAV indexing, ID3 tags, link parsing, text cleanup, paragraphs, waveform levels, splitting audio at pauses into 30 second windows, model choices, subtitles)
 - `lib/feed.js`: podcast feeds and OPML
-- `lib/adbreaks.js`: ad breaks from a transcript
+- `lib/breaks.js`: ad breaks from a transcript
 - `lib/podstate.js`: the library document and how copies merge
 - `lib/playback.js`: where to resume, which ad to skip
 - `ui/pod.js`: the Listen, Up next and Settings screens

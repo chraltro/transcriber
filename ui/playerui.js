@@ -3,7 +3,8 @@
 import { h, icon, setIcon, openSheet, closeSheet, sheetOpen } from './dom.js';
 import { fmtTime } from '../lib/text.js';
 import { leftText, fmtSpeed, nextSpeed, SPEEDS } from '../lib/playback.js';
-import { adSeconds } from '../lib/adbreaks.js';
+import { adSeconds } from '../lib/breaks.js';
+import { cutSeconds } from '../lib/quiet.js';
 
 const $ = (id) => document.getElementById(id);
 const IS_IOS = typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
@@ -12,7 +13,7 @@ const IS_IOS = typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/i.test(nav
 // the thumb and the audio stays where it is; letting go moves the audio.
 function scrubber(root, player, onPreview) {
   const input = root.querySelector('input');
-  const ads = root.querySelector('.scrub-ads');
+  const ads = root.querySelector('.scrub-marks');
   let dragging = false;
   let drawn = '';
   const paint = () => input.style.setProperty('--pct', `${(Number(input.value) / 1000) * 100}%`);
@@ -56,8 +57,9 @@ function scrubber(root, player, onPreview) {
 export class PlayerUI {
   // artInto(box, { art, title, show }): the app's cover art (app.js); toast(text, action);
   // openTranscript(item), openEpisode(item): what the sheet's buttons do.
-  constructor({ player, store, artInto, toast, openTranscript, hasTranscript, openEpisode }) {
-    Object.assign(this, { player, store, artInto, toast, openTranscript, hasTranscript, openEpisode });
+  // saveOffline(item): keeps the episode on the device (its pauses can then be found).
+  constructor({ player, store, artInto, toast, openTranscript, hasTranscript, openEpisode, saveOffline, isSaved, isSaving }) {
+    Object.assign(this, { player, store, artInto, toast, openTranscript, hasTranscript, openEpisode, saveOffline, isSaved, isSaving });
     this.bar = $('playbar');
     this.scrub = scrubber($('pb-scrub'), player, (t) => { $('pb-cur').textContent = fmtTime(t); });
     this.sheet = null;
@@ -67,20 +69,21 @@ export class PlayerUI {
     $('pb-fwd').addEventListener('click', () => player.skip(store.settings.fwd));
     $('pb-open').addEventListener('click', () => this.open());
     $('pb-speed').addEventListener('click', () => player.setSpeed(nextSpeed(player.rateFor())));
-    $('pb-ad').addEventListener('click', () => player.skipAd());
+    $('pb-jump').addEventListener('click', () => player.skipAd());
 
     player.addEventListener('item', () => { this.item(); this.time(); this.state(); });
     player.addEventListener('state', () => this.state());
     player.addEventListener('time', () => this.time());
     player.addEventListener('rate', () => this.rate());
     player.addEventListener('ads', () => { this.ads(); this.time(); });
+    player.addEventListener('quiet', () => this.trims());
     player.addEventListener('sleep', (e) => { this.sleepDraw(); if (e.detail.fired) toast('Sleep timer: paused'); });
     player.addEventListener('skipped', (e) => toast(`Skipped ${fmtTime(e.detail.seconds)} of ads`, { label: 'Undo', run: () => player.undoSkip() }));
     player.addEventListener('blocked', () => toast('Tap play once more to start'));
     player.addEventListener('error', (e) => toast(e.detail.message));
     store.addEventListener('change', (e) => {
       const keys = e.detail.keys || [];
-      if (keys.includes('settings') || keys.some((k) => k.startsWith('subs/'))) { this.rate(); this.jumps(); }
+      if (keys.includes('settings') || keys.some((k) => k.startsWith('subs/'))) { this.rate(); this.jumps(); this.trims(); }
       if (keys.includes('queue') && this.sheet) this.upNext();
     });
     setInterval(() => { if (player.sleep) this.sleepDraw(); }, 1000);
@@ -135,6 +138,7 @@ export class PlayerUI {
     $('pb-left').textContent = d > 0 ? `-${fmtTime(Math.max(0, d - t))}` : '';
     if (!this.sheet) return;
     this.sheetScrub.draw();
+    if (player.trimmed !== this.shownTrim) this.trims();
     if (!this.sheetScrub.dragging) this.sheet.querySelector('.np-cur').textContent = fmtTime(t);
     this.sheet.querySelector('.np-left').textContent = leftText(t, d, player.rate);
   }
@@ -154,19 +158,48 @@ export class PlayerUI {
   ads() {
     const { player } = this;
     const inAd = player.inBreak >= 0;
-    $('pb-ad').classList.toggle('hidden', !inAd);
+    $('pb-jump').classList.toggle('hidden', !inAd);
     if (!this.sheet) return;
-    this.sheet.querySelector('.np-skipad').classList.toggle('hidden', !inAd);
-    const note = this.sheet.querySelector('.np-ads-note');
-    const sw = this.sheet.querySelector('.np-ads input');
+    this.sheet.querySelector('.np-jump').classList.toggle('hidden', !inAd);
+    const note = this.sheet.querySelector('.np-skips-note');
+    const sw = this.sheet.querySelector('.np-skips input');
     sw.checked = this.store.settings.skipAds;
     sw.disabled = !player.breaks;
-    this.sheet.querySelector('.np-ads').classList.toggle('off', !player.breaks);
+    this.sheet.querySelector('.np-skips').classList.toggle('off', !player.breaks);
     note.textContent = player.breaks
       ? `${player.breaks.length} ad break${player.breaks.length === 1 ? '' : 's'} marked, ${fmtTime(adSeconds(player.breaks))} in all`
       : player.source && !player.source.synced && this.hasTranscript(player.item)
         ? 'This copy of the audio may carry other ads than the one transcribed, so none are skipped'
         : 'Ads are found from an episode\'s transcript. This one has none yet';
+  }
+
+  // Pauses: what the limit is, what was found in this episode, what it has saved so far.
+  trims() {
+    if (!this.sheet) return;
+    const { player, store } = this;
+    const limit = store.settings.trim || 0;
+    for (const b of this.sheet.querySelectorAll('.np-trims button')) b.setAttribute('aria-pressed', String(Number(b.dataset.trim) === limit));
+    const state = this.sheet.querySelector('.np-trim-state');
+    const note = this.sheet.querySelector('.np-trim-note');
+    const save = this.sheet.querySelector('.np-trim-save');
+    this.shownTrim = player.trimmed;
+    state.dataset.saved = player.trimmed.toFixed(2);
+    const over = `${limit} s`;
+    state.textContent = !limit ? 'Off' : player.trimmed >= 1 ? `${fmtTime(player.trimmed)} saved` : `over ${over}`;
+    let offer = false;
+    if (!limit) note.textContent = 'Pick the longest pause to leave alone. Anything longer is cut down to that, so the dead air of a call\'s delay goes and the pauses people make on purpose stay.';
+    else if (player.finding != null) note.textContent = `Listening through the episode for its pauses: ${Math.round(player.finding * 100)}%`;
+    else if (player.quiet) {
+      const n = player.cuts.length;
+      note.textContent = n ? `${n} pause${n === 1 ? ' in this episode is' : 's in this episode are'} longer than ${over}. Shortening ${n === 1 ? 'it' : 'them'} takes ${fmtTime(cutSeconds(player.cuts))} off it.` : `No pause in this episode is longer than ${over}.`;
+    } else {
+      const saving = player.item && this.isSaving(player.item);
+      offer = !!player.item?.url && !this.isSaved(player.item) && !saving;
+      note.textContent = saving ? 'Saving the episode on this device. Its pauses are found when that is done.'
+        : offer ? 'The pauses can be found when the episode is saved on this device, or once the server has transcribed it.'
+          : 'The pauses in this episode could not be found.';
+    }
+    save.classList.toggle('hidden', !offer || !limit);
   }
 
   sleepDraw() {
@@ -202,13 +235,13 @@ export class PlayerUI {
       h('div.art.np-art'),
       h('p.eyebrow.np-show'),
       h('h2.np-title', { id: 'sheet-title' }),
-      h('div.scrub.np-scrub', {}, h('div.scrub-ads', { 'aria-hidden': 'true' }), h('input', { type: 'range', min: '0', max: '1000', value: '0', step: '1', 'aria-label': 'Position in the episode' })),
+      h('div.scrub.np-scrub', {}, h('div.scrub-marks', { 'aria-hidden': 'true' }), h('input', { type: 'range', min: '0', max: '1000', value: '0', step: '1', 'aria-label': 'Position in the episode' })),
       h('div.np-clock', {}, h('span.np-cur', { text: '0:00' }), h('span.np-left')),
       h('div.np-transport', {},
         jump('jump-back', 'back', () => player.skip(-store.settings.back)),
         h('button.play.np-play', { type: 'button', 'aria-label': 'Play', onclick: () => player.toggle() }, icon('play')),
         jump('jump-fwd', 'fwd', () => player.skip(store.settings.fwd))),
-      h('button.btn.primary.np-skipad.hidden', { type: 'button', onclick: () => player.skipAd() }, icon('skip'), h('span', { text: 'Skip this ad' })),
+      h('button.btn.primary.np-jump.hidden', { type: 'button', onclick: () => player.skipAd() }, icon('skip'), h('span', { text: 'Skip this ad' })),
 
       h('div.np-block', {},
         h('div.np-head', {}, h('h3', { text: 'Speed' }), h('b.np-rate')),
@@ -226,10 +259,17 @@ export class PlayerUI {
           h('button', { type: 'button', dataset: { sleep: v }, 'aria-pressed': 'false', text: label, onclick: () => { player.setSleep(v === 'end' ? 'end' : Number(v)); this.sleepDraw(); } })))),
 
       h('div.np-block', {},
-        h('label.switch.setting.np-ads', {},
+        h('div.np-head', {}, h('h3', { text: 'Shorten pauses' }), h('b.np-trim-state')),
+        seg('np-trims', [['Off', 0], ['0.5 s', 0.5], ['0.8 s', 0.8], ['1.2 s', 1.2], ['2 s', 2]].map(([label, v]) =>
+          h('button', { type: 'button', dataset: { trim: String(v) }, 'aria-pressed': 'false', text: label, onclick: () => { store.set({ trim: v }); this.trims(); } }))),
+        h('p.hint.np-trim-note'),
+        h('button.btn.ghost.small.np-trim-save.hidden', { type: 'button', onclick: () => { this.saveOffline(player.item); this.trims(); } }, icon('download'), h('span', { text: 'Save the episode on this device' }))),
+
+      h('div.np-block', {},
+        h('label.switch.setting.np-skips', {},
           h('input', { type: 'checkbox', onchange: (e) => store.set({ skipAds: e.target.checked }) }),
           h('span.track', {}, h('span.knob')), h('span.switch-label', { text: 'Skip ads' })),
-        h('p.hint.np-ads-note')),
+        h('p.hint.np-skips-note')),
 
       IS_IOS ? null : h('div.np-block.np-volume', {},
         icon('volume'),
@@ -268,6 +308,7 @@ export class PlayerUI {
     this.state();
     this.rate();
     this.ads();
+    this.trims();
     this.sleepDraw();
     this.upNext();
     this.time();

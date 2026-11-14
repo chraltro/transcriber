@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { markdown } from '../lib/paragraphs.js';
 import { guessNames, hostFromShow, minorVoices, OTHER } from '../lib/speakers.js';
 import { extractTerms } from '../lib/context.js';
-import { adBreaks } from '../lib/adbreaks.js';
+import { adBreaks } from '../lib/breaks.js';
 
 // `hosts`: the regulars, whom the show notes often call by first name only ("Tommy and Ben").
 // They go into each episode's notes, so their names are spelled right and their voices named.
@@ -30,10 +30,11 @@ export function notesWithHosts(notes, show) {
 export const idOf = (guid) => createHash('sha1').update(guid).digest('hex').slice(0, 16);
 
 // The index lists each transcript without its text.
-export const metaOf = ({ id, title, show, art, lang, model, total, words, createdAt, transcribedAt, audio, fixes, ads, adsV }) =>
-  ({ id, title, show, art, lang, model, total, words, createdAt, transcribedAt, audio, fixes, ads, adsV });
+// (quiet: the version of the list of where its audio goes quiet, when the library has one.)
+export const metaOf = ({ id, title, show, art, lang, model, total, words, createdAt, transcribedAt, audio, fixes, ads, adsV, quiet }) =>
+  ({ id, title, show, art, lang, model, total, words, createdAt, transcribedAt, audio, fixes, ads, adsV, quiet });
 
-// Where the ads are in a transcript, as [[start, end], ...] in seconds (lib/adbreaks.js), with
+// Where the ads are in a transcript, as [[start, end], ...] in seconds (lib/breaks.js), with
 // the voices heard only in passing worked out the way the app does.
 export function adsOf(entry) {
   const terms = extractTerms(entry.notes || '', entry.title || '', entry.show || '');
