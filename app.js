@@ -54,6 +54,7 @@ const els = {
   timestamps: $('#timestamps'),
   library: $('#library'), libraryList: $('#library-list'), shelf: $('#shelf'), shelfList: $('#shelf-list'), shelfNow: $('#shelf-now'),
   jump: $('#jump-live'),
+  jumpNow: $('#jump-now'),
   topContext: $('#top-context'), topCrumb: $('#top-crumb'), topStatus: $('#top-status'), topDate: $('#top-date'), spineFoot: $('#spine-foot'),
   mapCard: $('#map-card'), mapGrid: $('#map-grid'), mapSel: $('#map-sel'), mapScope: $('#map-scope'), mapSummary: $('#map-summary'), mapKicker: $('#map-kicker'),
   mapPlay: $('#map-play'), mapRefine: $('#map-refine'), mapCopy: $('#map-copy'), mapClear: $('#map-clear'), talkCard: $('#talk-card'), talkList: $('#talk-list'),
@@ -82,6 +83,7 @@ const state = {
   playable: false,
   playingIdx: -1,
   userScrolledAt: 0,
+  following: true, // the page keeps the sentence being played in view (until the reader scrolls it away)
   sessionOffscreen: false,
   lastAttempt: null,
   runStartedAt: 0,
@@ -487,7 +489,41 @@ function scrollToTime(t) {
   const span = state.segEls[segmentAt(t)];
   if (!span) return;
   state.userScrolledAt = 0;
+  state.following = true;
+  els.jumpNow.classList.add('hidden');
   span.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+// Where the transcript's sentence being played is, against what the reader can see (the player
+// and the tabs along the bottom take some of the screen): -1 above, 0 in view, 1 below.
+function playingSide() {
+  const span = state.segEls[state.playingIdx];
+  if (!span) return 0;
+  const r = span.getBoundingClientRect();
+  const bottom = Math.min(window.innerHeight, ...['playbar', 'tabbar'].map((id) => document.getElementById(id)).filter((e) => e && e.offsetParent).map((e) => e.getBoundingClientRect().top));
+  return r.bottom < 70 ? -1 : r.top > bottom - 10 ? 1 : 0;
+}
+
+// The reader scrolled the sentence being played out of view: the page stops following it, and
+// a button takes them back to it (pointing the way it is). Scrolled back to it, it follows again.
+function updateNowPill() {
+  const on = bound() && !state.busy && state.playingIdx >= 0 && document.body.classList.contains('view-transcribe');
+  const side = on ? playingSide() : 0;
+  if (!side) {
+    if (on) state.following = true;
+    els.jumpNow.classList.add('hidden');
+    return;
+  }
+  if (state.following && Date.now() - state.userScrolledAt > 1500) return; // (the page's own scrolling)
+  state.following = false;
+  setIcon(els.jumpNow, side < 0 ? 'up' : 'down');
+  els.jumpNow.classList.remove('hidden');
+}
+
+function goToNow() {
+  if (!bound()) return;
+  highlightPlaying(segmentAt(player.time));
+  scrollToTime(player.time);
 }
 
 // A new glossary also fixes the transcript on screen, not just the next one.
@@ -2052,8 +2088,8 @@ function highlightPlaying(i) {
   const span = state.segEls[i];
   if (!span) return;
   span.classList.add('playing');
-  // Follow along, unless the reader has scrolled away on purpose in the last few seconds.
-  if (Date.now() - state.userScrolledAt < 4000) return;
+  // Follow along, unless the reader has scrolled away (then the button to go back says which way).
+  if (!state.following || Date.now() - state.userScrolledAt < 1500) { updateNowPill(); return; }
   const r = span.getBoundingClientRect();
   if (r.top < 130 || r.bottom > window.innerHeight - 110) span.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
@@ -2081,6 +2117,8 @@ player.addEventListener('state', onPlayState);
 player.addEventListener('time', followPlayer);
 player.addEventListener('item', () => {
   if (!bound()) { highlightPlaying(-1); wave.setPosition(null); map.setPlayhead(null); }
+  state.following = true;
+  updateNowPill();
   onPlayState();
 });
 
@@ -2213,9 +2251,14 @@ const transcriptOf = (ep) => (podcasts.transcripts.has(ep.id) ? 'server' : local
 // The server's transcript of an episode (made from its own copy of the audio, ads marked), else
 // the one made in this browser. at: a time to show it at (from a search across transcripts).
 async function openEpisodeTranscript(ep, { at = null } = {}) {
+  // The episode in the player opens where it is playing; a time asked for (a search hit) is
+  // also marked for a moment.
+  const here = at ?? (player.item?.id === ep.id && player.time > 1 ? player.time : null);
   const show = () => {
+    if (here == null) return;
+    if (at == null && bound()) highlightPlaying(segmentAt(here));
+    scrollToTime(here);
     if (at == null) return;
-    scrollToTime(at);
     const span = state.segEls[segmentAt(at)];
     span?.classList.add('sought');
     setTimeout(() => span?.classList.remove('sought'), 2600);
@@ -3514,6 +3557,7 @@ function wireEvents() {
   els.play.addEventListener('click', (e) => { e.stopPropagation(); togglePlay(); });
   els.mini.addEventListener('click', () => els.progressCard.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   els.jump.addEventListener('click', scrollToLive);
+  els.jumpNow.addEventListener('click', goToNow);
 
   let ticking = false;
   window.addEventListener('scroll', () => {
@@ -3523,9 +3567,11 @@ function wireEvents() {
       ticking = false;
       document.body.classList.toggle('scrolled', window.scrollY > 4);
       if (state.busy && nearLive()) els.jump.classList.add('hidden');
+      updateNowPill();
     });
   }, { passive: true });
   for (const ev of ['wheel', 'touchmove']) window.addEventListener(ev, () => { state.userScrolledAt = Date.now(); }, { passive: true });
+  window.addEventListener('keydown', (e) => { if (/^(PageUp|PageDown|Home|End|ArrowUp|ArrowDown)$/.test(e.key) && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) state.userScrolledAt = Date.now(); });
 
   document.addEventListener('keydown', (e) => {
     const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName) || document.activeElement?.isContentEditable;

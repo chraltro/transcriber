@@ -83,9 +83,9 @@ export class Player extends EventTarget {
     on('canplaythrough', () => { if (this.wanted != null) this.arrive(true); });
     on('durationchange', () => this.emit('time'));
     on('timeupdate', () => this.tick());
-    on('playing', () => { this.unlocked = true; this.busy = false; this.pausedAt = 0; this.state(); this.fine(); });
-    on('play', () => this.state());
-    on('pause', () => { if (this.source) { this.pausedAt = Date.now(); this.save(); } this.state(); this.fine(); });
+    on('playing', () => { this.unlocked = true; this.busy = false; this.pausedAt = 0; this.changedAt = performance.now(); this.state(); this.fine(); });
+    on('play', () => { this.changedAt = performance.now(); this.state(); });
+    on('pause', () => { if (this.source) { this.pausedAt = Date.now(); this.save(); } this.changedAt = performance.now(); this.state(); this.fine(); });
     on('waiting', () => { this.busy = true; this.emit('state'); });
     on('seeked', () => {
       // A jump over a pause: how long it took is what the next ones have to be worth.
@@ -266,7 +266,8 @@ export class Player extends EventTarget {
   begin() {
     this.wantPlay = true;
     this.busy = true;
-    this.emit('state');
+    this.changedAt = performance.now();
+    this.state(); // (iOS hears of it now, not when the audio has arrived)
     this.watch();
     const p = this.audio.play();
     return p ? p.then(() => true, (err) => {
@@ -322,6 +323,7 @@ export class Player extends EventTarget {
 
   pause() {
     this.wantPlay = false;
+    this.changedAt = performance.now();
     this.audio.pause();
     if (this.busy && !this.source) { this.busy = false; this.emit('state'); }
   }
@@ -734,10 +736,14 @@ export class Player extends EventTarget {
     } catch {}
   }
 
+  // (Starting counts as playing: told "paused" while an episode is on its way, iOS takes the
+  // next press of the headphones for "play".)
+  get going() { return this.playing || (this.busy && this.wantPlay); }
+
   position() {
     if (!('mediaSession' in navigator) || !this.item) return;
     try {
-      navigator.mediaSession.playbackState = this.playing ? 'playing' : 'paused';
+      navigator.mediaSession.playbackState = this.going ? 'playing' : 'paused';
       const d = this.duration;
       if (d > 0 && navigator.mediaSession.setPositionState) navigator.mediaSession.setPositionState({ duration: d, playbackRate: this.rate, position: Math.min(Math.max(0, this.time), d) });
     } catch {}
@@ -751,8 +757,8 @@ export class Player extends EventTarget {
     const ms = navigator.mediaSession;
     const set = (action, fn) => { try { ms.setActionHandler(action, fn); } catch {} };
     const s = this.store.settings;
-    set('play', () => this.resume());
-    set('pause', () => this.pause());
+    set('play', () => this.command('play'));
+    set('pause', () => this.command('pause'));
     set('stop', () => this.pause());
     set('seekbackward', (d) => this.skip(-(d?.seekOffset || s.back)));
     set('seekforward', (d) => this.forward(d?.seekOffset));
@@ -761,6 +767,25 @@ export class Player extends EventTarget {
     const more = this.store.queue.some((e) => e.id !== this.item?.id);
     set('previoustrack', tracks ? () => this.seek(0) : null);
     set('nexttrack', tracks || (!IS_IOS && more) ? () => { if (!this.next()) this.forward(); } : null);
+  }
+
+  // What a play or pause from the headphones, the lock screen or the car means. iOS can have
+  // the state the wrong way round, and then a press of the AirPods that should pause arrives as
+  // "play" (and is lost), and once paused every press arrives as "pause" (and nothing plays
+  // again). So a command for what is already the case is taken as the press it was: the other
+  // one. Unless the state changed in the last second: then it is the system saying what it just
+  // did itself (taking the AirPods out pauses, and says so), or the same press twice.
+  command(want) {
+    const going = this.going;
+    const fresh = performance.now() - (this.changedAt || 0) < 1000;
+    if (want === 'play') {
+      if (!going) return this.resume();
+      if (!fresh) return this.pause();
+    } else {
+      if (going) return this.pause();
+      if (!fresh) return this.resume();
+    }
+    this.position(); // (and iOS is told how it really is)
   }
 
   // The next episode's audio, found before it is needed: when this one ends there may be no

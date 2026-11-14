@@ -144,10 +144,22 @@ function hideSheet({ glide = true } = {}) {
   lastFocus?.focus?.({ preventScroll: true });
 }
 
-export function closeSheet() {
-  if (!sheetOpen()) return;
+// then: what to do once it is closed, when that goes somewhere else in the app. It waits for
+// the step back in history the close takes: going somewhere before that step is taken, the step
+// would land after it and undo it.
+let afterBack = null;
+export function closeSheet({ then = null } = {}) {
+  if (!sheetOpen()) { then?.(); return; }
   hideSheet(); // at once, not a few frames later when the step back has been taken
-  if (history.state?.sheet) { ownBack = true; history.back(); }
+  if (history.state?.sheet) {
+    ownBack = true;
+    if (then) {
+      afterBack = then;
+      // (Should the step never be reported, it is done anyway in a moment.)
+      setTimeout(() => { if (afterBack === then) { afterBack = null; then(); } }, 400);
+    }
+    history.back();
+  } else then?.();
 }
 
 // (Nothing here touches the page until it is there: the tests load this file without one.)
@@ -157,6 +169,9 @@ if (inPage) {
   window.addEventListener('popstate', () => {
     const ours = ownBack;
     ownBack = false;
+    const next = afterBack;
+    afterBack = null;
+    if (next) setTimeout(next, 0);
     // The step back a close took: the sheet is already on its way (or another was opened since,
     // which then gets its own step to be closed by).
     if (ours) { if (sheetOpen() && !history.state?.sheet) history.pushState({ sheet: true }, ''); return; }

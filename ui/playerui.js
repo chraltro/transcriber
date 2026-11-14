@@ -301,7 +301,7 @@ export class PlayerUI {
         h('ol.np-next')),
 
       h('div.np-actions', {},
-        h('button.btn.ghost.np-transcript', { type: 'button', onclick: () => { const it = player.item; closeSheet(); this.openTranscript(it); } }, icon('lines'), h('span')),
+        h('button.btn.ghost.np-transcript', { type: 'button', onclick: () => { const it = player.item; closeSheet({ then: () => this.openTranscript(it) }); } }, icon('lines'), h('span')),
         h('button.btn.ghost.np-details', { type: 'button', onclick: () => this.openEpisode(player.item) }, icon('alert'), h('span', { text: 'Episode notes' })),
         h('button.btn.ghost', { type: 'button', onclick: () => { closeSheet(); player.stop(); } }, icon('x'), h('span', { text: 'Take it out of the player' }))));
     this.sheet = sheet;

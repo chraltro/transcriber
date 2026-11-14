@@ -39,6 +39,14 @@ async function fakeApple(ctx, world) {
 
 async function device(browser, world, name, options) {
   const ctx = await browser.newContext({ ...options, serviceWorkers: 'block' });
+  // What the page tells the lock screen and the headphones is kept where the test can press it.
+  await ctx.addInitScript(() => {
+    const ms = navigator.mediaSession;
+    if (!ms) return;
+    window.__ms = {};
+    const set = ms.setActionHandler.bind(ms);
+    ms.setActionHandler = (action, fn) => { window.__ms[action] = fn; try { set(action, fn); } catch {} };
+  });
   await fakeApple(ctx, world);
   // A content blocker stops the service one episode's audio is counted by; the file behind it is there.
   await ctx.route('https://dts.podtrac.com/**', (route) => route.abort('blockedbyclient'));
@@ -322,6 +330,36 @@ async function run(name, options) {
     await playing(100);
     a = await audio();
     check(a.t >= 119 && a.t < 126, `it picks up where it stopped (${a.t.toFixed(1)} s)`);
+
+    /* ---------- the headphones ---------- */
+    // iOS can have the playing state the wrong way round, and then sends "play" for a press that
+    // should pause, and "pause" for one that should play. A command for what is already so is
+    // taken as the other one; a command for what changed a moment ago is left alone.
+    {
+      const press = (action) => page.evaluate((a) => window.__ms?.[a]?.({ action: a }), action);
+      const state = () => page.evaluate(() => ({ paused: document.querySelector('#audio').paused, said: navigator.mediaSession?.playbackState }));
+      await page.waitForTimeout(1100);
+      await press('play'); // playing, and told to play: the press was to pause
+      await page.waitForFunction(() => document.querySelector('#audio').paused, null, { timeout: 5000 }).catch(() => {});
+      let st = await state();
+      check(st.paused && st.said === 'paused', `"play" from the headphones while playing pauses (${st.paused ? 'paused' : 'still playing'}, iOS told ${st.said})`);
+      await press('pause'); // just paused: the same press twice, left alone
+      await page.waitForTimeout(400);
+      st = await state();
+      check(st.paused, 'the same command again straight away is left alone');
+      await page.waitForTimeout(1100);
+      await press('pause'); // paused, and told to pause: the press was to play
+      await playing(1);
+      st = await state();
+      check(!st.paused && st.said === 'playing', `"pause" from the headphones while paused plays (${st.paused ? 'still paused' : 'playing'}, iOS told ${st.said})`);
+      await page.waitForTimeout(1100);
+      await press('pause');
+      await page.waitForFunction(() => document.querySelector('#audio').paused, null, { timeout: 5000 });
+      await page.waitForTimeout(1100);
+      await press('play');
+      await playing(1);
+      check(true, 'and "pause" and "play" do as they say when the state is right');
+    }
     await page.click('#pb-play');
 
     /* ---------- searching every transcript ---------- */
@@ -665,12 +703,42 @@ async function run(name, options) {
     const follow = await page.evaluate(() => ({ line: document.querySelector('#transcript .seg.playing').textContent, title: document.querySelector('#pb-title').textContent }));
     check(/ten years of committees/.test(follow.line) && follow.title === 'Why every container is the same size', 'tapping a sentence plays it in the player, and the page follows along');
     await page.waitForTimeout(500);
+    // Scrolled away by the reader, the page stops following; a button says which way the playing
+    // sentence is, and takes them back to it.
+    const away = async (to) => {
+      await page.mouse.move(200, 400);
+      await page.mouse.wheel(0, to === 'top' ? -20000 : 20000);
+      await page.waitForTimeout(700);
+    };
+    for (const to of ['top', 'bottom']) {
+      await away(to);
+      const off = await page.evaluate(() => { const r = document.querySelector('#transcript .seg.playing').getBoundingClientRect(); return r.bottom < 70 || r.top > innerHeight - 150; });
+      if (!off) continue; // (on a tall screen the sentence can still be in view from this end)
+      await page.waitForSelector('#jump-now:not(.hidden)', { timeout: 3000 }).catch(() => {});
+      const pill = await page.evaluate(() => ({ shown: !document.querySelector('#jump-now').classList.contains('hidden'), icon: document.querySelector('#jump-now use').getAttribute('href') }));
+      check(pill.shown && pill.icon === (to === 'top' ? '#i-down' : '#i-up'), `scrolled to the ${to}, a button goes back to where it is playing, pointing ${to === 'top' ? 'down' : 'up'} (${pill.shown ? pill.icon : 'not shown'})`);
+      await page.click('#jump-now');
+      await page.waitForTimeout(900);
+      const back = await page.evaluate(() => { const r = document.querySelector('#transcript .seg.playing').getBoundingClientRect(); return { inView: r.top > 0 && r.bottom < innerHeight, hidden: document.querySelector('#jump-now').classList.contains('hidden') }; });
+      check(back.inView && back.hidden, 'tapping it brings the sentence being played back into view, and the button goes');
+    }
     await page.evaluate(() => window.scrollTo(0, 0));
     await shot('11-transcript');
     await noSideScroll('transcript with the player');
     await page.click('#play');
     await page.waitForFunction(() => document.querySelector('#audio').paused);
     check(true, "the transcript's own play button is the player's");
+    // From the player, the transcript opens where the episode is.
+    await page.evaluate(() => { document.querySelector('#audio').currentTime = 230; });
+    await page.waitForTimeout(400);
+    await page.click(mobile ? '#tabbar [data-nav=listen]' : '#nav [data-nav=listen]');
+    await page.click('#pb-open');
+    await page.waitForSelector('.np');
+    await page.click('.np-transcript');
+    await page.waitForSelector('body.view-transcribe');
+    await page.waitForTimeout(900);
+    const opened = await page.evaluate(() => { const p = document.querySelector('#transcript .seg.playing'); const r = p?.getBoundingClientRect(); return { start: Number(p?.dataset.start), inView: !!r && r.top > 0 && r.bottom < innerHeight }; });
+    check(opened.inView && opened.start <= 230 && opened.start > 200, `opened from the player, the transcript is at where the episode is (the sentence from ${opened.start} s, in view)`);
 
     /* ---------- how things move, and what a thumb can reach ---------- */
     {

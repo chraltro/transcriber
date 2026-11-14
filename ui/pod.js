@@ -773,7 +773,7 @@ export class Pod {
             : h('button.btn.ghost', { type: 'button', onclick: () => this.save(ep) }, icon('download'), h('span', { text: 'Save for offline' })),
         now || (store.queue[0]?.id === ep.id) ? null : h('button.btn.ghost', { type: 'button', onclick: () => { store.queueAdd(ep, { next: true }); this.toast('Plays next'); } }, icon('skip'), h('span', { text: 'Play next' })),
         h('button.btn.ghost', { type: 'button', onclick: () => store.markPlayed(ep, status !== 'done') }, icon(status === 'done' ? 'resume' : 'check'), h('span', { text: status === 'done' ? 'Mark as not played' : 'Mark as played' })),
-        ...this.transcriptChoices(ep).map((c) => h('button.btn.ghost.wide', { type: 'button', onclick: () => { if (/Read|browser/.test(c.label)) closeSheet(); c.action(); } }, icon(c.icon), h('span', { text: c.label }), c.hint ? h('small', { text: c.hint }) : null)),
+        ...this.transcriptChoices(ep).map((c) => h('button.btn.ghost.wide', { type: 'button', onclick: () => { if (/Read|browser/.test(c.label)) closeSheet({ then: c.action }); else c.action(); } }, icon(c.icon), h('span', { text: c.label }), c.hint ? h('small', { text: c.hint }) : null)),
       ].filter(Boolean));
     };
     const art = h('div.art.sheet-art');
