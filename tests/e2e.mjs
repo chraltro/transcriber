@@ -89,8 +89,11 @@ const LINKS = [
   { name: 'Link: Buzzsprout episode page', url: await firstLink('https://www.buzzsprout.com/1', /href="(\/1\/episodes\/[^"?]+)"/, 'https://www.buzzsprout.com'), expectError: /doesn't allow web pages to download/ },
   { name: 'Link: iHeart episode', url: await firstLink('https://www.iheart.com/podcast/1119-stuff-you-should-know-26940277/', /href="(\/podcast\/1119-stuff-you-should-know-26940277\/episode\/[^"]+)"/, 'https://www.iheart.com') },
   // A post with audio: the newest feed item with an audio enclosure (most posts are text only, and
-  // Substack also puts each post's cover image in an enclosure).
-  { name: 'Link: Substack post (page reader)', url: await firstLink('https://www.astralcodexten.com/feed', /<item>(?:(?!<\/item>)[\s\S])*?<link>(https:\/\/www\.astralcodexten\.com\/p\/[^<]+)<\/link>(?:(?!<\/item>)[\s\S])*?<enclosure[^>]*type="audio/) || 'https://www.astralcodexten.com/p/your-book-review-lee-kuan-yews-memoirs', expectError: /doesn't allow web pages to download/ },
+  // Substack also puts each post's cover image in an enclosure). What is tested is that the page
+  // reader finds the post's audio. Whether Substack's host then lets a page download it is up to
+  // Substack: its read-aloud copies now come from one that does, and the case expected a refusal
+  // and stayed red for weeks. So the refusal, explained, passes, and so does the download starting.
+  { name: 'Link: Substack post (page reader)', url: await firstLink('https://www.astralcodexten.com/feed', /<item>(?:(?!<\/item>)[\s\S])*?<link>(https:\/\/www\.astralcodexten\.com\/p\/[^<]+)<\/link>(?:(?!<\/item>)[\s\S])*?<enclosure[^>]*type="audio/) || 'https://www.astralcodexten.com/p/your-book-review-lee-kuan-yews-memoirs', orError: /doesn't allow web pages to download/ },
   { name: 'Link: NRK page (page reader, then directory)', url: 'https://radio.nrk.no/podkast/abels_taarn', expectAny: true },
   { name: 'Link: Internet Archive item', url: 'https://archive.org/details/OTRR_Dragnet_Singles', expectList: true },
   { name: 'Link: Audioboom channel', url: 'https://audioboom.com/channels/4322549', expectList: true },
@@ -336,7 +339,9 @@ for (const c of CASES) {
   if (navigations > 0 && result === 'ok') result = `page reloaded ${navigations}x during the run`;
   const limit = c.memoryLimitMB || MEMORY_LIMIT_MB;
   if (peakMB > limit && result === 'ok') result = `peak tab memory ${Math.round(peakMB)} MB is over ${limit} MB`;
-  const ok = c.expectError ? c.expectError.test(result)
+  // (orError: an explained refusal that is up to another site passes as well as the case's own outcome.)
+  const ok = c.orError?.test(result) ? true
+    : c.expectError ? c.expectError.test(result)
     : c.expectList ? result.startsWith('episode list')
     : c.expectAny ? result === 'ok' || result.startsWith('episode list')
     : result === 'ok';

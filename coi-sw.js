@@ -48,10 +48,16 @@ if (typeof window === 'undefined') {
     return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
   };
 
-  // The whole file, whatever the page's own cache asked: in Safari the question "has it changed
-  // since my copy?" reaches this worker with the request, and an empty "no" for an answer is not
-  // something every kind of load there survives.
-  const whole = (req) => fetch(req.url, { cache: 'reload', credentials: 'same-origin' });
+  // The file itself, by its address, not the page's request as it came: in Safari that can carry
+  // the page's own "has it changed since my copy?", and the empty "no" it gets back can be neither
+  // kept nor survived by every kind of load there. Asked for this way, the browser's own cache
+  // underneath this worker asks the server that question with its own copy, and hands back the
+  // whole file either way: an unchanged file costs a 304 on the network, and this worker still
+  // gets a 200 to answer with and to keep. (The server marks its files no-cache, so even an
+  // engine that ignored the cache mode here would ask.)
+  const ask = (req) => fetch(req.url, { cache: 'no-cache', credentials: 'same-origin', redirect: req.redirect });
+  // And should an empty "no" reach this worker all the same, the whole file, fetched again.
+  const whole = (req) => fetch(req.url, { cache: 'reload', credentials: 'same-origin', redirect: req.redirect });
 
   async function shell(e, url) {
     const req = e.request;
@@ -62,7 +68,7 @@ if (typeof window === 'undefined') {
     const kept = await cache.match(key);
     const given = { up: false }; // given up on: an answer that comes late is not kept either
     const out = (res) => (PLAIN ? res : isolated(res));
-    const fresh = () => fetch(req).then((res) => (!PLAIN && res.status === 304 ? whole(req) : res)).then((res) => {
+    const fresh = () => ask(req).then((res) => (res.status === 304 ? whole(req) : res)).then((res) => {
       // Keeping a copy must never cost the page its file: the copy is taken from the network's
       // own answer, and whatever goes wrong with it stays here.
       try {

@@ -22,6 +22,7 @@ import { SHOWS, idOf, metaOf, markdownOf, adsOf } from './shows.mjs';
 import { verifyGithubToken } from './oidc.mjs';
 import { createEnhance } from './enhance.mjs';
 import { createPod } from './pod.mjs';
+import { pruneLibrary } from './prune.mjs';
 import { ADS_VERSION } from '../lib/breaks.js';
 import { QUIET_VERSION } from '../lib/quiet.js';
 
@@ -205,25 +206,19 @@ async function work() {
   }
 }
 
-// Audio older than AUDIO_DAYS goes (the transcript stays; the app then plays the original link).
-async function pruneAudio() {
-  const index = await readIndex();
-  const gone = new Set();
-  for (const meta of index.entries) {
-    if (!meta.audio || Date.now() - (meta.transcribedAt || 0) < AUDIO_DAYS * 864e5) continue;
-    await rm(path.join(LIB, path.basename(meta.audio)), { force: true });
-    await rm(quietFile(meta.id), { force: true }); // (it was about that copy of the audio)
-    const file = path.join(LIB, `${meta.id}.json`);
-    const entry = await readJson(file, null);
-    if (entry) { delete entry.audio; await writeJson(file, entry); }
-    gone.add(meta.id);
-  }
-  if (!gone.size) return;
-  await withIndex(async () => {
-    const fresh = await readIndex();
-    for (const meta of fresh.entries) if (gone.has(meta.id)) { delete meta.audio; delete meta.quiet; }
-    await writeJson(path.join(LIB, 'index.json'), fresh);
-  });
+// Audio older than AUDIO_DAYS goes (the transcript stays; the app then plays the original link),
+// and so do uploads whose transcript never came (server/prune.mjs has the rules). It runs in
+// every mode, from a timer, and one pass at a time; the whole pass holds the index, so an upload
+// that comes in meanwhile waits a moment instead of being written over.
+let pruning = null;
+function pruneAudio() {
+  pruning ??= withIndex(() => pruneLibrary({ lib: LIB, doc: pod.doc, days: AUDIO_DAYS, readJson, writeJson }))
+    .then(({ copies, leftovers, bytes }) => {
+      if (copies || leftovers) log(`audio: freed ${Math.round(bytes / 2 ** 20)} MB (${copies} cop${copies === 1 ? 'y' : 'ies'} older than ${AUDIO_DAYS} days, ${leftovers} leftover${leftovers === 1 ? '' : 's'})`);
+    })
+    .catch((err) => log(`audio: pruning failed: ${err.message}`))
+    .finally(() => { pruning = null; });
+  return pruning;
 }
 
 
@@ -285,10 +280,10 @@ async function serveFile(req, res, file, { cache = 'no-cache' } = {}) {
     if (!s.isFile()) throw new Error('not a file');
     const ext = path.extname(file);
     const type = TYPES[ext] || 'application/octet-stream';
-    // Which copy of the file this is, for the compressed copies kept below. It is not sent as an
-    // ETag: with one, a reload asks "has it changed?", and on an iPhone that question and its
-    // empty answer pass through the page's service worker, after which the app's script never
-    // ran (Safari and the home-screen app; Chrome there has no service worker and was fine).
+    // Which copy of the file this is: for the compressed copies kept below, and as an ETag, so a
+    // browser that has the file asks "has it changed?" and an unchanged one costs a few bytes.
+    // (The service worker asks for the file itself and lets the browser's cache underneath it
+    // ask that, so it always gets the whole file to keep: coi-sw.js.)
     const tag = `${s.size.toString(36)}-${Math.round(s.mtimeMs).toString(36)}`;
     const range = req.headers.range?.match(/^bytes=(\d*)-(\d*)$/);
     if (range && (range[1] || range[2])) {
@@ -304,14 +299,25 @@ async function serveFile(req, res, file, { cache = 'no-cache' } = {}) {
       return;
     }
     const accepts = req.headers['accept-encoding'] || '';
-    const enc = TEXT.has(ext) && s.size > 1024 && s.size < 8e6 ? (/\bbr\b/.test(accepts) ? 'br' : /\bgzip\b/.test(accepts) ? 'gzip' : '') : '';
+    const packable = TEXT.has(ext) && s.size > 1024 && s.size < 8e6;
+    const enc = packable ? (/\bbr\b/.test(accepts) ? 'br' : /\bgzip\b/.test(accepts) ? 'gzip' : '') : '';
+    // Each packing of the file is a copy of its own with a tag of its own, so a cache holding one
+    // is never told that another is the same; and an answer that depends on Accept-Encoding says so.
+    const etag = `"${tag}${enc ? `-${enc}` : ''}"`;
+    const shared = { etag, 'cache-control': cache, ...(packable ? { vary: 'accept-encoding' } : {}) };
+    const asked = req.headers['if-none-match'];
+    if (asked && asked.split(',').some((t) => { t = t.trim().replace(/^W\//, ''); return t === '*' || t === etag; })) {
+      res.writeHead(304, shared);
+      res.end();
+      return;
+    }
     if (enc) {
       const body = await compressed(file, tag, enc, file.startsWith(ROOT + path.sep));
-      res.writeHead(200, { 'content-type': type, 'content-length': body.length, 'content-encoding': enc, vary: 'accept-encoding', 'cache-control': cache });
+      res.writeHead(200, { 'content-type': type, 'content-length': body.length, 'content-encoding': enc, ...shared });
       res.end(req.method === 'HEAD' ? undefined : body);
       return;
     }
-    res.writeHead(200, { 'content-type': type, 'content-length': s.size, 'accept-ranges': 'bytes', 'cache-control': cache });
+    res.writeHead(200, { 'content-type': type, 'content-length': s.size, 'accept-ranges': 'bytes', ...shared });
     if (req.method === 'HEAD') { res.end(); return; }
     createReadStream(file).pipe(res);
   } catch {
@@ -453,6 +459,9 @@ state = { ...state, ...(await readJson(STATE_FILE, {})) };
 current = null;
 server.listen(PORT, () => log(`serving on :${PORT}; data in ${DATA}; model ${MODEL_KEY}; checking feeds every ${POLL_MIN} min`));
 markAds().catch((err) => log(`ads: ${err.message}`));
+// A minute after start (out of the way of the start itself), then twice a day.
+setTimeout(pruneAudio, 60000).unref();
+setInterval(pruneAudio, 12 * 3600000).unref();
 if (process.env.TRANSCRIBE === '1') {
   const tick = async () => {
     await poll();

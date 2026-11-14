@@ -412,6 +412,16 @@ async function offline() {
     const alive = await page.evaluate(() => ({ started: !!window.__appStarted, view: document.body.className, tab: !!document.querySelector('#tabbar a.on'), status: document.querySelector('#top-status').textContent, failed: !document.querySelector('#boot-fail').hidden && document.querySelector('#boot-why').textContent }));
     check(alive.started && alive.tab && !alive.failed, `after the worker takes over and reloads the page, the app is running (${JSON.stringify(alive)})`);
     await page.waitForSelector('#show-grid');
+    // Every file of the app this load used has a kept copy, though the browser already had them
+    // all from the first load and the server now answers "unchanged" (an ETag and a 304).
+    const unkept = () => page.evaluate(async () => {
+      const kept = new Set((await (await caches.open('transcriber-shell-3')).keys()).map((r) => new URL(r.url).pathname));
+      return [location.pathname, ...performance.getEntriesByType('resource').map((r) => r.name)]
+        .map((u) => new URL(u, location.href)).filter((u) => u.origin === location.origin && !/^\/(api|library|enhance)\//.test(u.pathname))
+        .map((u) => u.pathname).filter((p) => !kept.has(p));
+    });
+    let missing = await unkept();
+    check(!missing.length, `after the first load under the worker, every file of the app is kept${missing.length ? ` (not: ${missing.join(', ')})` : ''}`);
     await page.reload();
     await page.waitForSelector('#show-grid');
     const again = await page.evaluate(() => !!window.__appStarted && !!document.querySelector('#tabbar a.on'));
@@ -419,6 +429,12 @@ async function offline() {
     await page.waitForTimeout(1500);
     const kept = await page.evaluate(async () => (await (await caches.open('transcriber-shell-3')).keys()).map((r) => new URL(r.url).pathname));
     check(kept.includes('/') && kept.includes('/app.js') && kept.includes('/ui/pod.js') && !kept.some((p) => p.startsWith('/api/') || p.startsWith('/library/')), `the app's own files are kept, the server's answers are not (${kept.length} files)`);
+    // One more start, every file of it unchanged on the server: the kept set stays whole.
+    await page.reload();
+    await page.waitForSelector('#show-grid');
+    await page.waitForTimeout(1500);
+    missing = await unkept();
+    check(!missing.length, `after one more start, every file of the app is still kept${missing.length ? ` (not: ${missing.join(', ')})` : ''}`);
     // (WebKit as the test browser builds it fails every load while "offline", its own worker's
     // answers included, so there the server is taken away instead.)
     if (WEBKIT) await world.stopApp(); else await ctx.setOffline(true);
