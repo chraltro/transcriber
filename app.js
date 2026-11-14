@@ -21,6 +21,7 @@ import { RATE as CLEAN_RATE } from './lib/enhance/chain.js';
 import { wavHeader, toInt16 } from './lib/enhance/encode.js';
 import { PodStore, adhocId } from './ui/podstore.js';
 import { Downloads } from './ui/downloads.js';
+import { Autosave } from './ui/autosave.js';
 import { Player } from './ui/player.js';
 import { PlayerUI } from './ui/playerui.js';
 import { Pod } from './ui/pod.js';
@@ -1958,6 +1959,8 @@ const podcasts = new PodStore({
 });
 const downloads = new Downloads({ open: openEpisodeAudio });
 const player = new Player({ audio, store: podcasts, downloads, cachedAudio, adsFor, quietFor });
+// The newest episodes of the shows that ask for it, saved on this device by themselves.
+const autosave = new Autosave({ store: podcasts, downloads, player });
 // An episode saved while it plays is played from the saved copy from then on, where its pauses
 // can be found (if the listener has pauses shortened).
 downloads.addEventListener('change', () => {
@@ -2230,6 +2233,7 @@ downloads.addEventListener('change', () => playerUI.trims());
 
 const pod = new Pod({
   store: podcasts, player, playerUI, downloads, artInto, toast, searchShows, showFromLink, transcriptOf,
+  autosave,
   openTranscript: openEpisodeTranscript,
   transcribe: transcribeEpisode,
   setTop: ({ crumb, context, status }) => {

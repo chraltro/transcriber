@@ -361,7 +361,8 @@ export class PodStore extends EventTarget {
     return feed || (await getFeed(id));
   }
 
-  // The newest episodes of every followed show. -> { episodes, fetchedAt, cached }
+  // The newest episodes of every followed show. -> { episodes, fetchedAt, cached }. Read afresh,
+  // they are also sent round as an 'inbox' event (what keeps episodes on the device listens).
   async inbox({ fresh = false } = {}) {
     await this.ready;
     if (this.server.linked) {
@@ -369,6 +370,7 @@ export class PodStore extends EventTarget {
         const got = await this.api('GET', fresh ? 'inbox?fresh=1' : 'inbox');
         const out = { id: 'inbox', episodes: got.episodes, fetchedAt: Date.now() };
         putFeed(out);
+        this.emit('inbox', out);
         return out;
       } catch {}
     } else if (navigator.onLine !== false) {
@@ -386,6 +388,7 @@ export class PodStore extends EventTarget {
       if (got || !this.shows.length) {
         const out = { id: 'inbox', episodes: all.sort((a, b) => b.published - a.published).slice(0, 300), fetchedAt: Date.now() };
         putFeed(out);
+        this.emit('inbox', out);
         return out;
       }
     }

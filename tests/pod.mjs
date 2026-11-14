@@ -358,6 +358,47 @@ async function run(name, options) {
       check(dl.suggestedFilename() === 'shows.opml' && SHOWS.every((s) => opml.includes(world.feedUrl(s.slug))), 'the shows export as OPML');
     }
 
+    /* ---------- the newest episodes, kept on the device by themselves ---------- */
+    {
+      const fjord = SHOWS.find((s) => s.slug === 'fjord');
+      const [first, second, third] = [0, 1, 2].map((i) => episodeIdOf(fjord, i));
+      const index = () => page.evaluate(() => JSON.parse(localStorage.getItem('pod-downloads') || '{}'));
+      const until = (test, what) => page.waitForFunction(test, null, { timeout: 40000 }).then(() => true, () => { console.log(`  (waited in vain: ${what})`); return false; });
+      const kept = (ids, hand = []) => until(`(() => { const d = JSON.parse(localStorage.getItem('pod-downloads') || '{}'); const auto = Object.keys(d).filter((id) => d[id].auto && id.length === 16).sort().join(); return auto === ${JSON.stringify([...ids].sort().join())} && ${JSON.stringify(hand)}.every((id) => d[id] && !d[id].auto); })()`, `${ids} by themselves`);
+      await page.click(mobile ? '#tabbar [data-nav=listen]' : '#nav [data-nav=listen]');
+      await page.click('#show-grid .show-tile:has-text("Fjordfunn")');
+      await page.waitForSelector('#show-head .keep-newest');
+      await page.waitForSelector('#show-list .ep:has-text("Kanonen i Oslofjorden")');
+      await page.click('#show-head .keep-newest label:has-text("2")');
+      check(await kept([first, second]), 'set to keep the newest two, the two newest not played are saved by themselves');
+      await page.waitForSelector('#show-list .ep:has-text("Kaldtvannskorallene") .tag:has-text("Saved")');
+      check(await page.evaluate(() => JSON.parse(localStorage.getItem('pod-keep-newest') || '{}')), 'the choice is kept on this device');
+      // One played: it goes, and the next one comes.
+      await page.locator('#show-list .ep', { hasText: 'Kanonen i Oslofjorden' }).locator('.ep-more').click();
+      await page.click('#row-menu button:has-text("Mark as played")');
+      check(await kept([second, third]), 'one is played: it goes, and the next one is saved');
+      // One saved by hand stays when the show is turned to none.
+      await page.locator('#show-list .ep', { hasText: 'Kanonen i Oslofjorden' }).locator('.ep-more').click();
+      await page.click('#row-menu button:has-text("Save for offline")');
+      check(await kept([second, third], [first]), 'an episode saved by hand is saved as such');
+      await page.evaluate(() => document.querySelector('#show-head .switch')?.scrollIntoView({ block: 'start' }));
+      await page.waitForTimeout(400);
+      await shot('12-keep-newest');
+      await noSideScroll('keep the newest');
+      await page.click(mobile ? '#tabbar [data-nav=settings]' : '#nav [data-nav=settings]');
+      await page.waitForSelector('#pod-settings .kept-note');
+      const note = await page.locator('#pod-settings .kept-note').textContent();
+      check(/the newest 2 of Fjordfunn\./.test(note) && /2 episodes saved that way/.test(note) && await page.locator('#pod-settings button:has-text("Stop keeping episodes by themselves")').isVisible(), `Settings says what is kept by itself (${note})`);
+      await page.evaluate(() => document.querySelector('#pod-settings .kept-note').scrollIntoView({ block: 'center' }));
+      await page.waitForTimeout(400);
+      await shot('13-keep-settings');
+      await page.goBack();
+      await page.waitForSelector('#show-head .keep-newest');
+      await page.click('#show-head .keep-newest label:has-text("None")');
+      check(await kept([], [first]), 'turned to none, what was saved by itself goes, and what was saved by hand stays');
+      check(Object.keys(await index()).includes(first), 'the one saved by hand is still on the device');
+    }
+
     check(!A.errors.length, `no page errors${A.errors.length ? `: ${A.errors.slice(0, 3).join(' | ')}` : ''}`);
   } catch (err) {
     check(false, `the run got through (${err.message.split('\n')[0]})`);

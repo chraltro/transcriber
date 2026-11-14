@@ -12,6 +12,9 @@ export class Downloads extends EventTarget {
     this.open = open;
     this.active = new Map(); // id -> { loaded, total, ctl }
     try { this.index = JSON.parse(localStorage.getItem(INDEX)) || {}; } catch { this.index = {}; }
+    // Ids whose stored file turned out to be gone (the browser cleared it): lost, not removed by
+    // the listener. What keeps episodes by itself (ui/autosave.js) tells the two apart by this.
+    this.lost = new Set();
   }
 
   has(id) { return !!this.index[id]; }
@@ -31,7 +34,7 @@ export class Downloads extends EventTarget {
     try { cache = await caches.open(CACHE); } catch { return; }
     const stored = new Set((await cache.keys()).map((r) => r.url));
     let changed = false;
-    for (const id of Object.keys(this.index)) if (!stored.has(keyOf(id))) { delete this.index[id]; changed = true; }
+    for (const id of Object.keys(this.index)) if (!stored.has(keyOf(id))) { this.lost.add(id); delete this.index[id]; changed = true; }
     for (const url of stored) {
       const id = decodeURIComponent(url.split('id=')[1] || '');
       if (!this.index[id] && !this.active.has(id)) await cache.delete(url);
@@ -45,12 +48,14 @@ export class Downloads extends EventTarget {
       const hit = await (await caches.open(CACHE)).match(keyOf(id));
       if (hit) return await hit.blob();
     } catch {}
+    this.lost.add(id);
     delete this.index[id];
     this.save();
     return null;
   }
 
-  async start(ep) {
+  // auto: saved by itself (ui/autosave.js), which may also remove it again.
+  async start(ep, { auto = false } = {}) {
     if (this.has(ep.id) || this.active.has(ep.id)) return;
     const ctl = new AbortController();
     const job = { loaded: 0, total: 0, ctl };
@@ -72,7 +77,7 @@ export class Downloads extends EventTarget {
       await cache.put(keyOf(ep.id), new Response(counted, { headers: { 'content-type': response.headers.get('content-type') || 'audio/mpeg' } }));
       if (ctl.signal.aborted) throw new DOMException('Cancelled', 'AbortError');
       const { id, sub = '', title = '', show = '', url = '', published = 0, duration = 0 } = ep;
-      this.index[ep.id] = { bytes: job.loaded, from, at: Date.now(), ep: { id, sub, title, show, art: /^https?:/.test(ep.art || '') ? ep.art : '', url, published, duration } };
+      this.index[ep.id] = { bytes: job.loaded, from, at: Date.now(), ep: { id, sub, title, show, art: /^https?:/.test(ep.art || '') ? ep.art : '', url, published, duration }, ...(auto ? { auto: true } : {}) };
       this.active.delete(ep.id);
       this.save();
     } catch (err) {

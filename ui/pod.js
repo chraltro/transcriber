@@ -5,6 +5,7 @@ import { fmtTime, normTitle } from '../lib/text.js';
 import { statusOf, fractionOf } from '../lib/podstate.js';
 import { leftText, lengthText, timeIn, fmtSpeed } from '../lib/playback.js';
 import { parseOpml, toOpml } from '../lib/feed.js';
+import { CHOICES } from '../lib/autosave.js';
 
 const $ = (id) => document.getElementById(id);
 const PAGE = 60;
@@ -17,7 +18,7 @@ const pref = {
 export class Pod {
   // deps: store, player, playerUI, downloads, artInto, toast, setTop({ crumb, context, status }),
   // onView(view), searchShows(term), showFromLink(text), transcriptOf(ep) -> 'server'|'local'|null,
-  // openTranscript(ep), transcribe(ep)
+  // openTranscript(ep), transcribe(ep), autosave (ui/autosave.js)
   constructor(deps) {
     Object.assign(this, deps);
     this.eps = new Map(); // every episode on screen, by id
@@ -41,6 +42,7 @@ export class Pod {
     player.addEventListener('state', () => this.paintRows());
     downloads.addEventListener('change', () => { this.paintRows(); if (this.view === 'queue') this.queue(); if (this.view === 'settings') this.settings(); });
     downloads.addEventListener('progress', (e) => this.paintRows(e.detail));
+    this.autosave.addEventListener('change', () => { if (this.view === 'settings') this.settings(); });
     window.addEventListener('hashchange', () => this.route());
     window.addEventListener('online', () => this.status());
     window.addEventListener('offline', () => this.status());
@@ -522,12 +524,27 @@ export class Pod {
           h('span.track', {}, h('span.knob')), h('span.switch-label', { text: 'Transcribe new episodes' })),
         h('fieldset.segmented.backfill', {}, h('legend', { text: 'And the last' }),
           ...[0, 1, 3, 5, 10].map((n) => h('label', {}, h('input', { type: 'radio', name: 'backfill', value: String(n), checked: (followed.backfill || 0) === n, onchange: () => { store.updateShow(id, { backfill: n }); this.toast(n ? `The last ${n === 1 ? 'episode' : `${n} episodes`} will be transcribed too` : 'Only what you ask for'); } }), h('span', { text: n ? String(n) : 'None' })))),
-        h('p.hint', { text: 'Done on the server: new episodes an hour or two after they come out, older ones as time allows. A transcribed episode can be read along with, and its ads are marked and skipped. Any single episode can be asked for from its own page.' })) : null,
+        h('p.hint', { text: 'Done on the server: new episodes an hour or two after they come out, older ones as time allows. A transcribed episode can be read along with, and its ads are marked and skipped. Any single episode can be asked for from its own page.' }),
+        this.keepNewest(id),
+        this.keepHint()) : null,
+      followed && !store.server.linked ? h('div.show-opts', {}, this.keepNewest(id), this.keepHint()) : null,
       feed?.failed ? h('p.hint.warn', { text: `The feed didn't answer last time (${feed.failed}); this is what was read before.` }) : null,
     ].filter(Boolean));
     this.artInto(art, { art: sub.art || feed?.art, title: sub.title, show: sub.title });
     this.showTitle = sub.title || feed?.title || 'Show';
     this.status();
+  }
+
+  // How many of the show's newest episodes this device keeps saved by itself (ui/autosave.js).
+  keepNewest(id) {
+    const { autosave } = this;
+    return h('fieldset.segmented.keep-newest', {}, h('legend', { text: 'Keep the newest saved on this device' }),
+      ...CHOICES.map((n) => h('label', {}, h('input', { type: 'radio', name: 'keep-newest', value: String(n), checked: autosave.keepOf(id) === n, onchange: () => { autosave.set(id, n); this.toast(n ? `The newest ${n === 1 ? 'episode is' : `${n} episodes are`} kept on this device` : 'Episodes of this show are no longer kept by themselves'); } }), h('span', { text: n ? String(n) : 'None' }))));
+  }
+
+  keepHint() {
+    // (A web app can't tell Wi-Fi from mobile data, or fetch while it is closed.)
+    return h('p.hint', { text: 'Fetched while the app is open, on whatever connection the phone has. Played ones go again, unless Settings keeps them.' });
   }
 
   showMenu(anchor) {
@@ -723,6 +740,24 @@ export class Pod {
 
   /* ---------- settings ---------- */
 
+  // The storage card's line on what is kept by itself, and the way to stop it.
+  keptNote() {
+    const { autosave } = this;
+    const k = autosave.summary();
+    if (!k.shows.length && !k.count) return null;
+    const parts = k.shows.map((s) => `${s.keep} of ${s.title}`);
+    const which = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0] || '';
+    const text = [
+      which ? `Kept by themselves: the newest ${which}.` : '',
+      k.count ? `${k.count} episode${k.count === 1 ? '' : 's'} saved that way, ${fmtBytes(k.bytes)}.` : '',
+      k.short ? 'Stopped for now: this device is short of space. It carries on once there is room again.' : k.saveData && which ? 'Waiting while the phone saves data.' : '',
+    ].filter(Boolean).join(' ');
+    return [
+      h('p.hint.kept-note', { text }),
+      which ? h('div.actions', {}, h('button.btn.ghost.small', { type: 'button', onclick: () => { autosave.stop(); this.toast('No show keeps episodes by themselves now'); } }, icon('x'), h('span', { text: 'Stop keeping episodes by themselves' }))) : null,
+    ];
+  }
+
   settings() {
     const root = $('pod-settings');
     const { store, downloads } = this;
@@ -793,7 +828,8 @@ export class Pod {
     const storage = h('section.card.pod-card', {},
       h('div.pod-head', {}, h('div', {}, h('p.kicker', { text: 'On this device' }), h('h2', { text: 'Saved for offline' }))),
       h('p.hint', { text: downloads.ids.length ? `${downloads.ids.length} episode${downloads.ids.length === 1 ? '' : 's'}, ${fmtBytes(downloads.bytes)}. They are listed under Up next.` : 'No episodes are saved on this device.' }),
-      downloads.ids.length ? h('div.actions', {}, h('button.btn.ghost.small', { type: 'button', onclick: async () => { await downloads.clear(); this.toast('Saved episodes removed'); } }, icon('trash'), h('span', { text: 'Remove them all' }))) : null);
+      downloads.ids.length ? h('div.actions', {}, h('button.btn.ghost.small', { type: 'button', onclick: async () => { await downloads.clear(); this.toast('Saved episodes removed'); } }, icon('trash'), h('span', { text: 'Remove them all' }))) : null,
+      this.keptNote());
 
     const file = h('input', { type: 'file', accept: '.opml,.xml,text/xml,text/x-opml,application/xml', onchange: async (e) => {
       const f = e.target.files[0];
