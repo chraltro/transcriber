@@ -45,6 +45,10 @@ async function device(browser, world, name, options) {
   const ctx = await browser.newContext({ ...options, serviceWorkers: 'block' });
   // What the page tells the lock screen and the headphones is kept where the test can press it.
   await ctx.addInitScript(() => {
+    // Every audio element that is asked to play, the ones not on the page included.
+    window.__media = new Set();
+    const play = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = function () { window.__media.add(this); return play.call(this); };
     const ms = navigator.mediaSession;
     if (!ms) return;
     window.__ms = {};
@@ -393,19 +397,24 @@ async function run(name, options) {
       await press('play');
       await playing(1);
       check(true, 'and "pause" and "play" do as they say when the state is right');
-      // With the app in the background (the screen locked), play is given the audio afresh, from
-      // where it was paused: iOS otherwise runs it on without sound.
+      // With the app in the background (the screen locked), a pause from the lock screen keeps the
+      // sound on with a silent element (iOS otherwise switches it off after half a minute, and Play
+      // then runs the clock with nothing heard); Play lets it go and the episode carries on.
       await page.evaluate(() => Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }));
       await page.waitForTimeout(1100);
       await press('pause');
       await page.waitForFunction(() => document.querySelector('#audio').paused, null, { timeout: 5000 });
       const at = (await audio()).t;
-      await page.evaluate(() => { window.__loads = 0; document.querySelector('#audio').addEventListener('loadstart', () => { window.__loads++; }); });
-      await page.waitForTimeout(1100);
+      const silent = () => page.evaluate(() => [...window.__media].filter((e) => e.id !== 'audio' && !e.paused && e.loop).length);
+      await page.waitForTimeout(300);
+      const kept = await silent();
+      if (mobile) check(kept === 1, `paused from the lock screen with the app in the background, the sound is kept on by a silent element (${kept} playing)`);
+      await page.waitForTimeout(900);
       await press('play');
       await playing(Math.max(0.5, at - 1));
-      const again = { ...(await audio()), loads: await page.evaluate(() => window.__loads) };
-      check(again.loads >= 1 && !again.paused && again.t >= at - 1 && again.t < at + 6, `played again from the lock screen, the audio is given afresh and carries on where it was (${again.loads} load, ${at.toFixed(1)} s to ${again.t.toFixed(1)} s)`);
+      const again = await audio();
+      const after = await silent();
+      check(!again.paused && again.t >= at - 1 && again.t < at + 6 && after === 0, `played again from there, the episode carries on where it was and the silent element lets go (${at.toFixed(1)} s to ${again.t.toFixed(1)} s, ${after} silent playing)`);
       await page.evaluate(() => { delete document.visibilityState; });
     }
     await page.click('#pb-play');

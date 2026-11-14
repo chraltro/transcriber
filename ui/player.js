@@ -86,7 +86,7 @@ export class Player extends EventTarget {
     on('canplaythrough', () => { if (this.wanted != null) this.arrive(true); });
     on('durationchange', () => this.emit('time'));
     on('timeupdate', () => this.tick());
-    on('playing', () => { this.unlocked = true; this.busy = false; this.pausedAt = 0; this.changedAt = performance.now(); this.state(); this.fine(); });
+    on('playing', () => { this.unlocked = true; this.busy = false; this.pausedAt = 0; this.changedAt = performance.now(); this.state(); this.fine(); this.handlers(); });
     on('play', () => { this.changedAt = performance.now(); this.state(); });
     on('pause', () => { if (this.source) { this.pausedAt = Date.now(); this.save(); } this.changedAt = performance.now(); this.state(); this.fine(); });
     on('waiting', () => { this.busy = true; this.emit('state'); });
@@ -109,7 +109,14 @@ export class Player extends EventTarget {
 
     const leave = () => { this.save(); store.flush(); };
     window.addEventListener('pagehide', leave);
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') leave(); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        leave();
+        // Paused (not long ago) as the app goes into the background: the sound is kept on.
+        if (this.source && this.audio.paused && this.pausedAt && Date.now() - this.pausedAt < 15 * 60e3) this.keepSoundOn();
+      } else this.letSoundGo();
+      try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+    });
     store.addEventListener('change', (e) => {
       const keys = e.detail.keys || [];
       if (keys.some((k) => k === 'settings' || k.startsWith('subs/'))) { this.applyRate(); this.handlers(); this.retrim(); }
@@ -273,6 +280,8 @@ export class Player extends EventTarget {
     // play() first, while the press that asked for it (a tap, the lock screen, the AirPods) still
     // counts as one; the rest after.
     const p = this.audio.play();
+    this.letSoundGo();
+    this.readySound();
     this.state(); // (iOS hears of it now, not when the audio has arrived)
     this.watch();
     return p ? p.then(() => true, (err) => {
@@ -314,13 +323,10 @@ export class Player extends EventTarget {
       this.source = null;
       return this.play(this.item, { at: this.store.progress(this.item.id)?.done ? 0 : at });
     }
-    // Paused with the screen locked, and played again from the lock screen or the AirPods without
-    // the app being opened, iOS lets the audio run on with its sound switched off (the time moves,
-    // nothing is heard). Given the audio afresh, inside the press, it switches the sound on again:
-    // the same file, from where it was. The same when iOS let go of the audio altogether.
+    // Paused a while, the browser may have let go of the audio: it is given it again (still inside
+    // the press, so it may play), to start where it was.
     const a = this.audio;
-    const away = typeof document !== 'undefined' && document.visibilityState === 'hidden';
-    if (this.pausedAt && (away || a.readyState === 0 || a.networkState === 3)) {
+    if (this.pausedAt && (a.readyState === 0 || a.networkState === 3)) {
       this.wanted = Math.max(0, this.time - (this.store.settings.rewind ? rewindFor(Date.now() - this.pausedAt) : 0));
       this.asks = 0;
       a.src = this.source.src;
@@ -343,6 +349,7 @@ export class Player extends EventTarget {
 
   // Takes the episode out of the player.
   stop() {
+    this.letSoundGo();
     this.save();
     this.seq++;
     this.audio.pause();
@@ -793,10 +800,47 @@ export class Player extends EventTarget {
       if (!going) return this.resume();
       if (!fresh) return this.pause();
     } else {
-      if (going) return this.pause();
+      if (going) { this.pause(); this.keepSoundOn(); return; }
       if (!fresh) return this.resume();
     }
     this.position(); // (and iOS is told how it really is)
+  }
+
+  /* ---------- the sound kept on, while paused in the background (iOS) ----------
+   * iOS lets a home-screen app make sound in the background only while it is making sound.
+   * Paused there for about half a minute, the app's audio is switched off, and Play on the lock
+   * screen or the AirPods then runs the clock with nothing heard, until the app is opened. So
+   * while an episode is paused with the app in the background, a second audio element plays
+   * silence, which keeps the sound on; it lets go when the episode plays, when the app is opened,
+   * and after a quarter of an hour (a phone left paused overnight is not kept awake). */
+
+  // The silent element, made and played once inside a tap, so that later it may play without one
+  // (iOS lets an element play by itself only after it has played at a person's asking).
+  readySound() {
+    if (!IS_IOS || this.silent) return;
+    const k = new Audio();
+    k.loop = true;
+    k.preload = 'auto';
+    k.setAttribute('playsinline', '');
+    k.src = this.hush ||= silence();
+    this.silent = k;
+    // (Refused, outside a tap: made ready at the next one.)
+    k.play().then(() => { if (!this.silenting) k.pause(); }, () => { if (this.silent === k) this.silent = null; });
+  }
+
+  keepSoundOn() {
+    if (!IS_IOS || !this.item || typeof document === 'undefined' || document.visibilityState !== 'hidden') return;
+    this.readySound();
+    this.silenting = true;
+    clearTimeout(this.silentTimer);
+    this.silent.play().catch(() => {});
+    this.silentTimer = setTimeout(() => this.letSoundGo(), 15 * 60e3);
+  }
+
+  letSoundGo() {
+    this.silenting = false;
+    clearTimeout(this.silentTimer);
+    this.silent?.pause();
   }
 
   // The next episode's audio, found before it is needed: when this one ends there may be no
