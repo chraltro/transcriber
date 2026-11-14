@@ -274,7 +274,8 @@ async function run(name, options) {
     await page.waitForSelector('.np-trim-save:not(.hidden)');
     check(/saved on this device/.test(await page.locator('.np-trim-note').textContent()), `a streamed episode says what finding its pauses takes (${await page.locator('.np-trim-note').textContent()})`);
     await page.click('.np-trim-save');
-    await page.waitForFunction(() => document.querySelector('#audio').currentSrc.startsWith('blob:') && /longer than 0\.8 s/.test(document.querySelector('.np-trim-note').textContent), null, { timeout: 30000 }).catch(() => {});
+    // (The saved copy is in the player before it has been moved to where the other one was.)
+    await page.waitForFunction(() => { const x = document.querySelector('#audio'); return x.currentSrc.startsWith('blob:') && !x.paused && x.currentTime >= 130 && /longer than 0\.8 s/.test(document.querySelector('.np-trim-note').textContent); }, null, { timeout: 30000 }).catch(() => {});
     a = await audio();
     check(a.src.startsWith('blob:') && a.t >= 130 && a.t < 160 && !a.paused && /^6 pauses/.test(await page.locator('.np-trim-note').textContent()), `saved from the player, it plays on from the saved copy, its pauses found (${a.t.toFixed(0)} s, ${await page.locator('.np-trim-note').textContent()})`);
     await page.click('.np-trims button[data-trim="0"]');
