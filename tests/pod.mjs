@@ -1317,9 +1317,13 @@ async function run(name, options) {
       const [a, b] = [q[n - 2], q[n - 1]];
       const [moving] = await Promise.all([frames('#pod-queue ol > .ep', 900), page.locator('#pod-queue ol > .ep').nth(n - 2).locator('button[aria-label$=" down"]').click()]);
       const aTops = moving.map((f) => f.find((x) => x.id === a.id)).filter(Boolean);
-      const last = moving.at(-1);
-      check(aTops.some((x) => x.moved && x.top > a.top + 2 && x.top < a.top + b.h - 2) && last.at(-1)?.id === a.id && last.at(-2)?.id === b.id && Math.abs(last.at(-2).top - a.top) <= 1 && last.every((x) => !x.moved),
-        `moved down in the queue, an episode and the one under it go past each other (${[...new Set(aTops.map((x) => x.top))].slice(0, 6).join(', ')} ... to ${last.at(-1)?.top} px)`);
+      // (Where they end is read once the springs have settled, down the page rather than on the
+      // screen: a slow machine may still be moving them at the end of the frames, or scroll.)
+      await page.waitForFunction(() => [...document.querySelectorAll('#pod-queue ol > .ep')].every((li) => getComputedStyle(li).transform === 'none'), null, { timeout: 4000 }).catch(() => {});
+      const last = await queueNow();
+      const settled = await page.evaluate(() => [...document.querySelectorAll('#pod-queue ol > .ep')].every((li) => getComputedStyle(li).transform === 'none'));
+      check(aTops.some((x) => x.moved && x.y > a.y + 2 && x.y < a.y + b.h - 2) && last.at(-1)?.id === a.id && last.at(-2)?.id === b.id && Math.abs(last.at(-2).y - a.y) <= 1 && settled,
+        `moved down in the queue, an episode and the one under it go past each other (${[...new Set(aTops.map((x) => x.y))].slice(0, 6).join(', ')} ... to ${last.at(-1)?.y} px down the page; the one under it ends at ${last.at(-2)?.y}, was ${a.y}${settled ? '' : '; still moving'})`);
       q = await queueNow();
       const [taking] = await Promise.all([frames('#pod-queue ol > .ep', 900), page.locator('#pod-queue ol > .ep').nth(n - 2).locator('button[aria-label^="Take"]').click()]);
       const closing = taking.map((f) => f.find((x) => x.id === b.id)).filter((x) => x?.leaving).map((x) => x.h);
