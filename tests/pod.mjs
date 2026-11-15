@@ -1193,9 +1193,12 @@ async function run(name, options) {
       await page.waitForSelector('#started-list .tile', { timeout: 10000 });
       const first = () => page.evaluate(() => document.querySelector('#started-list .tile .tile-title')?.textContent || '');
       const title = await first();
-      // A long press opens the episode's menu, with a way out of Carry on in it.
+      // A long press opens the episode's menu, with a way out of Carry on in it. (Pressed once the
+      // screen has come in and stopped scrolling: a scroll under the finger rightly cancels a hold.)
+      await page.waitForFunction(() => !document.getAnimations().some((a) => a.playState === 'running') && document.querySelector('#started-list .tile')?.getBoundingClientRect().top >= 0, null, { timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(150);
       await page.evaluate(() => { const t = document.querySelector('#started-list .tile'); const r = t.getBoundingClientRect(); t.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 3, pointerType: 'touch', isPrimary: true, button: 0, clientX: r.left + 100, clientY: r.top + 20, bubbles: true })); });
-      await page.waitForTimeout(650);
+      await page.waitForSelector('#row-menu.open', { timeout: 3000 }).catch(() => {});
       await page.evaluate(() => { const t = document.querySelector('#started-list .tile'); t.dispatchEvent(new PointerEvent('pointerup', { pointerId: 3, pointerType: 'touch', isPrimary: true, bubbles: true })); });
       const items = await page.locator('#row-menu.open button b').allTextContents();
       check(items.includes('Remove from Carry on') && items.includes('Mark as played'), `a long press on a Carry on episode opens its menu (${items.join(', ')})`);
