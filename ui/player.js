@@ -110,6 +110,8 @@ export class Player extends EventTarget {
     on('error', () => { this.note('error', audio.error?.code || ''); this.failed(); });
     try { navigator.audioSession?.addEventListener?.('statechange', () => this.note('sound', navigator.audioSession.state)); } catch {}
     window.addEventListener('pageshow', (e) => this.note('pageshow', e.persisted ? 'from memory' : ''));
+    // What a run that iOS ended out of sight left behind.
+    setTimeout(() => this.sendJournal(), 4000);
 
     const leave = () => { this.save(); store.flush(); };
     window.addEventListener('pagehide', () => { this.note('pagehide'); leave(); });
@@ -288,14 +290,14 @@ export class Player extends EventTarget {
     this.wantPlay = true;
     this.busy = true;
     this.changedAt = performance.now();
-    // play() first, while the press that asked for it (a tap, the lock screen, the AirPods) still
-    // counts as one; the rest after.
+    // (With the silence on, it stays on until the episode is heard: see handOver.)
+    if (!this.silenting) this.letSoundGo();
+    // The silence made ready before the episode is played, not after: of two audio elements, the
+    // lock screen shows the one a person touched last (WebKit counts a play or a pause made inside
+    // a tap or a lock-screen press), and that has to be the episode. Both inside the press.
+    this.readySound();
     const p = this.audio.play();
     this.note('play()', `at ${this.audio.currentTime.toFixed(1)} s, ready ${this.audio.readyState}, network ${this.audio.networkState}`);
-    // (With the silence on, it stays on until the episode is heard: let go of it first and there
-    // is a moment with nothing playing, in which iOS gives the sound back to the app before.)
-    if (!this.silenting) this.letSoundGo();
-    this.readySound();
     this.state(); // (iOS hears of it now, not when the audio has arrived)
     this.watch();
     return p ? p.then(() => true, (err) => {
@@ -838,7 +840,9 @@ export class Player extends EventTarget {
     k.loop = true;
     k.preload = 'auto';
     k.setAttribute('playsinline', '');
-    k.src = this.hush ||= silence(2);
+    // (Two seconds: under 0.95 s WebKit does not count it as something to show on the lock screen,
+    // and then, playing while the episode is paused, it takes the episode off the lock screen.)
+    k.src = this.longHush ||= silence(2); // (its own: the start trick's tenth of a second is too short)
     this.silent = k;
     // (Refused, outside a tap: made ready at the next one.)
     k.play().then(() => { if (!this.silenting) k.pause(); }, () => { if (this.silent === k) this.silent = null; });
@@ -869,18 +873,14 @@ export class Player extends EventTarget {
     this.silent?.pause();
   }
 
-  // Paused with the app out of sight: the silence starts before the episode stops, so that there
-  // is no moment with nothing playing. (In one, iOS switches the app's sound off and hands it to
-  // the app that played before, which then plays again, and the episode cannot take it back from
-  // the lock screen.) The episode is paused once the silence plays, or after half a second.
+  // Paused with the app out of sight: the silence is started, then the episode paused, at once
+  // and in that order. The silence keeps the app's sound and the page running while it is paused
+  // (iOS otherwise lets the page sleep, and Play on the lock screen then runs the clock with
+  // nothing heard). The order keeps the episode on the lock screen: WebKit shows the audio a person
+  // touched last, and a pause from a lock-screen press counts as a touch.
   pauseQuietly() {
-    if (!this.keepsSound) return this.pause();
-    this.wantPlay = false;
-    this.changedAt = performance.now();
-    const asked = this.changedAt;
-    const stop = () => { if (!this.wantPlay && this.changedAt === asked) this.pause(); };
-    Promise.race([this.keepSoundOn(), new Promise((f) => setTimeout(f, 500))]).then(stop, stop);
-    this.state();
+    if (this.keepsSound) this.keepSoundOn();
+    this.pause();
   }
 
   // The episode is heard again: the silence goes once it has played for a moment (not at once:
@@ -902,27 +902,35 @@ export class Player extends EventTarget {
   note(what, detail = '') {
     if (!IS_IOS || typeof document === 'undefined') return;
     const at = new Date().toISOString().slice(11, 23);
-    const line = [at, document.visibilityState === 'hidden' ? 'away' : 'seen', what, detail, this.item?.id || ''];
+    const away = document.visibilityState === 'hidden';
+    const line = [at, away ? 'away' : 'seen', what, detail, this.item?.id || ''];
     try {
       const log = JSON.parse(localStorage.getItem(JOURNAL) || '[]');
       log.push(line);
       localStorage.setItem(JOURNAL, JSON.stringify(log.slice(-300)));
     } catch {}
+    // Out of sight, sent a few seconds after things settle as well: iOS may end the app there,
+    // and the next start then sends what was left (see the constructor).
+    if (away) { clearTimeout(this.journalTimer); this.journalTimer = setTimeout(() => this.sendJournal(), 5000); }
   }
 
   async sendJournal() {
-    if (!IS_IOS || !this.store?.key) return;
+    if (!IS_IOS || !this.store?.key || this.sendingJournal) return;
     let log;
     try { log = JSON.parse(localStorage.getItem(JOURNAL) || '[]'); } catch { return; }
     // (Only when something happened out of sight: what happens on screen can be seen there.)
     if (!log.some((l) => l[1] === 'away' && l[2] !== 'out of sight')) return;
     const standalone = navigator.standalone || matchMedia?.('(display-mode: standalone)').matches;
     const device = `${(navigator.userAgent.match(/OS [\d_]+/) || ['iOS'])[0].replace(/_/g, '.')}${standalone ? ', home screen' : ', Safari'}`;
+    this.sendingJournal = true;
     try {
-      await this.store.api('POST', 'journal', { device, entries: log });
-      const now = JSON.parse(localStorage.getItem(JOURNAL) || '[]');
-      localStorage.setItem(JOURNAL, JSON.stringify(now.slice(log.length)));
-    } catch {}
+      // (keepalive: it goes on being sent if the page is put to sleep meanwhile)
+      const res = await fetch('api/pod/journal', { method: 'POST', keepalive: true, headers: { authorization: `Bearer ${this.store.key}`, 'content-type': 'application/json' }, body: JSON.stringify({ device, entries: log }) });
+      if (res.ok) {
+        const now = JSON.parse(localStorage.getItem(JOURNAL) || '[]');
+        localStorage.setItem(JOURNAL, JSON.stringify(now.slice(log.length)));
+      }
+    } catch {} finally { this.sendingJournal = false; }
   }
 
   // The next episode's audio, found before it is needed: when this one ends there may be no

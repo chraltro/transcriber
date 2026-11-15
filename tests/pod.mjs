@@ -47,8 +47,14 @@ async function device(browser, world, name, options) {
   await ctx.addInitScript(() => {
     // Every audio element that is asked to play, the ones not on the page included.
     window.__media = new Set();
+    // ...and in what order the episode and the silence were played and paused: the lock screen
+    // shows the one touched last (WebKit), which has to be the episode.
+    window.__calls = [];
+    const who = (el) => (el.id === 'audio' ? 'episode' : el.loop ? 'silence' : 'other');
     const play = HTMLMediaElement.prototype.play;
-    HTMLMediaElement.prototype.play = function () { window.__media.add(this); return play.call(this); };
+    HTMLMediaElement.prototype.play = function () { window.__media.add(this); window.__calls.push(`${who(this)} play`); return play.call(this); };
+    const pause = HTMLMediaElement.prototype.pause;
+    HTMLMediaElement.prototype.pause = function () { window.__calls.push(`${who(this)} pause`); return pause.call(this); };
     const ms = navigator.mediaSession;
     if (!ms) return;
     window.__ms = {};
@@ -398,8 +404,15 @@ async function run(name, options) {
     const kept = await page.evaluate(() => ({ title: document.querySelector('#pb-title').textContent, line: parseFloat(document.querySelector('#pb-line').style.width) }));
     check(kept.title === 'Why every container is the same size' && kept.line > 38 && kept.line < 43, `after a reload the episode is still in the player, where it was left (${kept.line.toFixed(0)}% in)`);
     check((await page.locator('#started-list .tile').count()) === 0, 'Carry on leaves out what the player already holds');
+    await page.evaluate(() => { window.__calls.length = 0; });
     await page.click('#pb-play');
     await playing(100);
+    if (mobile) {
+      // The first play after a start makes the silence ready, before the episode is played, so
+      // the episode is what a person touched last and what the lock screen shows.
+      const firstCalls = await page.evaluate(() => window.__calls.filter((c) => /^(episode|silence) /.test(c)));
+      check(firstCalls.indexOf('silence play') >= 0 && firstCalls.indexOf('silence play') < firstCalls.lastIndexOf('episode play'), `the first play after a start readies the silence before the episode, so the episode is touched last (${firstCalls.join(', ')})`);
+    }
     a = await audio();
     check(a.t >= 119 && a.t < 126, `it picks up where it stopped (${a.t.toFixed(1)} s)`);
 
@@ -443,21 +456,28 @@ async function run(name, options) {
       const countAt = (type) => page.evaluate(([type, f]) => { window.__silentAt = null; const count = new Function(`return (${f})()`); document.querySelector('#audio').addEventListener(type, () => { window.__silentAt = count(); }, { once: true }); }, [type, silentNow.toString()]);
       await page.waitForTimeout(1100);
       await countAt('pause');
-      await press('pause');
+      // (What is done inside the press itself: WebKit counts a touch only there, not after it.)
+      const pauseCalls = await page.evaluate(() => { window.__calls.length = 0; window.__ms.pause({ action: 'pause' }); return window.__calls.slice(); });
       await page.waitForFunction(() => document.querySelector('#audio').paused, null, { timeout: 5000 });
       const atPause = await page.evaluate(() => window.__silentAt);
       const at = (await audio()).t;
       await page.waitForTimeout(300);
       const kept = await silent();
-      if (mobile) check(kept === 1 && atPause === 1, `paused from the lock screen with the app in the background, a silent element keeps the sound on, already playing as the episode stops (${kept} playing, ${atPause} as it stopped)`);
+      if (mobile) {
+        check(kept === 1 && atPause === 1, `paused from the lock screen with the app in the background, a silent element keeps the sound on, already playing as the episode stops (${kept} playing, ${atPause} as it stopped)`);
+        // (Touched last, the episode stays on the lock screen; the silence, touched last, took its place.)
+        const lastTouch = pauseCalls.filter((c) => /^(episode|silence) /.test(c)).at(-1);
+        check(lastTouch === 'episode pause' && pauseCalls.includes('silence play'), `and inside that press the episode is touched last, so it stays on the lock screen (${pauseCalls.join(', ')})`);
+      }
       await page.waitForTimeout(900);
       await countAt('playing');
-      await press('play');
+      const playCalls = await page.evaluate(() => { window.__calls.length = 0; window.__ms.play({ action: 'play' }); return window.__calls.slice(); });
       await playing(Math.max(0.5, at - 1));
       const atPlaying = await page.evaluate(() => window.__silentAt);
       await page.waitForTimeout(1500);
       const again = await audio();
       const after = await silent();
+      if (mobile) check(playCalls.filter((c) => /^(episode|silence) /.test(c)).at(-1) === 'episode play', `and inside the press that plays it, the episode is touched last (${playCalls.join(', ')})`);
       check(!again.paused && again.t >= at - 1 && again.t < at + 8 && after === 0 && (!mobile || atPlaying === 1), `played again from there, the episode carries on where it was, and the silence lets go once it is heard (${at.toFixed(1)} s to ${again.t.toFixed(1)} s; silent ${atPlaying} as it started, ${after} after)`);
 
       await page.evaluate(() => { delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange')); });
