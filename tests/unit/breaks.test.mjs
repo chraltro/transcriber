@@ -107,7 +107,7 @@ const SIMPLISAFE = "Today's presenting sponsor is SimpliSafe Home Security. If y
 const SIGN_OFF = 'SimpliSafe, ahead of crime, in real time.';
 const BUNDLE = 'The Disney Plus Hulu HBO Max Bundle, the best in entertainment in one bundle. This is going to be a good time. With new seasons of your favorites, like Percy Jackson and the Olympians on Disney Plus. Do you ever get used to all this? Nope. The Scandalous Alls Fair on Hulu. Let\'s give these girls a show. And the high society drama of the HBO original, The Gilded Age on HBO Max. What have I gotten myself into? Streaming this month. Plans starting at $21.99 a month. Terms apply. Visit Disney Plus Hulu Max Bundle dot com for details.';
 const VRBO = 'Looking for the best of Verbo? Discover vacation rentals of the year topped quality homes guests Lovett from across the country. Our curated list takes the guesswork out of planning so you can spend less time searching and more time packing. Book your next day now with Verbo video.';
-const sentencesOf = (text) => text.match(/[^.!?]+[.!?]+/g).map((x) => x.trim());
+const sentencesOf = (text) => text.split(/(?<=[.!?])\s+/).map((x) => x.trim()).filter(Boolean); // (not at the dot of crooked.com)
 
 test('a long read, its sign-off, an announcer\'s spot worded as an ad only halfway, and a passing spot are one break, up to the host', () => {
   reset();
@@ -161,3 +161,26 @@ test('news talk with an ad\'s words in it is not an ad', () => {
     'And when you order, type in Pod Save America at checkout.',
   ]) assert.equal(isAd(t), true, t);
 });
+
+// A host's plug for the show's own subscriptions and newsletter, then straight into the interview,
+// part of it in the same paragraph (Nov 2026): the plug names "Pod Save America" and the guest is
+// named twice right after, which were once taken for the brand, and the interview's first lines
+// for the plug's sign-off.
+const PLUG = "You get ad-free episodes, excellent newsletters, exclusive subscriber-only content like Pod Save America Only Friends and my show, Polar Coaster. And most importantly, you're helping keep independent pro-democracy media going. Head over to crooked.com slash Friends. And while I have you, I want to make a pitch for my newsletter, The Message Box. It's the best way to get serious analysis of what's happening in politics based on the data and my way-too-long experience working in politics. I'm breaking down the results from the midterm to tell you what happened, why it happened, and most importantly, where Democratic need to go from here. I have a special discount for Pod Save America listeners to get 20% off your subscription. Go to crooked.com slash yeswedan.";
+const INTRO = "And now my conversation with Pete Buttigieg. Pete Buttigieg, welcome to Pod Save America. Thanks for having me on. We are here in Denver at the What's Next conference, which is a gathering of elected officials, operatives, political people to have a conversation about what's next to the Democratic Party.";
+
+for (const shape of ['in the plug\'s paragraph', 'as short paragraphs of its own']) {
+  test(`a plug for the show's own newsletter does not take the interview after it (${shape})`, () => {
+    reset();
+    const show = [];
+    for (let i = 0; i < 40; i++) show.push(say(i % 2 ? 'The results in Virginia and New Jersey tell you a lot about where the party is.' : 'So that is the state of the race going into the winter.', i % 3 ? 0 : 2));
+    const plug = sentencesOf(PLUG).map((x) => say(x, 0, { gap: 0.2 }));
+    const own = shape !== 'in the plug\'s paragraph';
+    const intro = sentencesOf(INTRO).map((x, k) => say(x, k === 2 ? 1 : 0, { gap: 0.2, pause: own && k === 0 }));
+    const talk = [];
+    for (let i = 0; i < 200; i++) talk.push(say(i % 2 ? 'I think the Democratic Party has to be honest about why people stopped trusting it, Dan.' : 'Pete, what did you take from the midterm results in places like Michigan?', i % 2 ? 1 : 0));
+    const breaks = adBreaks([...show, ...plug, ...intro, ...talk]);
+    for (const s of [...intro, ...talk.slice(0, 10)]) assert.equal(breakAt(breaks, (s.start + s.end) / 2), -1, `${JSON.stringify(breaks)}: "${s.text.slice(0, 40)}" at ${s.start.toFixed(1)}`);
+    assert.equal(breakAt(breaks, plug.at(-1).start + 0.5), 0, `the plug itself is skipped: ${JSON.stringify(breaks)}`);
+  });
+}
