@@ -153,6 +153,9 @@ export class Pod {
   // motion that says which way (screenChange). A sheet open over the old screen goes down first;
   // to another section (the transcript, from the player) the screen changes at once under it.
   moved() {
+    // Where the screen being left is scrolled to, read now: its last scroll event can still be on
+    // its way (WebKit sends them with the next frame), and would then come too late to count.
+    if (this.view) this.scrolls.set(this.idx, window.scrollY);
     const to = where(location.hash || '#/');
     const kind = to ? this.motionTo(to) : '';
     if (!kind || (kind === 'tab' && (sheetOpen() || sheetLeaving()))) { this.route(); return; }
