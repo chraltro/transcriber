@@ -22,6 +22,8 @@
 //   DELETE /api/pod/push?endpoint=    and no longer
 //   POST /api/pod/push/test { endpoint }  a notification to that device now
 //   GET  /api/pod/search?q=           where the library's transcripts say something (server/search.mjs)
+//   POST /api/pod/journal { device, entries }  what the player did while the app was out of sight
+//                                     (lock screen, headphones), written to the server's log
 //
 // Everything but status, claim and link needs the key in an Authorization header (transcribe
 // also answers the workflow, which proves itself with GitHub's token). The cookie that claim and
@@ -432,6 +434,18 @@ export function createPod({ dataDir, log = console.log, fetchImpl = fetch, findF
       const since = whole ? 0 : Number(msg.since) || 0;
       const keys = [...records(state.doc)].map(([k]) => k).filter((k) => (state.revs[k] || 0) > since);
       return send(req, res, 200, { epoch: state.epoch, rev: state.rev, changes: pick(state.doc, keys) });
+    }
+
+    // What the player did with the app out of sight: there is no other way to see it from here.
+    if (route === 'journal' && method === 'POST') {
+      let msg;
+      try { msg = await body(req); } catch { return fail(req, res, 400, 'Bad request'); }
+      const device = String(msg.device || '').replace(/[^\w .;:,()/-]/g, '').slice(0, 60);
+      const entries = Array.isArray(msg.entries) ? msg.entries.slice(-300) : [];
+      const line = (e) => (Array.isArray(e) ? e.map((x) => String(x).replace(/\s+/g, ' ').slice(0, 160)).join(' ') : '');
+      log(`journal: ${entries.length} from ${device || 'a device'}`);
+      for (const e of entries) log(`journal:   ${line(e)}`);
+      return send(req, res, 200, { kept: entries.length });
     }
 
     if (route === 'inbox' && method === 'GET') {

@@ -14,12 +14,13 @@ import { readShape, hasLoudness } from '../lib/shape.js';
 
 const IS_IOS = typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 const NOW = 'pod-now';
+const JOURNAL = 'pod-journal';
 const VOLUME = 'pod-volume';
 
 // A moment of silence, to start the audio element inside a tap when the real audio has to be
 // looked up first: iOS only lets a page play what a tap started.
-function silence() {
-  const n = 800;
+function silence(seconds = 0.1) {
+  const n = Math.round(8000 * seconds);
   const buf = new ArrayBuffer(44 + n * 2);
   const v = new DataView(buf);
   const str = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
@@ -86,10 +87,11 @@ export class Player extends EventTarget {
     on('canplaythrough', () => { if (this.wanted != null) this.arrive(true); });
     on('durationchange', () => this.emit('time'));
     on('timeupdate', () => this.tick());
-    on('playing', () => { this.unlocked = true; this.busy = false; this.pausedAt = 0; this.changedAt = performance.now(); this.state(); this.fine(); this.handlers(); });
-    on('play', () => { this.changedAt = performance.now(); this.state(); });
-    on('pause', () => { if (this.source) { this.pausedAt = Date.now(); this.save(); } this.changedAt = performance.now(); this.state(); this.fine(); });
-    on('waiting', () => { this.busy = true; this.emit('state'); });
+    on('playing', () => { this.note('playing'); this.unlocked = true; this.busy = false; this.pausedAt = 0; this.changedAt = performance.now(); this.state(); this.fine(); this.handlers(); this.handOver(); });
+    on('play', () => { this.note('play'); this.changedAt = performance.now(); this.state(); });
+    on('pause', () => { this.note('pause', this.wantPlay ? 'not asked for' : ''); if (this.source) { this.pausedAt = Date.now(); this.save(); } this.changedAt = performance.now(); this.state(); this.fine(); });
+    on('waiting', () => { this.note('waiting'); this.busy = true; this.emit('state'); });
+    for (const type of ['stalled', 'emptied', 'abort']) on(type, () => this.note(type));
     on('seeked', () => {
       // A jump over a pause: how long it took is what the next ones have to be worth.
       if (this.jumpedAt) {
@@ -104,17 +106,20 @@ export class Player extends EventTarget {
       this.emit('time');
     });
     on('ratechange', () => { this.position(); this.emit('rate'); if (this.quiet && Math.abs(this.rate - this.cutRate) > 0.01) this.recut(); });
-    on('ended', () => this.ended());
-    on('error', () => this.failed());
+    on('ended', () => { this.note('ended'); this.ended(); });
+    on('error', () => { this.note('error', audio.error?.code || ''); this.failed(); });
+    try { navigator.audioSession?.addEventListener?.('statechange', () => this.note('sound', navigator.audioSession.state)); } catch {}
+    window.addEventListener('pageshow', (e) => this.note('pageshow', e.persisted ? 'from memory' : ''));
 
     const leave = () => { this.save(); store.flush(); };
-    window.addEventListener('pagehide', leave);
+    window.addEventListener('pagehide', () => { this.note('pagehide'); leave(); });
     document.addEventListener('visibilitychange', () => {
+      this.note(document.visibilityState === 'hidden' ? 'out of sight' : 'in sight');
       if (document.visibilityState === 'hidden') {
         leave();
         // Paused (not long ago) as the app goes into the background: the sound is kept on.
         if (this.source && this.audio.paused && this.pausedAt && Date.now() - this.pausedAt < 15 * 60e3) this.keepSoundOn();
-      } else this.letSoundGo();
+      } else { this.letSoundGo(); this.sendJournal(); }
       try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
     });
     store.addEventListener('change', (e) => {
@@ -286,11 +291,15 @@ export class Player extends EventTarget {
     // play() first, while the press that asked for it (a tap, the lock screen, the AirPods) still
     // counts as one; the rest after.
     const p = this.audio.play();
-    this.letSoundGo();
+    this.note('play()', `at ${this.audio.currentTime.toFixed(1)} s, ready ${this.audio.readyState}, network ${this.audio.networkState}`);
+    // (With the silence on, it stays on until the episode is heard: let go of it first and there
+    // is a moment with nothing playing, in which iOS gives the sound back to the app before.)
+    if (!this.silenting) this.letSoundGo();
     this.readySound();
     this.state(); // (iOS hears of it now, not when the audio has arrived)
     this.watch();
     return p ? p.then(() => true, (err) => {
+      this.note('play() refused', err.name);
       if (err.name === 'AbortError') return false;
       this.busy = false;
       this.wantPlay = false;
@@ -802,11 +811,12 @@ export class Player extends EventTarget {
   command(want) {
     const going = this.going;
     const fresh = performance.now() - (this.changedAt || 0) < 1000;
+    this.note(`asked to ${want}`, `${going ? 'playing' : 'paused'}${fresh ? ', just changed' : ''}`);
     if (want === 'play') {
       if (!going) return this.resume();
-      if (!fresh) return this.pause();
+      if (!fresh) return this.pauseQuietly();
     } else {
-      if (going) { this.pause(); this.keepSoundOn(); return; }
+      if (going) return this.pauseQuietly();
       if (!fresh) return this.resume();
     }
     this.position(); // (and iOS is told how it really is)
@@ -828,25 +838,91 @@ export class Player extends EventTarget {
     k.loop = true;
     k.preload = 'auto';
     k.setAttribute('playsinline', '');
-    k.src = this.hush ||= silence();
+    k.src = this.hush ||= silence(2);
     this.silent = k;
     // (Refused, outside a tap: made ready at the next one.)
     k.play().then(() => { if (!this.silenting) k.pause(); }, () => { if (this.silent === k) this.silent = null; });
   }
 
+  // Whether the sound is to be kept on here: iOS, an episode in the player, the app out of sight.
+  get keepsSound() {
+    return IS_IOS && !!this.item && typeof document !== 'undefined' && document.visibilityState === 'hidden';
+  }
+
+  // -> a promise that settles once the silence is playing (or could not be).
   keepSoundOn() {
-    if (!IS_IOS || !this.item || typeof document === 'undefined' || document.visibilityState !== 'hidden') return;
+    if (!this.keepsSound) return Promise.resolve(false);
     this.readySound();
+    if (!this.silent) { this.note('silence', 'not ready'); return Promise.resolve(false); }
     this.silenting = true;
     clearTimeout(this.silentTimer);
-    this.silent.play().catch(() => {});
-    this.silentTimer = setTimeout(() => this.letSoundGo(), 15 * 60e3);
+    clearTimeout(this.handing);
+    this.silentTimer = setTimeout(() => { this.note('silence', 'a quarter of an hour paused: let go'); this.letSoundGo(); }, 15 * 60e3);
+    return this.silent.play().then(() => { this.note('silence', 'on'); return true; }, (err) => { this.note('silence', `refused (${err.name})`); return false; });
   }
 
   letSoundGo() {
+    clearTimeout(this.handing);
+    if (this.silenting) this.note('silence', 'off');
     this.silenting = false;
     clearTimeout(this.silentTimer);
     this.silent?.pause();
+  }
+
+  // Paused with the app out of sight: the silence starts before the episode stops, so that there
+  // is no moment with nothing playing. (In one, iOS switches the app's sound off and hands it to
+  // the app that played before, which then plays again, and the episode cannot take it back from
+  // the lock screen.) The episode is paused once the silence plays, or after half a second.
+  pauseQuietly() {
+    if (!this.keepsSound) return this.pause();
+    this.wantPlay = false;
+    this.changedAt = performance.now();
+    const asked = this.changedAt;
+    const stop = () => { if (!this.wantPlay && this.changedAt === asked) this.pause(); };
+    Promise.race([this.keepSoundOn(), new Promise((f) => setTimeout(f, 500))]).then(stop, stop);
+    this.state();
+  }
+
+  // The episode is heard again: the silence goes once it has played for a moment (not at once:
+  // a start can stall, and the silence is what keeps the sound the app's meanwhile).
+  handOver() {
+    if (!this.silenting) return;
+    clearTimeout(this.handing);
+    this.handing = setTimeout(() => {
+      if (!this.audio.paused && this.audio.readyState >= 3) this.letSoundGo();
+      else if (this.wantPlay) this.handOver(); // (still starting; paused again, the silence stays)
+    }, 800);
+  }
+
+  /* ---------- what the player did with the app out of sight ----------
+   * Kept on the device and sent to the server's log when the app is in sight again (iOS only):
+   * what the lock screen and the headphones asked for, and what the audio did, can be seen
+   * nowhere else. Times, states and the episode's id; nothing else. */
+
+  note(what, detail = '') {
+    if (!IS_IOS || typeof document === 'undefined') return;
+    const at = new Date().toISOString().slice(11, 23);
+    const line = [at, document.visibilityState === 'hidden' ? 'away' : 'seen', what, detail, this.item?.id || ''];
+    try {
+      const log = JSON.parse(localStorage.getItem(JOURNAL) || '[]');
+      log.push(line);
+      localStorage.setItem(JOURNAL, JSON.stringify(log.slice(-300)));
+    } catch {}
+  }
+
+  async sendJournal() {
+    if (!IS_IOS || !this.store?.key) return;
+    let log;
+    try { log = JSON.parse(localStorage.getItem(JOURNAL) || '[]'); } catch { return; }
+    // (Only when something happened out of sight: what happens on screen can be seen there.)
+    if (!log.some((l) => l[1] === 'away' && l[2] !== 'out of sight')) return;
+    const standalone = navigator.standalone || matchMedia?.('(display-mode: standalone)').matches;
+    const device = `${(navigator.userAgent.match(/OS [\d_]+/) || ['iOS'])[0].replace(/_/g, '.')}${standalone ? ', home screen' : ', Safari'}`;
+    try {
+      await this.store.api('POST', 'journal', { device, entries: log });
+      const now = JSON.parse(localStorage.getItem(JOURNAL) || '[]');
+      localStorage.setItem(JOURNAL, JSON.stringify(now.slice(log.length)));
+    } catch {}
   }
 
   // The next episode's audio, found before it is needed: when this one ends there may be no

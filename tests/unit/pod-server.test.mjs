@@ -327,3 +327,20 @@ test('the transcripts are searched for the key holder only', async () => {
   const none = await serve({ key: KEY });
   try { assert.equal((await none.call('GET', '/api/pod/search?q=box')).status, 404, 'a server without transcripts has no search'); } finally { await none.close(); }
 });
+
+test('what the player did out of sight goes to the log, for the key holder only', async () => {
+  const lines = [];
+  const s = await serve({ log: (l) => lines.push(l) });
+  try {
+    await s.call('POST', '/api/pod/claim', { key: KEY }, {});
+    const entries = [['07:01:02.003', 'away', 'asked to play', 'paused', 'ep1'], ['07:01:02.050', 'away', 'silence', 'on\nwith a break', 'ep1']];
+    assert.equal((await s.call('POST', '/api/pod/journal', { device: 'OS 18.1, home screen', entries }, {})).status, 401);
+    assert.equal(lines.filter((l) => l.startsWith('journal')).length, 0);
+    const res = await s.call('POST', '/api/pod/journal', { device: 'OS 18.1, home screen<script>', entries: [...entries, 'not a line'] });
+    assert.equal(res.status, 200);
+    const logged = lines.filter((l) => l.startsWith('journal'));
+    assert.equal(logged[0], 'journal: 3 from OS 18.1, home screenscript');
+    assert.equal(logged[1], 'journal:   07:01:02.003 away asked to play paused ep1');
+    assert.equal(logged[2], 'journal:   07:01:02.050 away silence on with a break ep1', 'one line each');
+  } finally { await s.close(); }
+});

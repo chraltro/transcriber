@@ -434,22 +434,40 @@ async function run(name, options) {
       // With the app in the background (the screen locked), a pause from the lock screen keeps the
       // sound on with a silent element (iOS otherwise switches it off after half a minute, and Play
       // then runs the clock with nothing heard); Play lets it go and the episode carries on.
+      // At no moment is nothing playing: the silence starts before the episode stops, and stops
+      // only after the episode is heard again (in such a moment iOS hands the sound to the app
+      // that played before, and the episode cannot take it back from the lock screen).
       await page.evaluate(() => Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }));
+      const silentNow = () => [...window.__media].filter((e) => e.id !== 'audio' && !e.paused && e.loop).length;
+      const silent = () => page.evaluate(silentNow);
+      const countAt = (type) => page.evaluate(([type, f]) => { window.__silentAt = null; const count = new Function(`return (${f})()`); document.querySelector('#audio').addEventListener(type, () => { window.__silentAt = count(); }, { once: true }); }, [type, silentNow.toString()]);
       await page.waitForTimeout(1100);
+      await countAt('pause');
       await press('pause');
       await page.waitForFunction(() => document.querySelector('#audio').paused, null, { timeout: 5000 });
+      const atPause = await page.evaluate(() => window.__silentAt);
       const at = (await audio()).t;
-      const silent = () => page.evaluate(() => [...window.__media].filter((e) => e.id !== 'audio' && !e.paused && e.loop).length);
       await page.waitForTimeout(300);
       const kept = await silent();
-      if (mobile) check(kept === 1, `paused from the lock screen with the app in the background, the sound is kept on by a silent element (${kept} playing)`);
+      if (mobile) check(kept === 1 && atPause === 1, `paused from the lock screen with the app in the background, a silent element keeps the sound on, already playing as the episode stops (${kept} playing, ${atPause} as it stopped)`);
       await page.waitForTimeout(900);
+      await countAt('playing');
       await press('play');
       await playing(Math.max(0.5, at - 1));
+      const atPlaying = await page.evaluate(() => window.__silentAt);
+      await page.waitForTimeout(1500);
       const again = await audio();
       const after = await silent();
-      check(!again.paused && again.t >= at - 1 && again.t < at + 6 && after === 0, `played again from there, the episode carries on where it was and the silent element lets go (${at.toFixed(1)} s to ${again.t.toFixed(1)} s, ${after} silent playing)`);
-      await page.evaluate(() => { delete document.visibilityState; });
+      check(!again.paused && again.t >= at - 1 && again.t < at + 8 && after === 0 && (!mobile || atPlaying === 1), `played again from there, the episode carries on where it was, and the silence lets go once it is heard (${at.toFixed(1)} s to ${again.t.toFixed(1)} s; silent ${atPlaying} as it started, ${after} after)`);
+
+      await page.evaluate(() => { delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange')); });
+      if (mobile) {
+        await page.waitForFunction(() => (JSON.parse(localStorage.getItem('pod-journal') || '[]')).every((l) => l[1] !== 'away'), null, { timeout: 5000 }).catch(() => {});
+        const left = await page.evaluate(() => JSON.parse(localStorage.getItem('pod-journal') || '[]').filter((l) => l[1] === 'away').length);
+        await page.waitForTimeout(300);
+        const logged = world.logs.join('');
+        check(left === 0 && /journal: .*asked to pause/.test(logged.replace(/\n/g, ' ')) && /journal: .*silence on/.test(logged.replace(/\n/g, ' ')), `in sight again, what happened out of sight is sent to the server's log (${left} left on the device${logged ? '' : ', no server log to read'})`);
+      }
     }
     await page.click('#pb-play');
 
