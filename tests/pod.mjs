@@ -52,7 +52,7 @@ async function device(browser, world, name, options) {
     window.__calls = [];
     const who = (el) => (el.id === 'audio' ? 'episode' : el.loop ? 'silence' : 'other');
     const play = HTMLMediaElement.prototype.play;
-    HTMLMediaElement.prototype.play = function () { window.__media.add(this); window.__calls.push(`${who(this)} play`); return play.call(this); };
+    HTMLMediaElement.prototype.play = function () { window.__media.add(this); window.__calls.push(`${who(this)} play${this.paused ? ' (starts)' : ''}`); return play.call(this); };
     const pause = HTMLMediaElement.prototype.pause;
     HTMLMediaElement.prototype.pause = function () { window.__calls.push(`${who(this)} pause`); return pause.call(this); };
     const ms = navigator.mediaSession;
@@ -412,7 +412,9 @@ async function run(name, options) {
       // the episode is what a person touched last and what the lock screen shows.
       await page.waitForTimeout(500);
       const firstCalls = await page.evaluate(() => window.__calls.filter((c) => /^(episode|silence) /.test(c)));
-      check(firstCalls.indexOf('silence play') >= 0 && firstCalls.indexOf('silence play') < firstCalls.indexOf('episode play') && firstCalls.at(-1) === 'episode play', `the first play after a start readies the silence before the episode, and once the silence is paused again the episode is touched last (${firstCalls.join(', ')})`);
+      const silenceAt = firstCalls.findIndex((c) => c.startsWith('silence play'));
+      const episodeAt = firstCalls.findIndex((c) => c.startsWith('episode play'));
+      check(silenceAt >= 0 && silenceAt < episodeAt && !firstCalls.includes('silence pause') && firstCalls.at(-1).startsWith('episode'), `the first play after a start starts the silence, then the episode, and leaves the silence on (${firstCalls.join(', ')})`);
     }
     a = await audio();
     check(a.t >= 119 && a.t < 126, `it picks up where it stopped (${a.t.toFixed(1)} s)`);
@@ -445,47 +447,48 @@ async function run(name, options) {
       await press('play');
       await playing(1);
       check(true, 'and "pause" and "play" do as they say when the state is right');
-      // With the app in the background (the screen locked), a pause from the lock screen keeps the
-      // sound on with a silent element (iOS otherwise switches it off after half a minute, and Play
-      // then runs the clock with nothing heard); Play lets it go and the episode carries on.
-      // At no moment is nothing playing: the silence starts before the episode stops, and stops
-      // only after the episode is heard again (in such a moment iOS hands the sound to the app
-      // that played before, and the episode cannot take it back from the lock screen).
+      // With the app in the background (the screen locked), a silent element keeps the sound on
+      // while the episode is paused (iOS otherwise puts the page to sleep, and Play then runs the
+      // clock with nothing heard). It is started once, before the episode, and left alone, as
+      // WebKit reads the lock screen from the audio elements (see startSilence in ui/player.js):
+      // its play/pause "toggle" by the element started last, its clock by the page's state, which
+      // any element starting or stopping sets, and what it shows by the element touched last.
+      // So inside each press: the silence not touched, the episode started and touched last,
+      // the page's state the episode's.
       await page.evaluate(() => Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }));
-      const silentNow = () => [...window.__media].filter((e) => e.id !== 'audio' && !e.paused && e.loop).length;
-      const silent = () => page.evaluate(silentNow);
-      const countAt = (type) => page.evaluate(([type, f]) => { window.__silentAt = null; const count = new Function(`return (${f})()`); document.querySelector('#audio').addEventListener(type, () => { window.__silentAt = count(); }, { once: true }); }, [type, silentNow.toString()]);
+      const silent = () => page.evaluate(() => [...window.__media].filter((e) => e.id !== 'audio' && !e.paused && e.loop).length);
+      const lockScreen = (calls) => {
+        const ours = calls.filter((c) => /^(episode|silence) /.test(c));
+        return { silenceTouched: ours.some((c) => c.startsWith('silence')), lastTouched: ours.at(-1)?.split(' ')[0] || 'none', calls: ours.join(', ') || 'none' };
+      };
+      // (Since the first play, the episode has been the last to start: the silence started before it.)
+      const before = await page.evaluate(() => window.__calls.filter((c) => c.endsWith('(starts)') && /^(episode|silence) /.test(c)).at(-1));
       await page.waitForTimeout(1100);
-      await countAt('pause');
-      // (What is done inside the press itself: WebKit counts a touch only there, not after it.)
-      const pauseCalls = await page.evaluate(() => { window.__calls.length = 0; window.__ms.pause({ action: 'pause' }); return window.__calls.slice(); });
+      const pressed = (action) => page.evaluate((a) => { window.__calls.length = 0; window.__ms[a]({ action: a }); const said = navigator.mediaSession.playbackState; return { calls: window.__calls.slice(), said }; }, action);
+      const p1 = await pressed('pause');
       await page.waitForFunction(() => document.querySelector('#audio').paused, null, { timeout: 5000 });
-      const atPause = await page.evaluate(() => window.__silentAt);
       const at = (await audio()).t;
       await page.waitForTimeout(300);
       const kept = await silent();
+      const said1 = await page.evaluate(() => navigator.mediaSession.playbackState);
       if (mobile) {
-        check(kept === 1 && atPause === 1, `paused from the lock screen with the app in the background, a silent element keeps the sound on, already playing as the episode stops (${kept} playing, ${atPause} as it stopped)`);
-        // (Touched last, the episode stays on the lock screen; the silence, touched last, took its place.)
-        const lastTouch = pauseCalls.filter((c) => /^(episode|silence) /.test(c)).at(-1);
-        check(lastTouch === 'episode pause' && pauseCalls.includes('silence play'), `and inside that press the episode is touched last, so it stays on the lock screen (${pauseCalls.join(', ')})`);
+        const l = lockScreen(p1.calls);
+        check(kept === 1, `paused from the lock screen with the app in the background, the silence goes on and keeps the sound on (${kept} playing)`);
+        check(!l.silenceTouched && l.lastTouched === 'episode' && before?.startsWith('episode') && said1 === 'paused', `and the lock screen reads the episode: started last (${before}), touched last, the silence untouched (${l.calls}), the page paused (${said1})`);
       }
       await page.waitForTimeout(900);
-      await countAt('playing');
-      const playCalls = await page.evaluate(() => { window.__calls.length = 0; window.__ms.play({ action: 'play' }); return window.__calls.slice(); });
+      const p2 = await pressed('play');
       await playing(Math.max(0.5, at - 1));
-      const atPlaying = await page.evaluate(() => window.__silentAt);
       await page.waitForTimeout(1500);
-      const afterHandover = await page.evaluate(() => window.__calls.filter((c) => /^(episode|silence) /.test(c)));
       const again = await audio();
       const after = await silent();
+      const said2 = await page.evaluate(() => navigator.mediaSession.playbackState);
+      const startedLast = await page.evaluate(() => window.__calls.filter((c) => c.endsWith('(starts)') && /^(episode|silence) /.test(c)).at(-1));
       if (mobile) {
-        check(playCalls.filter((c) => /^(episode|silence) /.test(c)).at(-1) === 'episode play', `and inside the press that plays it, the episode is touched last (${playCalls.join(', ')})`);
-        // (A press counts for five seconds in WebKit: the silence let go of a second later is
-        // touched too, and the episode has to be touched after it.)
-        check(afterHandover.includes('silence pause') && afterHandover.at(-1) === 'episode play', `and when the silence lets go a moment later, the episode is touched after it (${afterHandover.slice(-4).join(', ')})`);
+        const l = lockScreen(p2.calls);
+        check(!l.silenceTouched && l.lastTouched === 'episode' && startedLast?.startsWith('episode') && said2 === 'playing' && after === 1, `played again from the lock screen, the episode is started and touched last, the silence untouched and still on (${l.calls}; ${after} silent), the page playing (${said2})`);
       }
-      check(!again.paused && again.t >= at - 1 && again.t < at + 8 && after === 0 && (!mobile || atPlaying === 1), `played again from there, the episode carries on where it was, and the silence lets go once it is heard (${at.toFixed(1)} s to ${again.t.toFixed(1)} s; silent ${atPlaying} as it started, ${after} after)`);
+      check(!again.paused && again.t >= at - 1 && again.t < at + 8, `played again from there, the episode carries on where it was (${at.toFixed(1)} s to ${again.t.toFixed(1)} s)`);
 
       await page.evaluate(() => { delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange')); });
       if (mobile) {
@@ -493,7 +496,7 @@ async function run(name, options) {
         const left = await page.evaluate(() => JSON.parse(localStorage.getItem('pod-journal') || '[]').filter((l) => l[1] === 'away').length);
         await page.waitForTimeout(300);
         const logged = world.logs.join('');
-        check(left === 0 && /journal: .*asked to pause/.test(logged.replace(/\n/g, ' ')) && /journal: .*silence on/.test(logged.replace(/\n/g, ' ')), `in sight again, what happened out of sight is sent to the server's log (${left} left on the device${logged ? '' : ', no server log to read'})`);
+        check(left === 0 && /journal: .*asked to pause/.test(logged.replace(/\n/g, ' ')) && /journal: .*asked to play/.test(logged.replace(/\n/g, ' ')), `in sight again, what happened out of sight is sent to the server's log (${left} left on the device${logged ? '' : ', no server log to read'})`);
       }
     }
     await page.click('#pb-play');

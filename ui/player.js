@@ -87,9 +87,9 @@ export class Player extends EventTarget {
     on('canplaythrough', () => { if (this.wanted != null) this.arrive(true); });
     on('durationchange', () => this.emit('time'));
     on('timeupdate', () => this.tick());
-    on('playing', () => { this.note('playing'); this.unlocked = true; this.busy = false; this.pausedAt = 0; this.changedAt = performance.now(); this.state(); this.fine(); this.handlers(); this.handOver(); });
+    on('playing', () => { this.note('playing'); clearTimeout(this.silenceTimer); this.unlocked = true; this.busy = false; this.pausedAt = 0; this.changedAt = performance.now(); this.state(); this.fine(); this.handlers(); });
     on('play', () => { this.note('play'); this.changedAt = performance.now(); this.state(); });
-    on('pause', () => { this.note('pause', this.wantPlay ? 'not asked for' : ''); if (this.source) { this.pausedAt = Date.now(); this.save(); } this.changedAt = performance.now(); this.state(); this.fine(); });
+    on('pause', () => { this.note('pause', this.wantPlay ? 'not asked for' : ''); this.silenceLater(); if (this.source) { this.pausedAt = Date.now(); this.save(); } this.changedAt = performance.now(); this.state(); this.fine(); });
     on('waiting', () => { this.note('waiting'); this.busy = true; this.emit('state'); });
     for (const type of ['stalled', 'emptied', 'abort']) on(type, () => this.note(type));
     on('seeked', () => {
@@ -119,9 +119,7 @@ export class Player extends EventTarget {
       this.note(document.visibilityState === 'hidden' ? 'out of sight' : 'in sight');
       if (document.visibilityState === 'hidden') {
         leave();
-        // Paused (not long ago) as the app goes into the background: the sound is kept on.
-        if (this.source && this.audio.paused && this.pausedAt && Date.now() - this.pausedAt < 15 * 60e3) this.keepSoundOn();
-      } else { this.letSoundGo(); this.sendJournal(); }
+      } else this.sendJournal();
       try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
     });
     store.addEventListener('change', (e) => {
@@ -290,12 +288,9 @@ export class Player extends EventTarget {
     this.wantPlay = true;
     this.busy = true;
     this.changedAt = performance.now();
-    // (With the silence on, it stays on until the episode is heard: see handOver.)
-    if (!this.silenting) this.letSoundGo();
-    // The silence made ready before the episode is played, not after: of two audio elements, the
-    // lock screen shows the one a person touched last (WebKit counts a play or a pause made inside
-    // a tap or a lock-screen press), and that has to be the episode. Both inside the press.
-    this.readySound();
+    // The silence first, then the episode, both inside the press (see startSilence): of two audio
+    // elements, the lock screen reads the one started and touched last, which has to be the episode.
+    this.startSilence();
     const p = this.audio.play();
     this.note('play()', `at ${this.audio.currentTime.toFixed(1)} s, ready ${this.audio.readyState}, network ${this.audio.networkState}`);
     this.state(); // (iOS hears of it now, not when the audio has arrived)
@@ -366,7 +361,7 @@ export class Player extends EventTarget {
 
   // Takes the episode out of the player.
   stop() {
-    this.letSoundGo();
+    this.stopSilence('the episode taken out');
     this.save();
     this.seq++;
     this.audio.pause();
@@ -816,97 +811,66 @@ export class Player extends EventTarget {
     this.note(`asked to ${want}`, `${going ? 'playing' : 'paused'}${fresh ? ', just changed' : ''}`);
     if (want === 'play') {
       if (!going) return this.resume();
-      if (!fresh) return this.pauseQuietly();
+      if (!fresh) return this.pause();
     } else {
-      if (going) return this.pauseQuietly();
+      if (going) return this.pause();
       if (!fresh) return this.resume();
     }
     this.position(); // (and iOS is told how it really is)
   }
 
-  /* ---------- the sound kept on, while paused in the background (iOS) ----------
-   * iOS lets a home-screen app make sound in the background only while it is making sound.
-   * Paused there for about half a minute, the app's audio is switched off, and Play on the lock
-   * screen or the AirPods then runs the clock with nothing heard, until the app is opened. So
-   * while an episode is paused with the app in the background, a second audio element plays
-   * silence, which keeps the sound on; it lets go when the episode plays, when the app is opened,
-   * and after a quarter of an hour (a phone left paused overnight is not kept awake). */
+  /* ---------- the sound kept on (iOS) ----------
+   * iOS lets a home-screen app run in the background only while it is making sound: paused there,
+   * the page is put to sleep, and Play on the lock screen then runs the clock with nothing heard.
+   * So a second audio element plays silence, on a loop, from the first play on, and goes on while
+   * the episode is paused (for an hour at most).
+   *
+   * It is started only inside a press that plays the episode, just before the episode, and then
+   * left alone: never paused or played at the moments the lock screen reads. In WebKit as on an
+   * iPhone (the safari-7622 branch):
+   * - the lock screen's and the AirPods' play/pause is one "toggle", turned into play or pause by
+   *   the element that started playing last (PlatformMediaSessionManager::currentSession, and
+   *   MediaElementSession::didReceiveRemoteControlCommand);
+   * - an element starting or stopping sets the page's one media session to playing or paused,
+   *   which runs or stops the lock screen's clock (MediaSession::willBeginPlayback);
+   * - the lock screen shows the element a person touched last, and for five seconds after a
+   *   press every play() and pause() counts as a touch (HTMLMediaElement::selectBestMediaSession,
+   *   Document::processingUserGestureForMedia).
+   * Started just before the episode in the same press and not touched again, the silence is
+   * none of these: the episode started last, was touched last, and sets the session's state.
+   * (When the silence was started at the pause and stopped at the play, all three went to it:
+   * the lock screen's button did the opposite and its clock ran while paused.) */
 
-  // The silent element, made and played once inside a tap, so that later it may play without one
-  // (iOS lets an element play by itself only after it has played at a person's asking).
-  readySound() {
-    if (!IS_IOS || this.silent) return;
-    const k = new Audio();
-    k.loop = true;
-    k.preload = 'auto';
-    k.setAttribute('playsinline', '');
-    // (Two seconds: under 0.95 s WebKit does not count it as something to show on the lock screen,
-    // and then, playing while the episode is paused, it takes the episode off the lock screen.)
-    k.src = this.longHush ||= silence(2); // (its own: the start trick's tenth of a second is too short)
-    this.silent = k;
-    // (Refused, outside a tap: made ready at the next one.)
-    k.play().then(() => { if (!this.silenting) { k.pause(); this.touchEpisode(); } }, () => { if (this.silent === k) this.silent = null; });
+  // In begin(), before the episode's play(). (Refused outside a press: tried at the next one.)
+  startSilence() {
+    if (!IS_IOS) return;
+    clearTimeout(this.silenceTimer);
+    if (this.silent && !this.silent.paused) return; // (on already: not touched)
+    if (!this.silent) {
+      const k = new Audio();
+      k.loop = true;
+      k.preload = 'auto';
+      k.setAttribute('playsinline', '');
+      // (Two seconds, not the start trick's tenth: WebKit's lock screen leaves out audio under
+      // 0.95 s, and one playing that it leaves out takes the paused episode off it.)
+      k.src = this.longHush ||= silence(2);
+      k.addEventListener('pause', () => this.note('silence', 'stopped'));
+      this.silent = k;
+    }
+    this.silent.play().then(() => this.note('silence', 'on'), (err) => this.note('silence', `refused (${err.name})`));
   }
 
-  // The lock screen shows the audio a person touched last, and for five seconds after a tap or a
-  // lock-screen press WebKit counts every play() and pause() on the page as theirs (its "transient
-  // activation"). So whenever the silence is played or paused, the episode is touched straight
-  // after, as it is: play() on one that plays, pause() on one that is paused. Nothing changes, but
-  // the episode is the last one touched, and stays on the lock screen. (Once, the silence's own
-  // pause a second after the episode started put the silence there: paused, at 0:00, so every
-  // press of the lock screen's button arrived as its opposite.)
-  touchEpisode() {
-    const a = this.audio;
-    if (!this.source || !a.src) return;
-    if (a.paused) a.pause(); else a.play().catch(() => {});
+  // The episode paused: the silence goes on, for an hour, and then stops too (a phone left
+  // paused is not kept awake all night). The episode playing again keeps it on.
+  silenceLater() {
+    if (!this.silent || this.silent.paused) return;
+    clearTimeout(this.silenceTimer);
+    this.silenceTimer = setTimeout(() => this.stopSilence('an hour paused'), 60 * 60e3);
   }
 
-  // Whether the sound is to be kept on here: iOS, an episode in the player, the app out of sight.
-  get keepsSound() {
-    return IS_IOS && !!this.item && typeof document !== 'undefined' && document.visibilityState === 'hidden';
-  }
-
-  // -> a promise that settles once the silence is playing (or could not be).
-  keepSoundOn() {
-    if (!this.keepsSound) return Promise.resolve(false);
-    this.readySound();
-    if (!this.silent) { this.note('silence', 'not ready'); return Promise.resolve(false); }
-    this.silenting = true;
-    clearTimeout(this.silentTimer);
-    clearTimeout(this.handing);
-    this.silentTimer = setTimeout(() => { this.note('silence', 'a quarter of an hour paused: let go'); this.letSoundGo(); }, 15 * 60e3);
-    const started = this.silent.play();
-    this.touchEpisode();
-    return started.then(() => { this.note('silence', 'on'); return true; }, (err) => { this.note('silence', `refused (${err.name})`); return false; });
-  }
-
-  letSoundGo() {
-    clearTimeout(this.handing);
-    if (this.silenting) this.note('silence', 'off');
-    this.silenting = false;
-    clearTimeout(this.silentTimer);
-    if (this.silent && !this.silent.paused) { this.silent.pause(); this.touchEpisode(); }
-  }
-
-  // Paused with the app out of sight: the silence is started, then the episode paused, at once
-  // and in that order. The silence keeps the app's sound and the page running while it is paused
-  // (iOS otherwise lets the page sleep, and Play on the lock screen then runs the clock with
-  // nothing heard). The order keeps the episode on the lock screen: WebKit shows the audio a person
-  // touched last, and a pause from a lock-screen press counts as a touch.
-  pauseQuietly() {
-    if (this.keepsSound) this.keepSoundOn();
-    this.pause();
-  }
-
-  // The episode is heard again: the silence goes once it has played for a moment (not at once:
-  // a start can stall, and the silence is what keeps the sound the app's meanwhile).
-  handOver() {
-    if (!this.silenting) return;
-    clearTimeout(this.handing);
-    this.handing = setTimeout(() => {
-      if (!this.audio.paused && this.audio.readyState >= 3) this.letSoundGo();
-      else if (this.wantPlay) this.handOver(); // (still starting; paused again, the silence stays)
-    }, 800);
+  stopSilence(why) {
+    clearTimeout(this.silenceTimer);
+    if (this.silent && !this.silent.paused) { this.note('silence', `let go (${why})`); this.silent.pause(); }
   }
 
   /* ---------- what the player did with the app out of sight ----------
