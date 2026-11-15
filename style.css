@@ -123,6 +123,31 @@
   }
 }
 
+/* ---------- springs: how screens and sheets move (DESIGN.md, principle 3) ----------
+   Two spring curves, written once. Settled for the big moves, a sheet or a pushed screen (it
+   comes to rest without a wobble to see: 0.15% past, damping 0.9); livelier for the small ones
+   (1.5% past and back, damping 0.8). Where linear() is not understood, --ease stands in. A
+   sheet or a screen comes in in --t-sheet and goes back a little faster; tabs cross-fade. */
+:root {
+  --spring: var(--ease);
+  --spring-small: var(--ease);
+  --t-sheet: 420ms;
+  --t-sheet-out: 360ms;
+  --t-fade: 150ms;
+  /* the bars along the top and bottom: the page shows through them, blurred (iOS's glass) */
+  --glass: rgba(13, 36, 44, 0.8);
+  --glass-blur: saturate(180%) blur(20px);
+}
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --spring: linear(0, 0.0339, 0.1146, 0.2184, 0.3295, 0.4381, 0.5384, 0.6275, 0.7043, 0.7688, 0.8221, 0.8651, 0.8994, 0.9263, 0.947, 0.9628, 0.9746, 0.9833, 0.9895, 0.9939, 0.9969, 0.999, 1.0002, 1.001, 1.0014, 1.0015, 1.0015, 1.0014, 1.0013, 1.0011, 1);
+    --spring-small: linear(0, 0.0625, 0.2019, 0.3665, 0.5259, 0.6646, 0.7765, 0.8615, 0.9225, 0.9638, 0.9899, 1.005, 1.0124, 1.015, 1.0147, 1.0129, 1.0104, 1.008, 1.0057, 1.0039, 1.0025, 1.0014, 1.0007, 1.0003, 1, 0.9998, 0.9998, 0.9998, 1);
+  }
+}
+@media (prefers-color-scheme: light) {
+  :root { --glass: rgba(219, 228, 231, 0.8); }
+}
+
 /* ---------- base ---------- */
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -190,7 +215,9 @@ h2 { font-size: 1.35rem; line-height: 1.2; }
   height: var(--topbar);
   display: grid; grid-template-columns: var(--rail-w) 1fr auto; align-items: center;
   padding-right: max(20px, env(safe-area-inset-right));
-  background: var(--rail);
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
   border-bottom: 1px solid var(--line);
 }
 
@@ -221,9 +248,16 @@ h2 { font-size: 1.35rem; line-height: 1.2; }
 #top-date:empty::before, #top-status:empty::before { content: "\a0"; }
 body.busy #top-status { color: var(--accent); }
 
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .topbar, .playbar, .tabbar { background: var(--rail); }
+}
+
 /* ---------- shell: spine + main ---------- */
 
 .shell { display: grid; grid-template-columns: var(--rail-w) minmax(0, 1fr); min-height: calc(100vh - var(--topbar)); }
+/* The page reaches up under the top bar, so what shows through the bar is the page, also while
+   it gives way behind a sheet (and the black behind it shows only around it). */
+.shell { margin-top: calc(-1 * var(--topbar)); padding-top: var(--topbar); min-height: 100vh; background: var(--bg); }
 
 .spine {
   position: sticky; top: var(--topbar); align-self: start;
@@ -1453,11 +1487,37 @@ body.has-player { --bar: 72px; }
   box-shadow: inset 2px 0 0 var(--teal);
 }
 
-/* A show's cover, tapped, travels to its place on the show's page (ui/pod.js travel, where the
-   browser has view transitions). The rest of the page changes at once, as screens do. */
-::view-transition-group(cover) { animation-duration: var(--t-move); animation-timing-function: var(--ease); }
-::view-transition-old(root), ::view-transition-old(cover) { display: none; }
-::view-transition-new(root), ::view-transition-new(cover) { animation: none; mix-blend-mode: normal; }
+/* ---------- moving between screens (ui/pod.js screenChange) ----------
+   As an iPhone's navigation: going deeper pushes the new screen in from the right over the old,
+   which moves a third of the way left and dims; going back pops it the other way, a little
+   faster. Between the sections along the bottom, a quick cross-fade. The bars along the top and
+   bottom stay where they are (their words cross-fade), and a show's cover travels from its tile
+   to its place on the show's page and back. (View transitions; where there are none, or motion
+   is turned down, the screen changes at once.) */
+.topbar { view-transition-name: topbar; }
+.tabbar { view-transition-name: tabbar; }
+.playbar { view-transition-name: playbar; }
+.toast { view-transition-name: toast; }
+@media (min-width: 961px) { .spine { view-transition-name: spine; } }
+html.vt-push::view-transition, html.vt-pop::view-transition { background: #000; }
+html.vt-push::view-transition-group(*), html.vt-push::view-transition-old(*), html.vt-push::view-transition-new(*) { animation-duration: var(--t-sheet); animation-timing-function: var(--spring); }
+html.vt-pop::view-transition-group(*), html.vt-pop::view-transition-old(*), html.vt-pop::view-transition-new(*) { animation-duration: var(--t-sheet-out); animation-timing-function: var(--spring); }
+html.vt-tab::view-transition-group(*), html.vt-tab::view-transition-old(*), html.vt-tab::view-transition-new(*) { animation-duration: var(--t-fade); animation-timing-function: linear; }
+html.vt-push::view-transition-old(root) { animation: vt-under var(--t-sheet) var(--spring) both; mix-blend-mode: normal; }
+html.vt-push::view-transition-new(root) { animation: vt-over var(--t-sheet) var(--spring) both; mix-blend-mode: normal; box-shadow: -10px 0 30px rgba(0, 0, 0, 0.22); }
+html.vt-pop::view-transition-old(root) { animation: vt-off var(--t-sheet-out) var(--spring) both; mix-blend-mode: normal; z-index: 1; box-shadow: -10px 0 30px rgba(0, 0, 0, 0.22); }
+html.vt-pop::view-transition-new(root) { animation: vt-up var(--t-sheet-out) var(--spring) both; mix-blend-mode: normal; }
+@keyframes vt-under { to { transform: translateX(-30%); opacity: 0.86; } }
+@keyframes vt-over { from { transform: translateX(100%); } }
+@keyframes vt-off { to { transform: translateX(100%); } }
+@keyframes vt-up { from { transform: translateX(-30%); opacity: 0.86; } }
+/* the cover: the picture that arrives (the push) or the one that leaves (the pop), moving and
+   growing between the two places; never two at once */
+html.vt-push::view-transition-old(cover), html.vt-pop::view-transition-new(cover) { display: none; }
+html.vt-push::view-transition-new(cover), html.vt-pop::view-transition-old(cover) { animation: none; mix-blend-mode: normal; }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+}
 
 .link-form { display: grid; gap: 16px; padding: 20px 22px; box-shadow: inset 3px 0 0 var(--accent); }
 .link-form .hint { margin-top: 8px; }
@@ -1536,7 +1596,15 @@ body.has-player { --bar: 72px; }
 
 /* ---------- the sheet: an episode, or the player opened up ---------- */
 
-.sheet-back { position: fixed; inset: 0; z-index: 70; background: color-mix(in srgb, var(--bg) 70%, transparent); animation: shade-in var(--t-move) var(--ease); }
+/* In from the edge it lives at (the right; the bottom on a phone) on the settled spring, and back
+   to it a little faster; a finger moves it, and ui/dom.js times the rest of the way from the
+   finger's speed. Under it a shade, faded with it. */
+.sheet-back {
+  position: fixed; inset: 0; z-index: 70; touch-action: none;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  opacity: 0; transition: opacity var(--t-sheet-out) var(--spring);
+}
+.sheet-back.open { opacity: 1; transition-duration: var(--t-sheet); }
 .sheet-pane {
   position: fixed; z-index: 71; top: 0; right: 0; bottom: 0; width: min(470px, 100%);
   overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
@@ -1544,20 +1612,22 @@ body.has-player { --bar: 72px; }
   background: var(--panel); border-left: 1px solid var(--line-strong);
   box-shadow: var(--shadow-pop);
   outline: none;
-  /* In from the edge it lives at (the right; the bottom on a phone) and back to it, one motion
-     two ways (ui/dom.js). Let go short of closing, it slides back up. */
-  animation: sheet-in var(--t-move) var(--ease);
-  transition: transform var(--t-pop) var(--ease);
+  transform: translateX(100%);
+  transition: transform var(--t-sheet-out) var(--spring);
 }
-.sheet-pane.closing { animation: sheet-out var(--t-pop) var(--ease) forwards; pointer-events: none; }
-.sheet-back.closing { animation: shade-out var(--t-pop) var(--ease) forwards; pointer-events: none; }
-@keyframes sheet-in { from { transform: translateX(100%); } }
-@keyframes sheet-out { to { transform: translateX(100%); } }
-@keyframes sheet-up { from { transform: translateY(100%); } }
-@keyframes sheet-down { to { transform: translateY(100%); } }
-@keyframes shade-in { from { opacity: 0; } }
-@keyframes shade-out { to { opacity: 0; } }
+.sheet-pane.open { transform: none; transition-duration: var(--t-sheet); }
+.sheet-pane.closing, .sheet-back.closing { pointer-events: none; }
 body.sheet-open { overflow: hidden; }
+
+/* On a phone, the page behind a sheet gives way as an iPhone's does behind a card: smaller (each
+   piece scaled about the middle of the top of the screen, ui/dom.js giveWay), its top corners
+   rounded, dimmed by the shade, with black around it. Transform only, so it runs on the
+   compositor; it goes back as the sheet goes down. */
+.topbar, .shell, .footer, .playbar, .tabbar { transition: transform var(--t-sheet-out) var(--spring); }
+body.receding :is(.topbar, .shell, .footer, .playbar, .tabbar) { will-change: transform; }
+body.receded :is(.topbar, .shell, .footer, .playbar, .tabbar) { transform: translateY(6px) scale(0.94); transition-duration: var(--t-sheet); }
+body.receded .topbar { border-radius: 10px 10px 0 0; }
+body.receding::after { content: ""; position: fixed; inset: 0; z-index: -1; background: #000; pointer-events: none; }
 .sheet-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .sheet-top .kicker { margin: 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sheet-top .icon-btn { margin: -6px -8px -6px 0; }
@@ -1707,8 +1777,11 @@ a.sheet-show:hover { color: var(--text); }
   position: fixed; z-index: 44; left: var(--rail-w); right: 0; bottom: 0; height: 72px;
   display: grid; grid-template-columns: minmax(170px, 1.1fr) auto minmax(200px, 2fr) auto; gap: 18px; align-items: center;
   padding: 0 max(18px, env(safe-area-inset-right)) 0 10px;
-  background: var(--rail); border-top: 1px solid var(--line-strong);
-  animation: bar-in var(--t-move) var(--ease) both;
+  background: var(--glass); border-top: 1px solid var(--line-strong);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  /* (backwards, not both: once in, the bar's transform is free for the page giving way) */
+  animation: bar-in var(--t-sheet) var(--spring) backwards;
 }
 @keyframes bar-in { from { transform: translateY(100%); } }
 .pb-line { display: none; }
@@ -1743,7 +1816,9 @@ a.sheet-show:hover { color: var(--text); }
     position: fixed; z-index: 45; left: 0; right: 0; bottom: 0; height: var(--tabs);
     display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
     padding-bottom: env(safe-area-inset-bottom);
-    background: var(--rail); border-top: 1px solid var(--line-strong);
+    background: var(--glass); border-top: 1px solid var(--line-strong);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
   }
   .tabbar a {
     position: relative; display: grid; justify-items: center; align-content: center; gap: 4px;
@@ -1818,8 +1893,15 @@ a.sheet-show:hover { color: var(--text); }
   .notify-body { padding: 0 16px 18px; }
   .link-box { grid-template-columns: minmax(0, 1fr); padding: 4px 16px 18px; }
   .link-form { padding: 16px; }
-  .sheet-pane { left: 0; width: 100%; border-left: 0; padding: calc(12px + env(safe-area-inset-top)) 18px calc(26px + env(safe-area-inset-bottom)); animation-name: sheet-up; }
-  .sheet-pane.closing { animation-name: sheet-down; }
+  /* a card from the bottom, under the status bar and the page's top edge; the panel goes on
+     under the screen's bottom edge, for when it is pulled up past the top and springs back */
+  .sheet-pane {
+    top: calc(env(safe-area-inset-top) + 18px); left: 0; width: 100%; border-left: 0; border-radius: 10px 10px 0 0;
+    padding: 10px 18px calc(26px + env(safe-area-inset-bottom));
+    transform: translateY(100%);
+    box-shadow: 0 -10px 30px -14px rgba(0, 0, 0, 0.45), 0 140px 0 var(--panel);
+  }
+  .sheet-back { background: rgba(0, 0, 0, 0.32); }
   /* (As large as the screen's height leaves room for: on a short one the cover gives way, so
      the play button under the strip is never pushed off the bottom.) */
   .np-art { --size: 280px; width: min(300px, 72vw, max(120px, calc(100vh - 430px))); width: min(300px, 72vw, max(120px, calc(100svh - 430px))); margin: 0; }
@@ -1942,7 +2024,8 @@ a.sheet-show:active { color: var(--text); }
    it gets the dark rail behind it in either theme. */
 @media (display-mode: standalone) {
   body { padding-top: env(safe-area-inset-top); }
-  body::before { content: ""; position: fixed; z-index: 80; top: 0; left: 0; right: 0; height: env(safe-area-inset-top); background: #0d242c; }
+  body::before { content: ""; position: fixed; z-index: 80; top: 0; left: 0; right: 0; height: env(safe-area-inset-top); background: #0d242c; transition: background-color var(--t-sheet-out); }
+  body.receded::before { background: #000; transition-duration: var(--t-sheet); }
   .topbar { top: env(safe-area-inset-top); }
   .toolbar { top: calc(var(--topbar) + max(10px, var(--tx-band)) + env(safe-area-inset-top)); }
   .tx-tabs { top: calc(var(--topbar) + env(safe-area-inset-top) + 8px); }

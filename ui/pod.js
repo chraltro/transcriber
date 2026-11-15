@@ -1,6 +1,6 @@
 // The podcast screens: what is new from the shows you follow, a show's page, the queue, finding
 // a show, settings. What they show comes from ui/podstore.js; playing is ui/player.js.
-import { h, icon, setIcon, whenText, fmtBytes, openSheet, closeSheet, sheetOpen, openMenu, notesNode } from './dom.js';
+import { h, icon, setIcon, whenText, fmtBytes, openSheet, closeSheet, sheetOpen, sheetGone, sheetLeaving, motionOff, browserAnimated, openMenu, notesNode } from './dom.js';
 import { fmtTime, normTitle } from '../lib/text.js';
 import { statusOf, fractionOf } from '../lib/podstate.js';
 import { leftText, lengthText, timeIn, fmtSpeed } from '../lib/playback.js';
@@ -16,6 +16,18 @@ const PAGE = 60;
 // kept on this device; notifications on this device.
 const SETTINGS_TABS = [['playback', 'Playback'], ['library', 'Library'], ['storage', 'Storage'], ['notifications', 'Notifications']];
 const IS_IOS = typeof navigator !== 'undefined' && (/iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+// How deep each screen is: the sections along the bottom at the top, then Find a show and
+// Search, then a show's page. Deeper is a push, shallower a pop, between sections a cross-fade.
+const DEPTH = { home: 0, queue: 0, settings: 0, transcribe: 0, add: 1, search: 1, show: 2 };
+// Which section along the bottom a screen is under.
+const SECTION = { home: 'listen', show: 'listen', add: 'listen', search: 'listen', queue: 'queue', settings: 'settings', transcribe: 'transcribe' };
+// Where an address goes: { view, arg }, or null for a link to the library (#link=...).
+function where(hash) {
+  if (/^#link=/.test(hash)) return null;
+  const [, name = '', arg = ''] = (hash || '#/').match(/^#\/([\w-]*)\/?([\w-]*)/) || [];
+  const view = name === 'transcribe' ? 'transcribe' : name === 'show' && arg ? 'show' : ['queue', 'add', 'settings', 'search'].includes(name) ? name : 'home';
+  return { view, arg };
+}
 const pref = {
   get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
@@ -51,7 +63,30 @@ export class Pod {
     downloads.addEventListener('change', () => { this.paintRows(); if (this.view === 'queue') this.queue(); if (this.view === 'settings' && this.settingsTab() === 'storage') this.settings(); });
     downloads.addEventListener('progress', (e) => this.paintRows(e.detail));
     this.autosave.addEventListener('change', () => { if (this.view === 'settings' && this.settingsTab() === 'storage') this.settings(); });
-    window.addEventListener('hashchange', () => this.route());
+    // Getting around: each entry in the history numbered (a step back is told from a step on by
+    // it), where each screen was scrolled to kept for coming back to it, and whether the browser
+    // drew a step back itself.
+    this.idx = history.state?.idx || 0;
+    this.scrolls = new Map();
+    this.hashes = new Map(); // the address of each entry, by its number
+    this.moving = 0;
+    try { history.scrollRestoration = 'manual'; } catch {}
+    window.addEventListener('hashchange', () => this.moved());
+    // (A step back this page took itself, its back link, is not one the browser drew.)
+    window.addEventListener('popstate', (e) => { this.drawnBack = browserAnimated(e) && performance.now() - (this.ownPop || 0) > 1000 ? performance.now() : 0; this.ownPop = 0; });
+    window.addEventListener('scroll', () => { if (history.state?.idx === this.idx) this.scrolls.set(this.idx, window.scrollY); }, { passive: true });
+    // A section tapped along the bottom (or the side), as against a way deeper or back.
+    document.addEventListener('click', (e) => { if (e.target.closest?.('[data-nav], .brand, #pb-queue')) this.sectionAt = performance.now(); }, true);
+    // A back link to the screen just before is the step back in history, as the phone's back
+    // gesture is: the screen pops, and comes back where it was scrolled to.
+    document.addEventListener('click', (e) => {
+      const a = e.target.closest?.('a.back-link');
+      if (!a || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      if (this.hashes.get(this.idx - 1) !== a.getAttribute('href')) return;
+      e.preventDefault();
+      this.ownPop = performance.now();
+      history.back();
+    });
     window.addEventListener('online', () => this.status());
     window.addEventListener('offline', () => this.status());
     document.addEventListener('visibilitychange', () => {
@@ -77,8 +112,12 @@ export class Pod {
       this.store.ready.then(() => this.store.link(link[1])).then(() => { this.toast('This device is linked to your library'); this.inboxStale = true; if (this.view === 'home') this.loadInbox(); }, (err) => this.toast(err.status === 401 ? 'That link is not the key to this library' : err.message));
       return this.route();
     }
-    const [, name = '', arg = ''] = hash.match(/^#\/([\w-]*)\/?([\w-]*)/) || [];
-    const view = name === 'transcribe' ? 'transcribe' : name === 'show' && arg ? 'show' : ['queue', 'add', 'settings', 'search'].includes(name) ? name : 'home';
+    const { view, arg } = where(hash);
+    // A new entry in the history gets the next number; one come back to has its own.
+    const st = history.state;
+    const back = st?.idx != null && st.idx < this.idx;
+    if (st?.idx == null) history.replaceState({ ...(st || {}), idx: ++this.idx }, ''); else this.idx = st.idx;
+    this.hashes.set(this.idx, hash);
     const listen = view !== 'transcribe';
     document.body.classList.toggle('view-listen', listen);
     document.body.classList.toggle('view-transcribe', !listen);
@@ -102,11 +141,100 @@ export class Pod {
     if (view === 'settings') this.settings();
     if (view === 'search') this.finder?.show();
     this.status();
-    if (changed) window.scrollTo(0, 0);
+    // A new screen opens at its top; one come back to is where it was left.
+    if (changed) window.scrollTo(0, back ? this.scrolls.get(this.idx) || 0 : 0);
   }
 
   go(hash) {
     if (location.hash === hash) this.route(); else location.hash = hash;
+  }
+
+  // The address changed (a link, go(), the back gesture or button): the screen changes with the
+  // motion that says which way (screenChange). A sheet open over the old screen goes down first;
+  // to another section (the transcript, from the player) the screen changes at once under it.
+  moved() {
+    const to = where(location.hash || '#/');
+    const kind = to ? this.motionTo(to) : '';
+    if (!kind || (kind === 'tab' && (sheetOpen() || sheetLeaving()))) { this.route(); return; }
+    const n = ++this.moving;
+    if (sheetOpen()) closeSheet();
+    sheetGone().then(() => { if (n === this.moving) this.screenChange(kind, () => this.route(), to); });
+  }
+
+  // push (deeper), pop (back), tab (another section along the bottom), or '' for none: the same
+  // screen, a tab within it, or the first screen of all.
+  motionTo(to) {
+    const from = { view: this.view, arg: this.arg };
+    if (!from.view || (to.view === from.view && (to.view !== 'show' || to.arg === from.arg))) return '';
+    const idx = history.state?.idx;
+    const tapped = performance.now() - (this.sectionAt || 0) < 1000;
+    if (tapped && SECTION[to.view] !== SECTION[from.view]) return 'tab';
+    const a = DEPTH[from.view];
+    const b = DEPTH[to.view];
+    if (!a && !b) return 'tab';
+    if (idx != null && idx < this.idx) return 'pop';
+    if (idx != null && idx > this.idx) return 'push';
+    return b < a ? 'pop' : 'push';
+  }
+
+  // The screen changes inside a view transition, the motion picked by a class on the root
+  // (style.css): where there are none, motion is turned down, or the browser has just drawn a
+  // step back of its own (iOS Safari's edge swipe), it changes at once. A show's cover goes with
+  // it: from its tile to the show's page on the way in, and back on the way out.
+  screenChange(kind, update, dest = null) {
+    const drewBack = kind === 'pop' && performance.now() - (this.drawnBack || 0) < 1000;
+    this.drawnBack = 0;
+    if (!document.startViewTransition || motionOff() || drewBack || document.visibilityState === 'hidden') { update(); return; }
+    const root = document.documentElement;
+    const cover = this.coverFor(kind, dest);
+    for (const k of ['push', 'pop', 'tab']) root.classList.remove(`vt-${k}`);
+    root.classList.add(`vt-${kind}`);
+    if (cover?.from) cover.from.style.viewTransitionName = 'cover';
+    let t;
+    try { t = document.startViewTransition(async () => {
+      if (cover?.from) cover.from.style.viewTransitionName = '';
+      update();
+      const to = cover?.to();
+      if (!to) return;
+      to.style.viewTransitionName = 'cover';
+      cover.toEl = to;
+      // (the picture in place before the new screen is taken, so what arrives is the cover)
+      const img = to.querySelector('img.art-img');
+      if (img && kind === 'push') await Promise.race([img.decode().catch(() => {}), new Promise((r) => setTimeout(r, 150))]);
+    }); } catch {
+      // (a browser that will not start one now: the screen changes at once)
+      if (cover?.from) cover.from.style.viewTransitionName = '';
+      root.classList.remove(`vt-${kind}`);
+      update();
+      return;
+    }
+    const mine = (this.vt = t);
+    const done = () => {
+      if (cover?.from) cover.from.style.viewTransitionName = '';
+      cover?.toEl?.style.removeProperty('view-transition-name');
+      if (this.vt === mine) root.classList.remove(`vt-${kind}`);
+    };
+    t.ready.catch(() => {});
+    // (an error in drawing the screen is still an error, not a skipped transition)
+    t.updateCallbackDone.catch((err) => { if (err?.name !== 'AbortError') setTimeout(() => { throw err; }); });
+    t.finished.then(done, done);
+  }
+
+  // The cover that travels with a screen change, if one does: from the tile tapped on Listen to
+  // the show's page, or from the show's page back to its tile (when Listen has one for it).
+  coverFor(kind, dest) {
+    const tapped = this.coverTap && performance.now() - this.coverTap.at < 1500 ? this.coverTap : null;
+    this.coverTap = null;
+    const showArt = () => $('show-head')?.querySelector('.show-art');
+    if (kind === 'push' && tapped) {
+      return { from: tapped.el, to: () => (this.view === 'show' && this.arg === tapped.id ? showArt() : null) };
+    }
+    const tile = (id) => document.querySelector(`#pod-home .show-tile[href="#/show/${id}"] .art`);
+    if (kind === 'pop' && this.view === 'show' && dest?.view === 'home' && tile(this.arg)) {
+      const id = this.arg;
+      return { from: showArt(), to: () => (this.view === 'home' ? tile(id) : null) };
+    }
+    return null;
   }
 
   // The right-hand corner of the top bar: is this library in step with the server?
@@ -536,29 +664,12 @@ export class Pod {
     }
   }
 
-  // A show's cover, tapped on Listen, travels to its place on the show's page (the View
-  // Transitions API, where there is one and motion is wanted; elsewhere the page just changes).
+  // A show's cover, tapped on Listen, travels to its place on the show's page inside the push
+  // (screenChange, where the browser has view transitions); the link itself goes there.
   travel(e, tile, id) {
-    if (!document.startViewTransition || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches || document.body.classList.contains('busy')) return;
-    const from = tile.querySelector('.art');
-    if (!from) return;
-    e.preventDefault();
-    from.style.viewTransitionName = 'cover';
-    const t = document.startViewTransition(async () => {
-      from.style.viewTransitionName = '';
-      history.pushState(null, '', `${location.pathname}${location.search}#/show/${id}`);
-      this.route();
-      const to = $('show-head')?.querySelector('.show-art');
-      if (!to) return;
-      to.style.viewTransitionName = 'cover';
-      // The picture in place before the new page is taken, so what arrives is the cover.
-      const img = to.querySelector('img.art-img');
-      if (img) await Promise.race([img.decode().catch(() => {}), new Promise((r) => setTimeout(r, 150))]);
-    });
-    const clear = () => { from.style.viewTransitionName = ''; $('show-head')?.querySelector('.show-art')?.style.removeProperty('view-transition-name'); };
-    for (const p of [t.ready, t.updateCallbackDone]) p.catch(() => {});
-    t.finished.then(clear, clear);
+    if (e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const el = tile.querySelector('.art');
+    this.coverTap = el ? { el, id, at: performance.now() } : null;
   }
 
   drawLatest() {

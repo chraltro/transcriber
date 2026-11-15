@@ -356,7 +356,10 @@ export class PlayerUI {
     this.openTool = '';
     this.nowKey = '';
     this.sheetScrub = new Score(sheet.querySelector('.np-strip'), { player, onPreview: (t) => { sheet.querySelector('.np-cur').textContent = fmtTime(t); this.nowDraw(t); } });
-    openSheet(sheet, { name: 'player', closed: () => { this.sheetScrub?.destroy(); this.sheet = null; this.sheetScrub = null; removeEventListener('resize', this.refit); } });
+    // It grows out of the bar and shrinks back into it: the cover, the title and the play button
+    // go between their places in the two (ui/dom.js).
+    const grow = () => ({ bar: this.bar, list: [[$('pb-art'), sheet.querySelector('.np-art')], [$('pb-title'), sheet.querySelector('.np-title')], [$('pb-play'), sheet.querySelector('.np-play')]] });
+    openSheet(sheet, { name: 'player', grow, closed: () => { this.sheetScrub?.destroy(); this.sheet = null; this.sheetScrub = null; removeEventListener('resize', this.refit); } });
     this.fill();
     player.wantShape();
     this.refit ||= () => this.fit();

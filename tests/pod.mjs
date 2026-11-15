@@ -899,6 +899,48 @@ async function run(name, options) {
       const after = await page.evaluate(() => document.querySelectorAll('#pod-home .draw-in').length);
       check(drawn.length > 0 && drawn.every((n) => n === 'draw-in') && after === 0, `the played part of each started episode draws in once as Listen shows (${drawn.length} drawn, ${after} still drawing after 0.7 s)`);
 
+      // Screens move as an iPhone's do: deeper pushes in from the right (a view transition with
+      // the push class on the root), back pops (the back link is the step back in history, and
+      // the screen comes back scrolled where it was), another section cross-fades.
+      const vts = () => page.evaluate(() => window.__vt.splice(0));
+      await page.evaluate(() => {
+        window.__vt = [];
+        const start = document.startViewTransition?.bind(document);
+        if (!start) return;
+        document.startViewTransition = (cb) => {
+          const seen = { kind: (document.documentElement.className.match(/\bvt-(\w+)/) || [])[1] || '', ran: false };
+          window.__vt.push(seen);
+          const t = start(cb);
+          t.ready.then(() => { seen.ran = !!document.getAnimations().some((a) => /^::view-transition/.test(a.effect?.pseudoElement || '')); }, () => { seen.skipped = true; });
+          return t;
+        };
+      });
+      const hasVT = await page.evaluate(() => !!document.startViewTransition);
+      await page.evaluate(() => window.scrollTo(0, 90));
+      await page.waitForTimeout(100);
+      await page.click('#show-grid .show-tile >> nth=0');
+      await page.waitForSelector('#pod-show:not(.hidden) #show-list .ep');
+      await page.waitForTimeout(600);
+      let vt = await vts();
+      check(!hasVT || (vt.length === 1 && vt[0].kind === 'push' && vt[0].ran && !vt[0].skipped), `a show's page is pushed in, in a view transition (${JSON.stringify(vt)})`);
+      check(await page.evaluate(() => !document.documentElement.className.includes('vt-') && !document.querySelector('[style*="view-transition-name"]')), 'and nothing of it is left on the page after');
+      await page.click('#pod-show .back-link');
+      await page.waitForSelector('#pod-home:not(.hidden)');
+      await page.waitForTimeout(600);
+      vt = await vts();
+      const popped = await page.evaluate(() => ({ hash: location.hash, y: Math.round(window.scrollY) }));
+      check(!hasVT || (vt.length === 1 && vt[0].kind === 'pop' && vt[0].ran), `the back link pops it, in a view transition (${JSON.stringify(vt)})`);
+      check(popped.hash === '#/' && popped.y === 90, `and Listen comes back where it was scrolled to, the step back in history taken (${JSON.stringify(popped)})`);
+      await page.click(mobile ? '#tabbar [data-nav=queue]' : '#nav [data-nav=queue]');
+      await page.waitForSelector('#pod-queue:not(.hidden)');
+      await page.waitForTimeout(300);
+      vt = await vts();
+      check(!hasVT || (vt.length === 1 && vt[0].kind === 'tab'), `another section cross-fades (${JSON.stringify(vt)})`);
+      await page.click(mobile ? '#tabbar [data-nav=listen]' : '#nav [data-nav=listen]');
+      await page.waitForSelector('#pod-home:not(.hidden) #latest-list .ep');
+      await page.waitForTimeout(300);
+      await vts();
+
       // A sheet comes from its edge and goes back to it, one motion; then it is gone, and the
       // focus is back on what opened it.
       const opener = row('The pilot who boards at night').locator('.ep-main');
@@ -923,19 +965,33 @@ async function run(name, options) {
       const gone = await page.evaluate(() => ({ hidden: document.querySelector('#sheet').classList.contains('hidden') && document.querySelector('#sheet-back').classList.contains('hidden'), empty: !document.querySelector('#sheet').firstChild, closing: !!document.querySelector('.closing'), focus: document.activeElement?.closest('.ep')?.querySelector('.ep-title')?.textContent }));
       check(moving.length >= (WEBKIT ? 1 : 2) && frames.at(-1).hidden && gone.hidden && gone.empty && !gone.closing, `a closed sheet goes back to the ${mobile ? 'bottom' : 'right'} edge and is then gone (${moving.length} frames on the way)`);
       check(gone.focus === 'The pilot who boards at night', `and the focus is back on what opened it (${gone.focus})`);
-      // Closed with the browser's back (the phone's back gesture), it goes at once: the phone
-      // has moved the page itself.
+      // Closed with the browser's back (or a home-screen app's back gesture, which draws no way
+      // back of its own), it is closed at once and goes down; where the browser has drawn the
+      // way back itself (iOS Safari's edge swipe), it is gone at once.
       await opener.click();
       await page.waitForSelector('.ep-sheet');
-      await page.waitForTimeout(400);
+      await page.waitForTimeout(450);
       await page.goBack();
       await page.waitForTimeout(30);
-      check(await page.evaluate(() => document.querySelector('#sheet').classList.contains('hidden') && location.hash === '#/'), 'the browser\'s back closes it at once');
+      const leaving = await page.evaluate(() => ({ closing: document.querySelector('#sheet').classList.contains('closing'), hidden: document.querySelector('#sheet').classList.contains('hidden'), hash: location.hash }));
+      await page.waitForSelector('#sheet.hidden', { state: 'attached', timeout: 2000 }).catch(() => {});
+      check(leaving.closing && !leaving.hidden && leaving.hash === '#/' && await page.evaluate(() => document.querySelector('#sheet').classList.contains('hidden')), `the browser's back closes it, and it goes back to its edge (${JSON.stringify(leaving)})`);
+      await opener.click();
+      await page.waitForSelector('.ep-sheet');
+      await page.waitForTimeout(450);
+      await page.evaluate(() => {
+        history.replaceState({ ...history.state, sheet: false }, '');
+        dispatchEvent(new PopStateEvent('popstate', { state: history.state, hasUAVisualTransition: true }));
+      });
+      check(await page.evaluate(() => document.querySelector('#sheet').classList.contains('hidden') && !document.body.classList.contains('receded')), 'where the browser drew the way back itself, it is gone at once');
       if (mobile) {
         // Pulled down from its top and let go, it carries on down from where the finger left it.
         await opener.click();
         await page.waitForSelector('.ep-sheet');
         await page.waitForTimeout(450);
+        // The page behind gives way while the sheet is open (smaller), and comes back after.
+        const behind = await page.evaluate(() => [...document.querySelectorAll('.shell, .topbar, .tabbar')].map((el) => +new DOMMatrix(getComputedStyle(el).transform).a.toFixed(3)));
+        check(behind.every((k) => k === 0.94), `behind an open sheet the page is smaller, all of it the same (${behind.join(', ')})`);
         const pulled = await page.evaluate(() => new Promise((done) => {
           const p = document.querySelector('#sheet');
           // (A touch can't be made up in every browser: where it can't, this is not gone through.)
@@ -944,11 +1000,12 @@ async function run(name, options) {
           p.dispatchEvent(new TouchEvent('touchstart', { touches: at(40), targetTouches: at(40), changedTouches: at(40), bubbles: true, cancelable: true }));
           p.dispatchEvent(new TouchEvent('touchmove', { touches: at(240), targetTouches: at(240), changedTouches: at(240), bubbles: true, cancelable: true }));
           const held = new DOMMatrix(getComputedStyle(p).transform).m42;
+          const scale = new DOMMatrix(getComputedStyle(document.querySelector('.shell')).transform).a;
           p.dispatchEvent(new TouchEvent('touchend', { touches: [], targetTouches: [], changedTouches: at(240), bubbles: true, cancelable: true }));
           const seen = [];
           const look = () => {
             seen.push(p.classList.contains('hidden') ? 'gone' : new DOMMatrix(getComputedStyle(p).transform).m42);
-            if (seen.length < 60 && seen.at(-1) !== 'gone') requestAnimationFrame(look); else done({ held, seen });
+            if (seen.length < 60 && seen.at(-1) !== 'gone') requestAnimationFrame(look); else done({ held, seen, scale });
           };
           requestAnimationFrame(look);
         }));
@@ -959,22 +1016,66 @@ async function run(name, options) {
         } else {
           const ys = pulled.seen.filter((y) => y !== 'gone');
           check(pulled.held === 200 && ys.length > 0 && ys.every((y) => y >= 199) && pulled.seen.at(-1) === 'gone', `pulled down and let go, the sheet goes on down from there (held at ${pulled.held} px, then ${ys.slice(0, 4).map(Math.round).join(', ')} ...)`);
+          check(pulled.scale > 0.94 && pulled.scale < 1, `and the page behind comes forward with the finger (${pulled.scale.toFixed(3)} with the sheet a quarter down)`);
         }
         await page.waitForFunction(() => location.hash === '#/');
+        await page.waitForTimeout(300);
+        const after = await page.evaluate(() => ({ t: [...document.querySelectorAll('.shell, .topbar, .tabbar')].map((el) => getComputedStyle(el).transform), cls: document.body.className }));
+        check(after.t.every((t) => t === 'none') && !/reced/.test(after.cls), `once it is closed, the page is back as it was (${after.t.join(', ')})`);
+
+        // The player bar grows into the player: the sheet starts at the bar, its cover on the
+        // bar's cover; and closed, it goes back into the bar, the cover onto the bar's.
+        const grow = (act) => page.evaluate((act) => new Promise((done) => {
+          const r = (el) => { const b = el?.getBoundingClientRect(); return b ? [Math.round(b.left), Math.round(b.top), Math.round(b.width)] : null; };
+          const bar = r(document.querySelector('#pb-art'));
+          const seen = [];
+          const look = () => {
+            const p = document.querySelector('#sheet');
+            if (!p.classList.contains('hidden')) seen.push({ art: r(p.querySelector('.np-art')), top: Math.round(p.getBoundingClientRect().top) });
+            if (seen.length < 40 && !(act === 'close' && p.classList.contains('hidden'))) requestAnimationFrame(look); else done({ bar, seen });
+          };
+          if (act === 'open') document.querySelector('#pb-open').click(); else document.querySelector('.np .sheet-top .icon-btn').click();
+          requestAnimationFrame(look);
+        }), act);
+        const near = (a, b) => !!a && !!b && a.every((v, i) => Math.abs(v - b[i]) <= 3);
+        const barTop = await page.evaluate(() => Math.round(document.querySelector('#playbar').getBoundingClientRect().top));
+        const up = await grow('open');
+        check(near(up.seen[0]?.art, up.bar) && Math.abs(up.seen[0].top - barTop) <= 3 && up.seen.at(-1).art[2] > up.bar[2] * 2, `tapped, the player bar grows into the player: the sheet from the bar's top, its cover from the bar's (${JSON.stringify(up.seen[0])}, the bar's cover ${up.bar}) to ${up.seen.at(-1).art[2]} px`);
+        await page.waitForTimeout(300);
+        const down = await grow('close');
+        const last = down.seen.filter((x) => x.art).at(-1);
+        const bar = await page.evaluate(() => { const b = document.querySelector('#pb-art').getBoundingClientRect(); return [Math.round(b.left), Math.round(b.top), Math.round(b.width)]; });
+        check(near(last?.art, bar), `closed, it shrinks back into the bar, the cover onto the bar's (${JSON.stringify(last)}, the bar's ${bar})`);
+        await page.waitForFunction(() => location.hash === '#/');
       }
-      // With motion turned down on the device, a sheet comes and goes without moving.
+      // With motion turned down on the device, a sheet comes and goes without moving, the page
+      // behind stays as it is, and screens change at once, with no transition.
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await opener.click();
       await page.waitForSelector('.ep-sheet');
+      const still = await page.evaluate(() => ({ sheet: getComputedStyle(document.querySelector('#sheet')).transform, page: getComputedStyle(document.querySelector('.shell')).transform }));
+      check(still.sheet === 'none' && still.page === 'none', `with reduced motion a sheet is in place at once, the page behind it as it was (${JSON.stringify(still)})`);
       await page.keyboard.press('Escape');
       await page.waitForTimeout(40);
       check(await page.evaluate(() => document.querySelector('#sheet').classList.contains('hidden')), 'with reduced motion a sheet goes at once');
+      await page.waitForFunction(() => location.hash === '#/');
+      await page.click('#show-grid .show-tile >> nth=0');
+      await page.waitForSelector('#pod-show:not(.hidden)', { timeout: 2000 });
+      const instant = await page.evaluate(() => getComputedStyle(document.querySelector('#pod-show')).display !== 'none' && !document.documentElement.className.includes('vt-'));
+      await page.waitForTimeout(200);
+      vt = await vts();
+      check(instant && vt.length === 0, `with reduced motion a show's page is there at once, with no transition (${vt.length} started)`);
+      await page.goBack();
+      await page.waitForSelector('#pod-home:not(.hidden)');
+      check((await vts()).length === 0, 'and back again the same');
       await page.emulateMedia({ reducedMotion: 'no-preference' });
 
       // On a phone, whatever is touched is at least 44 px both ways: tried 21.5 px from its
       // middle up, down, left and right (the edge of the screen counts as reach).
       if (mobile) {
-        const reach = (root, scroll = true) => page.evaluate(([root, scroll]) => {
+        // (measured once a screen has finished coming in: during a view transition the page is a
+        // picture and takes no touches)
+        const reach = async (root, scroll = true) => (await page.waitForFunction(() => !/\bvt-/.test(document.documentElement.className))) && page.evaluate(([root, scroll]) => {
           const short = [];
           for (const box of document.querySelectorAll(root)) {
             for (const el of box.querySelectorAll('a[href], button, summary, select, input:not([type=hidden]), [role=button]')) {
