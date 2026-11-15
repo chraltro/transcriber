@@ -845,7 +845,20 @@ export class Player extends EventTarget {
     k.src = this.longHush ||= silence(2); // (its own: the start trick's tenth of a second is too short)
     this.silent = k;
     // (Refused, outside a tap: made ready at the next one.)
-    k.play().then(() => { if (!this.silenting) k.pause(); }, () => { if (this.silent === k) this.silent = null; });
+    k.play().then(() => { if (!this.silenting) { k.pause(); this.touchEpisode(); } }, () => { if (this.silent === k) this.silent = null; });
+  }
+
+  // The lock screen shows the audio a person touched last, and for five seconds after a tap or a
+  // lock-screen press WebKit counts every play() and pause() on the page as theirs (its "transient
+  // activation"). So whenever the silence is played or paused, the episode is touched straight
+  // after, as it is: play() on one that plays, pause() on one that is paused. Nothing changes, but
+  // the episode is the last one touched, and stays on the lock screen. (Once, the silence's own
+  // pause a second after the episode started put the silence there: paused, at 0:00, so every
+  // press of the lock screen's button arrived as its opposite.)
+  touchEpisode() {
+    const a = this.audio;
+    if (!this.source || !a.src) return;
+    if (a.paused) a.pause(); else a.play().catch(() => {});
   }
 
   // Whether the sound is to be kept on here: iOS, an episode in the player, the app out of sight.
@@ -862,7 +875,9 @@ export class Player extends EventTarget {
     clearTimeout(this.silentTimer);
     clearTimeout(this.handing);
     this.silentTimer = setTimeout(() => { this.note('silence', 'a quarter of an hour paused: let go'); this.letSoundGo(); }, 15 * 60e3);
-    return this.silent.play().then(() => { this.note('silence', 'on'); return true; }, (err) => { this.note('silence', `refused (${err.name})`); return false; });
+    const started = this.silent.play();
+    this.touchEpisode();
+    return started.then(() => { this.note('silence', 'on'); return true; }, (err) => { this.note('silence', `refused (${err.name})`); return false; });
   }
 
   letSoundGo() {
@@ -870,7 +885,7 @@ export class Player extends EventTarget {
     if (this.silenting) this.note('silence', 'off');
     this.silenting = false;
     clearTimeout(this.silentTimer);
-    this.silent?.pause();
+    if (this.silent && !this.silent.paused) { this.silent.pause(); this.touchEpisode(); }
   }
 
   // Paused with the app out of sight: the silence is started, then the episode paused, at once

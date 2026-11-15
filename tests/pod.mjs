@@ -410,8 +410,9 @@ async function run(name, options) {
     if (mobile) {
       // The first play after a start makes the silence ready, before the episode is played, so
       // the episode is what a person touched last and what the lock screen shows.
+      await page.waitForTimeout(500);
       const firstCalls = await page.evaluate(() => window.__calls.filter((c) => /^(episode|silence) /.test(c)));
-      check(firstCalls.indexOf('silence play') >= 0 && firstCalls.indexOf('silence play') < firstCalls.lastIndexOf('episode play'), `the first play after a start readies the silence before the episode, so the episode is touched last (${firstCalls.join(', ')})`);
+      check(firstCalls.indexOf('silence play') >= 0 && firstCalls.indexOf('silence play') < firstCalls.indexOf('episode play') && firstCalls.at(-1) === 'episode play', `the first play after a start readies the silence before the episode, and once the silence is paused again the episode is touched last (${firstCalls.join(', ')})`);
     }
     a = await audio();
     check(a.t >= 119 && a.t < 126, `it picks up where it stopped (${a.t.toFixed(1)} s)`);
@@ -475,9 +476,15 @@ async function run(name, options) {
       await playing(Math.max(0.5, at - 1));
       const atPlaying = await page.evaluate(() => window.__silentAt);
       await page.waitForTimeout(1500);
+      const afterHandover = await page.evaluate(() => window.__calls.filter((c) => /^(episode|silence) /.test(c)));
       const again = await audio();
       const after = await silent();
-      if (mobile) check(playCalls.filter((c) => /^(episode|silence) /.test(c)).at(-1) === 'episode play', `and inside the press that plays it, the episode is touched last (${playCalls.join(', ')})`);
+      if (mobile) {
+        check(playCalls.filter((c) => /^(episode|silence) /.test(c)).at(-1) === 'episode play', `and inside the press that plays it, the episode is touched last (${playCalls.join(', ')})`);
+        // (A press counts for five seconds in WebKit: the silence let go of a second later is
+        // touched too, and the episode has to be touched after it.)
+        check(afterHandover.includes('silence pause') && afterHandover.at(-1) === 'episode play', `and when the silence lets go a moment later, the episode is touched after it (${afterHandover.slice(-4).join(', ')})`);
+      }
       check(!again.paused && again.t >= at - 1 && again.t < at + 8 && after === 0 && (!mobile || atPlaying === 1), `played again from there, the episode carries on where it was, and the silence lets go once it is heard (${at.toFixed(1)} s to ${again.t.toFixed(1)} s; silent ${atPlaying} as it started, ${after} after)`);
 
       await page.evaluate(() => { delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange')); });
