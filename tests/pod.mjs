@@ -443,7 +443,7 @@ async function run(name, options) {
       await page.waitForFunction((id) => JSON.parse(localStorage.getItem('pod-downloads') || '{}')[id]?.from === 'server', world.transcribed, { timeout: 30000 }).catch(() => {});
       const swapped = await page.evaluate((id) => JSON.parse(localStorage.getItem('pod-downloads') || '{}')[id]?.from, world.transcribed);
       check(swapped === 'server', `a copy saved from the podcast's host is swapped for the server's once the server has it (${swapped})`);
-      await page.evaluate((id) => { const x = JSON.parse(localStorage.getItem('pod-downloads')); x[id].from = 'origin'; localStorage.setItem('pod-downloads', JSON.stringify(x)); }, world.transcribed);
+      await page.evaluate((id) => { const x = JSON.parse(localStorage.getItem('pod-downloads')); if (x[id]) x[id].from = 'origin'; localStorage.setItem('pod-downloads', JSON.stringify(x)); }, world.transcribed);
       await page.reload();
       await page.waitForSelector('#playbar:not(.hidden)');
       await page.click('#pb-play');
