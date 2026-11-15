@@ -456,7 +456,8 @@ async function run(name, options) {
       await page.waitForFunction(() => document.querySelector('#audio').paused);
       // (Not saved any more, for what follows.)
       await row('Why every container').locator('.ep-more').click();
-      await page.click('#row-menu button:has-text("Remove the saved copy")');
+      const unsave = page.locator('#row-menu.open button:has-text("Remove the saved copy")');
+      if (await unsave.count()) await unsave.click(); else await page.keyboard.press('Escape');
       await page.waitForFunction(() => !document.querySelector('#latest-list .ep:first-child .tag:not(.hot)')?.textContent.includes('Saved'), null, { timeout: 5000 }).catch(() => {});
       // ...and the player on the server's stream again, where it was.
       const t0 = (await audio()).t;

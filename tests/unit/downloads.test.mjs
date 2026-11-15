@@ -2,16 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 // A Cache Storage that, like WebKit's, takes an entry out before it puts the new one in, and lets
-// the page read in between (`gap` is called there).
+// the page read while a file is being written (`gap` is called there).
 function fakeCaches() {
   const store = new Map();
   const hooks = { gap: null };
   const cache = {
     async put(key, res) {
-      const body = await res.arrayBuffer();
       store.delete(key);
-      if (hooks.gap && !key.endsWith('&next')) await hooks.gap();
-      store.set(key, body);
+      if (hooks.gap) { const gap = hooks.gap; hooks.gap = null; await gap(); }
+      store.set(key, await res.arrayBuffer());
     },
     async match(key) { return store.has(key) ? new Response(store.get(key)) : undefined; },
     async delete(key) { return store.delete(key); },
@@ -38,24 +37,23 @@ async function setup() {
   return { d, fake, ep };
 }
 
-test('a saved copy read while it is swapped for the server\'s is not taken for lost', async () => {
+test('a saved copy read while it is swapped for the server\'s is the old one, and nothing is lost', async () => {
   const { d, fake, ep } = await setup();
   assert.equal(d.info(ep.id).from, 'origin');
   let read = 'not read';
-  let verified = false;
   fake.hooks.gap = async () => {
-    fake.hooks.gap = null;
     read = await (await d.blob(ep.id))?.text();
     await d.verify();
-    verified = true;
   };
   assert.equal(await d.upgrade(ep.id), true);
-  assert.ok(verified);
-  assert.equal(read, 'the server copy'); // (the new copy, from its own key, while the old one is out)
+  assert.equal(read, 'the host copy');
   assert.equal(d.info(ep.id)?.from, 'server');
   assert.ok(!d.lost.has(ep.id));
   assert.equal(await (await d.blob(ep.id)).text(), 'the server copy');
-  assert.deepEqual([...fake.store.keys()].filter((k) => k.endsWith('&next')), []);
+  assert.equal(fake.store.size, 1); // (the old file gone)
+  // ...and it stays found after a restart.
+  await d.verify();
+  assert.equal(d.info(ep.id)?.from, 'server');
 });
 
 test('a copy removed while it is being swapped stays removed', async () => {
@@ -65,5 +63,5 @@ test('a copy removed while it is being swapped stays removed', async () => {
   await d.remove(ep.id);
   await going;
   assert.equal(d.has(ep.id), false);
-  assert.deepEqual([...fake.store.keys()].filter((k) => k.endsWith('&next')), []);
+  assert.equal(fake.store.size, 0);
 });

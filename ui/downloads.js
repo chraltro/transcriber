@@ -4,6 +4,11 @@
 const CACHE = 'pod-audio';
 const INDEX = 'pod-downloads';
 const keyOf = (id) => `https://transcriber.invalid/pod?id=${encodeURIComponent(id)}`;
+// Where an episode's file is: its own key, or (a copy swapped for the server's) the key it was
+// downloaded to. A stored file is never copied from one key to another: WebKit takes the old
+// entry out before it writes the new one, and on the test runner's build the write then failed.
+const fileOf = (id, entry) => entry?.key || keyOf(id);
+const idOf = (url) => decodeURIComponent((url.split('id=')[1] || '').split('&')[0]);
 
 export class Downloads extends EventTarget {
   // open(ep) -> { response, from: 'server' | 'origin' }: the audio, fetched however it can be.
@@ -35,26 +40,28 @@ export class Downloads extends EventTarget {
     try { cache = await caches.open(CACHE); } catch { return; }
     const stored = new Set((await cache.keys()).map((r) => r.url));
     let changed = false;
-    // (One being swapped for the server's copy may be between its two files for a moment.)
-    for (const id of Object.keys(this.index)) if (!stored.has(keyOf(id)) && !this.upgrading.has(id)) { this.lost.add(id); delete this.index[id]; changed = true; }
+    for (const [id, entry] of Object.entries(this.index)) if (!stored.has(fileOf(id, entry))) { this.lost.add(id); delete this.index[id]; changed = true; }
+    // Files nothing points at (left by an interrupted save or swap) go, but not one being written.
+    const kept = new Set(Object.entries(this.index).map(([id, entry]) => fileOf(id, entry)));
     for (const url of stored) {
-      const id = decodeURIComponent(url.split('id=')[1] || '');
-      if (!this.index[id] && !this.active.has(id) && !this.upgrading.has(id.replace(/&next$/, ''))) await cache.delete(url);
+      const id = idOf(url);
+      if (!kept.has(url) && !this.active.has(id) && !this.upgrading.has(id)) await cache.delete(url);
     }
     if (changed) this.save();
   }
 
   async blob(id) {
+    // (Looked for again if it was swapped for the server's copy while it was looked for.)
+    for (let i = 0; i < 2; i++) {
+      const file = fileOf(id, this.index[id]);
+      if (!this.index[id]) return null;
+      try {
+        const hit = await (await caches.open(CACHE)).match(file);
+        if (hit) return await hit.blob();
+      } catch {}
+      if (fileOf(id, this.index[id]) === file) break;
+    }
     if (!this.index[id]) return null;
-    const swapping = this.upgrading.has(id);
-    try {
-      const cache = await caches.open(CACHE);
-      // (While it is swapped for the server's copy, WebKit may have taken the old file out before
-      // the new one is in: the new one is whole by then, under its own key.)
-      const hit = await cache.match(keyOf(id)) || (swapping ? await cache.match(`${keyOf(id)}&next`) : null);
-      if (hit) return await hit.blob();
-    } catch {}
-    if (swapping) return null;
     this.lost.add(id);
     delete this.index[id];
     this.save();
@@ -103,7 +110,8 @@ export class Downloads extends EventTarget {
     const had = this.index[id];
     if (!had || had.from === 'server' || this.active.has(id) || this.upgrading.has(id)) return false;
     this.upgrading.add(id);
-    const next = `${keyOf(id)}&next`;
+    const old = fileOf(id, had);
+    const fresh = `${keyOf(id)}&from=server`;
     let cache;
     try {
       cache = await caches.open(CACHE);
@@ -111,23 +119,16 @@ export class Downloads extends EventTarget {
       if (from !== 'server') { response.body?.cancel?.().catch(() => {}); return false; }
       let bytes = 0;
       const counted = response.body.pipeThrough(new TransformStream({ transform: (chunk, out) => { bytes += chunk.length; out.enqueue(chunk); } }));
-      await cache.put(next, new Response(counted, { headers: { 'content-type': response.headers.get('content-type') || 'audio/mpeg' } }));
-      if (!this.index[id] || !this.upgrading.has(id)) { await cache.delete(next); return false; } // removed meanwhile
-      // The new copy goes in under the episode's own key, and is looked for there before the one
-      // it came from goes (a browser may take the old entry out before the new one is in).
-      let stored = null;
-      for (let i = 0; i < 3 && !stored; i++) {
-        await cache.put(keyOf(id), await cache.match(next));
-        stored = await cache.match(keyOf(id));
-      }
-      if (!stored) throw new Error('The server\'s copy could not be kept');
-      await cache.delete(next);
-      this.index[id] = { ...(this.index[id] || had), bytes, from: 'server', at: Date.now() };
-      this.lost.delete(id);
+      await cache.put(fresh, new Response(counted, { headers: { 'content-type': response.headers.get('content-type') || 'audio/mpeg' } }));
+      if (!this.index[id] || !this.upgrading.has(id)) { await cache.delete(fresh); return false; } // removed meanwhile
+      if (!(await cache.match(fresh))) throw new Error('The server\'s copy was not kept');
+      // The episode points at the new file from here on; then the old one goes.
+      this.index[id] = { ...this.index[id], key: fresh, bytes, from: 'server', at: Date.now() };
       this.save();
+      if (old !== fresh) await cache.delete(old).catch(() => {});
       return true;
     } catch {
-      try { await cache?.delete(next); } catch {}
+      try { if (fileOf(id, this.index[id]) !== fresh) await cache?.delete(fresh); } catch {}
       return false;
     } finally {
       this.upgrading.delete(id);
@@ -139,8 +140,13 @@ export class Downloads extends EventTarget {
   async remove(id) {
     this.cancel(id);
     this.upgrading.delete(id); // (a swap under way finds it gone and puts nothing back)
+    const file = fileOf(id, this.index[id]);
     delete this.index[id];
-    try { await (await caches.open(CACHE)).delete(keyOf(id)); } catch {}
+    try {
+      const cache = await caches.open(CACHE);
+      await cache.delete(file);
+      if (file !== keyOf(id)) await cache.delete(keyOf(id));
+    } catch {}
     this.save();
   }
 
