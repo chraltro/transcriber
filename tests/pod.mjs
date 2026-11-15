@@ -868,8 +868,13 @@ async function run(name, options) {
     // Scrolled away by the reader, the page stops following; a button says which way the playing
     // sentence is, and takes them back to it.
     const away = async (to) => {
-      await page.mouse.move(200, 400);
-      await page.mouse.wheel(0, to === 'top' ? -20000 : 20000);
+      if ((WEBKIT && mobile) || process.env.MADE_UP_FINGER) {
+        // (Mobile WebKit as driven for testing has no wheel: a finger's scroll, as the page hears one.)
+        await page.evaluate((to) => { window.dispatchEvent(new Event('touchmove')); window.scrollTo(0, to === 'top' ? 0 : document.documentElement.scrollHeight); }, to);
+      } else {
+        await page.mouse.move(200, 400);
+        await page.mouse.wheel(0, to === 'top' ? -20000 : 20000);
+      }
       await page.waitForTimeout(700);
     };
     for (const to of ['top', 'bottom']) {
