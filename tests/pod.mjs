@@ -942,13 +942,26 @@ async function run(name, options) {
       let vt = await vts();
       check(!hasVT || (vt.length === 1 && vt[0].kind === 'push' && vt[0].ran && !vt[0].skipped), `a show's page is pushed in, in a view transition (${JSON.stringify(vt)})`);
       check(await page.evaluate(() => !document.documentElement.className.includes('vt-') && !document.querySelector('[style*="view-transition-name"]')), 'and nothing of it is left on the page after');
+      // (What moves the page on the way back, said when it does not end where it was left.)
+      await page.evaluate(() => {
+        const log = window.__scrollLog = [];
+        const at = () => (new Error().stack || '').split('\n').slice(2, 4).map((l) => l.trim().replace(/^at /, '').replace(location.origin, '')).join(' < ');
+        const scrollTo = window.scrollTo.bind(window);
+        window.scrollTo = (...args) => { log.push(`scrollTo(${args.map((x) => typeof x === 'object' ? JSON.stringify(x) : x).join(',')}) ${at()}`); return scrollTo(...args); };
+        const focus = HTMLElement.prototype.focus;
+        HTMLElement.prototype.focus = function (o) { log.push(`focus ${this.id || this.className}${o?.preventScroll ? ' (no scroll)' : ''}`); return focus.call(this, o); };
+        const into = Element.prototype.scrollIntoView;
+        Element.prototype.scrollIntoView = function (o) { log.push(`scrollIntoView ${this.id || this.className}`); return into.call(this, o); };
+        window.addEventListener('scroll', () => { if (log.length < 40) log.push(`y ${Math.round(scrollY)} idx ${history.state?.idx}`); }, { passive: true });
+      });
       await page.click('#pod-show .back-link');
       await page.waitForSelector('#pod-home:not(.hidden)');
       await page.waitForTimeout(600);
       vt = await vts();
       const popped = await page.evaluate(() => ({ hash: location.hash, y: Math.round(window.scrollY) }));
+      const scrollLog = await page.evaluate(() => (window.__scrollLog || []).slice(0, 16));
       check(!hasVT || (vt.length === 1 && vt[0].kind === 'pop' && vt[0].ran), `the back link pops it, in a view transition (${JSON.stringify(vt)})`);
-      check(popped.hash === '#/' && popped.y === 90, `and Listen comes back where it was scrolled to, the step back in history taken (${JSON.stringify(popped)})`);
+      check(popped.hash === '#/' && popped.y === 90, `and Listen comes back where it was scrolled to, the step back in history taken (${JSON.stringify(popped)})${popped.y === 90 ? '' : `\n      ${scrollLog.join('\n      ')}`}`);
       await page.click(mobile ? '#tabbar [data-nav=queue]' : '#nav [data-nav=queue]');
       await page.waitForSelector('#pod-queue:not(.hidden)');
       await page.waitForTimeout(300);
@@ -980,8 +993,9 @@ async function run(name, options) {
       await page.evaluate(() => document.querySelector('.ep-sheet .sheet-top .icon-btn').focus());
       const [frames] = await Promise.all([watch(), page.keyboard.press('Enter')]);
       const moving = frames.filter((f) => !f.hidden && (mobile ? f.y : f.x) > 1);
+      const motionWas = await page.evaluate(() => ({ busy: document.body.classList.contains('busy'), reduced: matchMedia('(prefers-reduced-motion: reduce)').matches }));
       const gone = await page.evaluate(() => ({ hidden: document.querySelector('#sheet').classList.contains('hidden') && document.querySelector('#sheet-back').classList.contains('hidden'), empty: !document.querySelector('#sheet').firstChild, closing: !!document.querySelector('.closing'), focus: document.activeElement?.closest('.ep')?.querySelector('.ep-title')?.textContent }));
-      check(moving.length >= (WEBKIT ? 1 : 2) && frames.at(-1).hidden && gone.hidden && gone.empty && !gone.closing, `a closed sheet goes back to the ${mobile ? 'bottom' : 'right'} edge and is then gone (${moving.length} frames on the way)`);
+      check(moving.length >= (WEBKIT ? 1 : 2) && frames.at(-1).hidden && gone.hidden && gone.empty && !gone.closing, `a closed sheet goes back to the ${mobile ? 'bottom' : 'right'} edge and is then gone (${moving.length} frames on the way${moving.length >= (WEBKIT ? 1 : 2) ? '' : `; ${frames.length} seen, first ${JSON.stringify(frames[0])}, last ${JSON.stringify(frames.at(-1))}, ${JSON.stringify(motionWas)}`})`);
       check(gone.focus === 'The pilot who boards at night', `and the focus is back on what opened it (${gone.focus})`);
       // Closed with the browser's back (or a home-screen app's back gesture, which draws no way
       // back of its own), it is closed at once and goes down; where the browser has drawn the
@@ -1058,7 +1072,13 @@ async function run(name, options) {
         const near = (a, b) => !!a && !!b && a.every((v, i) => Math.abs(v - b[i]) <= 3);
         const barTop = await page.evaluate(() => Math.round(document.querySelector('#playbar').getBoundingClientRect().top));
         const up = await grow('open');
-        check(near(up.seen[0]?.art, up.bar) && Math.abs(up.seen[0].top - barTop) <= 3 && up.seen.at(-1).art[2] > up.bar[2] * 2, `tapped, the player bar grows into the player: the sheet from the bar's top, its cover from the bar's (${JSON.stringify(up.seen[0])}, the bar's cover ${up.bar}) to ${up.seen.at(-1).art[2]} px`);
+        const motionThen = await page.evaluate(() => ({ busy: document.body.classList.contains('busy'), frames: 0 }));
+        motionThen.frames = up.seen.length;
+        // (An engine may call the first frame back once the motion has drawn one: the first seen
+        // is then a frame's way, some 30 px, from the bar, where a sheet coming up from the bottom
+        // of the screen would be over 100 px from it, its cover at full size.)
+        const started = (f) => !!f?.art && f.art.every((v, i) => Math.abs(v - up.bar[i]) <= (i === 2 ? 8 : 30)) && f.top <= barTop + 3 && f.top >= barTop - 30;
+        check((near(up.seen[0]?.art, up.bar) && Math.abs(up.seen[0].top - barTop) <= 3 || started(up.seen[0])) && up.seen.at(-1).art[2] > up.bar[2] * 2, `tapped, the player bar grows into the player: the sheet from the bar's top, its cover from the bar's (${JSON.stringify(up.seen[0])}, the bar's cover ${up.bar}, the bar's top ${barTop}) to ${up.seen.at(-1).art[2]} px; ${JSON.stringify(motionThen)}, then ${JSON.stringify(up.seen.slice(1, 4))}`);
         await page.waitForTimeout(300);
         const down = await grow('close');
         const last = down.seen.filter((x) => x.art).at(-1);
