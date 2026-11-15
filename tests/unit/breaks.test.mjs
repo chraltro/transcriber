@@ -99,3 +99,65 @@ test('the player jumps over a break unless the listener went back into it', () =
   assert.deepEqual(skipAt(breaks, 950, 0), { index: 1, to: 1000 });
   assert.equal(skipAt(null, 10), null);
 });
+
+// The opening of a Pod Save America episode as it was transcribed (Nov 2026), where nothing was
+// skipped: a 2-minute read with its cues at both ends and its own sign-off, then an announcer's
+// spot of which only the second half is worded like an ad, then a spot in a passing voice.
+const SIMPLISAFE = "Today's presenting sponsor is SimpliSafe Home Security. If you're hosting Thanksgiving this year, your home will soon be packed with family and way too much food. With SimpliSafe protecting what matters most, you can focus on enjoying your guests instead of stressing. Right now, lock in peace of mind before the holidays with 70% off their Black Friday sale at simplisafe.com slash crooked. Unlike traditional security systems that only alert you after a break-in is already underway, SimpliSafe is built to stop it before it starts. Smart, AI-powered cameras watch for potential threats and alert a live, U.S.-based agent ready to intervene. The agent intervenes in under 30 seconds, speaking through the camera to stop an intruder in their tracks and calling for urgent 911 dispatch when it's needed most. Our CEO recently got SimpliSafe. She Lovett it. She thought its setup was super easy, took a couple hours. Now she's got the app on her phone. She likes that it's very easy to arm and disarm. The system is reliable through power outages. It reconnects automatically without needing to call customer support. So she's very happy and so is everyone who's used SimpliSafe that we know. We've partnered with SimpliSafe to offer our listeners the biggest savings of the year, 70% off your new system. With professional monitoring, when you visit SimpliSafe.com slash crooked, that's SimpliSafe.com slash crooked. And when you order, type in Pod Save America at checkout. It lets them know we sent you and it really helps the show.";
+const SIGN_OFF = 'SimpliSafe, ahead of crime, in real time.';
+const BUNDLE = 'The Disney Plus Hulu HBO Max Bundle, the best in entertainment in one bundle. This is going to be a good time. With new seasons of your favorites, like Percy Jackson and the Olympians on Disney Plus. Do you ever get used to all this? Nope. The Scandalous Alls Fair on Hulu. Let\'s give these girls a show. And the high society drama of the HBO original, The Gilded Age on HBO Max. What have I gotten myself into? Streaming this month. Plans starting at $21.99 a month. Terms apply. Visit Disney Plus Hulu Max Bundle dot com for details.';
+const VRBO = 'Looking for the best of Verbo? Discover vacation rentals of the year topped quality homes guests Lovett from across the country. Our curated list takes the guesswork out of planning so you can spend less time searching and more time packing. Book your next day now with Verbo video.';
+const sentencesOf = (text) => text.match(/[^.!?]+[.!?]+/g).map((x) => x.trim());
+
+test('a long read, its sign-off, an announcer\'s spot worded as an ad only halfway, and a passing spot are one break, up to the host', () => {
+  reset();
+  const lines = [];
+  for (const x of sentencesOf(SIMPLISAFE)) lines.push(say(x, 0, { gap: 0.2 }));
+  lines.push(say(SIGN_OFF, 0, { pause: true }));
+  for (const x of sentencesOf(BUNDLE)) lines.push(say(x, 1, { gap: 0.2 }));
+  for (const x of sentencesOf(VRBO)) lines.push(say(x, 2, { gap: 0.2 }));
+  const host = say("Welcome to Pod Save America. I'm Dan Pfeiffer. Today you'll hear from the people running the shutdown fight.", 3, { gap: 0.8 });
+  const show = [host];
+  for (let i = 0; i < 300; i++) show.push(say(i % 2 ? 'And the thing about the Senate is that nobody wants to go first on this.' : 'So let us talk about what happened in Washington this week, because a lot did.', i % 5 < 3 ? 3 : 4));
+  const breaks = adBreaks([...lines, ...show], { minor: new Set([2]) });
+  assert.equal(breaks.length, 1, JSON.stringify(breaks));
+  assert.ok(breaks[0][0] <= 0.5 && Math.abs(breaks[0][1] - host.start) <= 1, `${JSON.stringify(breaks)} vs the host at ${host.start.toFixed(1)}`);
+});
+
+test('show talk between two reads in the same voice stays in when it does not name what they sell', () => {
+  reset();
+  const lines = [say('So that is where the shutdown fight stands this morning.', 0)];
+  const read1 = [say('This episode is brought to you by Helix. Helix makes mattresses matched to how you sleep.', 0, { pause: true }), say('Go to helixsleep.com/crooked for 20% off. Helix, sleep better.')];
+  const talk = [];
+  for (let i = 0; i < 14; i++) talk.push(say(i ? 'The vote count matters less than who blinks first, and nobody in that room wants to be the one who blinks.' : 'Okay, back to the Senate, because the vote is tonight.', 0, { pause: i === 0 }));
+  const read2 = [say('Support for this show comes from Mint Mobile. Plans start at 15 dollars a month.', 0, { pause: true }), say('Switch at mintmobile.com/crooked. Terms apply.')];
+  const after = [say('And we are back with Tommy.', 0, { pause: true }), say('Thanks, it was a long week.', 1)];
+  const breaks = adBreaks([...lines, ...read1, ...talk, ...read2, ...after]);
+  for (const s of talk) assert.equal(breakAt(breaks, (s.start + s.end) / 2), -1, `${JSON.stringify(breaks)}: "${s.text}" at ${s.start.toFixed(1)}`);
+  assert.equal(breaks.length, 2, JSON.stringify(breaks));
+});
+
+test('a clip in a voice heard nowhere else, right before a read, is not taken into it', () => {
+  reset();
+  const lines = [say('Here is what the Speaker said on Sunday.', 0)];
+  const clip = [say('We are not going to negotiate with anybody until the government is open again, period.', 5, { gap: 0.5 }), say('That is the position of the House, and it will be tomorrow too.', 5)];
+  const read = [say('This episode is brought to you by Helix. Helix makes mattresses matched to how you sleep.', 0, { gap: 0.5 }), say('Go to helixsleep.com/crooked for 20% off.')];
+  const after = [say('Okay, so what do we make of that clip?', 0, { pause: true }), say('It is a bluff, mostly.', 1)];
+  const breaks = adBreaks([...lines, ...clip, ...read, ...after]);
+  for (const s of clip) assert.equal(breakAt(breaks, (s.start + s.end) / 2), -1, `${JSON.stringify(breaks)}: the clip at ${s.start.toFixed(1)}`);
+  assert.equal(breaks.length, 1, JSON.stringify(breaks));
+});
+
+test('news talk with an ad\'s words in it is not an ad', () => {
+  for (const t of [
+    'Consumers will see the tariff at checkout, and that is the point.',
+    'The administration partnered with Intel to bring chip plants back to Ohio.',
+    'He was the presenting sponsor of the bill, and the main sponsor of two more.',
+    'We want to give our listeners a sense of how close this race really is.',
+  ]) assert.equal(isAd(t), false, t);
+  for (const t of [
+    "Today's presenting sponsor is SimpliSafe Home Security.",
+    "We've partnered with SimpliSafe to offer our listeners the biggest savings of the year.",
+    'And when you order, type in Pod Save America at checkout.',
+  ]) assert.equal(isAd(t), true, t);
+});
