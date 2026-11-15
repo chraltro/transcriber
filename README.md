@@ -30,9 +30,13 @@ Tabs held under the top bar. With a transcript open: Transcript (playing, search
 
 ## How it looks and moves
 
-`DESIGN.md` has the direction (the score), its principles and measurements, and the list of what stays out. In short: every mark stands for something measured, the score is the one showpiece, and motion is drawing or travel, once.
+`DESIGN.md` has the direction (the score), its principles and measurements, and the list of what stays out. In short: every mark stands for something measured, the score is the one showpiece, and motion says where a thing came from and went.
 
-Three steps of timing in `style.css` (`--t-press` 120 ms for a press or a switch, `--t-pop` 200 ms for a menu or a toast, `--t-move` 320 ms for a sheet or a value drawing in), and going away takes the step below. Screens change at once; a sheet comes in from its edge (the bottom on a phone, the right on a desktop) and goes back to it, except when the browser's back closes it, which is instant. A show's cover travels from Listen to the show's page where the browser has view transitions. An episode's played part draws in once when a list first shows it, and a search hit carries a tick showing where in the episode it is. On a phone every control reaches at least 44 px both ways, and `tests/pod.mjs` checks that on each screen.
+Screens move as an iPhone's do: going deeper (a show's page, Find a show) pushes the new screen in from the right over the old one, going back pops it the other way and leaves it scrolled where it was, and the sections along the bottom cross-fade; this is the browser's view transitions, and where there are none, or motion is turned down, screens change at once. A sheet comes up as an iOS card, the page behind it giving way (smaller, rounded, dimmed); it follows a finger down, closes on a flick, and the player bar grows into the player and shrinks back into it. The bars along the top and bottom are translucent with the page blurred under them.
+
+Small things move as on an iPhone too (`ui/motion.js`, `ui/gestures.js`): what is pressed gives way under the finger and springs back, a row taken out of a list closes up while the rest move into place, and a Carry on episode follows the finger and springs open, shut or away. Pulled down from the top, Listen looks for new episodes.
+
+The springs are `--spring`, `--spring-small` and `--spring-snappy` in `style.css`, written as `linear()` with `--ease` as the fallback: 420 ms for a sheet or a pushed screen, a little less going back, 260 ms for a menu or a toast, 100 ms down and 220 ms up for a press. An episode's played part draws in once when a list first shows it, and a search hit carries a tick showing where in the episode it is. On a phone every control reaches at least 44 px both ways, and `tests/pod.mjs` checks that on each screen.
 
 ## On an iPhone
 

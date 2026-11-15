@@ -74,14 +74,12 @@
   --bar: 0px;  /* the player along the bottom, when an episode is in it */
   --tabs: 0px;  /* the sections along the bottom, on narrow screens */
   --tx-band: 0px;  /* the transcript side's tabs, held under the top bar (body.tx-tabbed) */
-  /* springs (DESIGN.md): --spring settles without overshoot (damping 0.9), --spring-snappy with
-     a touch of it (0.72), for small things; --ease where a browser has no linear() */
-  --spring: var(--ease);
+  /* --spring-snappy has a touch of overshoot (damping 0.72), for presses, switches, menus and
+     toasts; --ease where a browser has no linear(). --spring is with the screens' springs below. */
   --spring-snappy: var(--ease);
 }
 @supports (transition-timing-function: linear(0, 1)) {
   :root {
-    --spring: linear(0, 0.008 1.6%, 0.041 3.7%, 0.1 6.1%, 0.179 8.8%, 0.272 11.6%, 0.371 14.6%, 0.47 17.7%, 0.563 20.9%, 0.649 24.2%, 0.724 27.6%, 0.788 31.1%, 0.841 34.7%, 0.883 38.3%, 0.917 42%, 0.942 45.8%, 0.961 49.7%, 0.975 53.6%, 0.985 57.6%, 0.992 61.6%, 0.996 65.7%, 0.999 69.8%, 1 74%, 1.001 78.2%, 1.001 82.5%, 1.002 86.8%, 1.001 91.2%, 1.001 95.6%, 1);
     --spring-snappy: linear(0, 0.011 1.6%, 0.057 3.7%, 0.139 6.1%, 0.249 8.8%, 0.375 11.6%, 0.506 14.6%, 0.632 17.7%, 0.744 20.9%, 0.838 24.2%, 0.913 27.6%, 0.967 31.1%, 1.004 34.7%, 1.026 38.3%, 1.036 42%, 1.038 45.8%, 1.035 49.7%, 1.03 53.6%, 1.023 57.6%, 1.016 61.6%, 1.01 65.7%, 1.006 69.8%, 1.003 74%, 1 78.2%, 0.999 82.5%, 0.999 86.8%, 0.999 91.2%, 0.999 95.6%, 1);
   }
 }
