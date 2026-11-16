@@ -1667,13 +1667,16 @@ a.sheet-show:hover { color: var(--text); }
 .chapter-more { justify-self: start; }
 .ext { display: inline-flex; align-items: center; gap: 6px; justify-self: start; font-size: 13px; color: var(--muted); }
 
-.np { display: grid; gap: 14px; }
+/* (One column, never wider than the sheet: a grid's own column grows to its widest piece's
+   least width, and the line under the score, kept to one line, would make that a long chapter
+   name's whole length, pushing everything off to the right.) */
+.np { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .np-art { --size: 232px; width: min(232px, 62vw); justify-self: center; margin: 2px 0 4px; }
 .np-show { margin: 0; text-align: center; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .np-title { text-align: center; font-size: 1.22rem; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 /* the score, the line under it (who is speaking, which chapter, and the way to the one before
    and after) and the clock: one block, spaced as the mock-up it was picked from */
-.np-score { position: relative; display: grid; margin-top: 32px; }
+.np-score { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); margin-top: 32px; }
 .np-strip { --score-bg: var(--panel); }
 .np-now { display: flex; align-items: center; gap: 8px; height: 18px; margin-top: 12px; }
 .np-now-text { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; line-height: 18px; color: var(--muted); white-space: nowrap; overflow: hidden; }

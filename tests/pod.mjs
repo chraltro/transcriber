@@ -74,9 +74,14 @@ async function device(browser, world, name, options) {
   page.on('requestfailed', (r) => { if (!/audio|\.wav|\.mp3|itunes/.test(r.url())) console.log(`  [request failed] ${r.url().slice(0, 120)} ${r.failure()?.errorText || ''}`); });
   page.on('console', (m) => { if (/^player: /.test(m.text())) console.log(`  [page] ${m.text()}`); if (m.type() === 'error' && !/Failed to load resource|net::ERR_|blocked by CORS policy/.test(m.text()) && !refused.test(m.text())) errors.push(m.text()); });
   const shot = (state) => page.screenshot({ path: join(SHOTS, `pod-${name}-${state}.png`) });
+  // (The page, and an open sheet: a sheet scrolls on its own, over the page, so it can be too
+  // wide while the page is not.)
   const noSideScroll = async (state) => {
-    const [w, sw] = await page.evaluate(() => [window.innerWidth, document.documentElement.scrollWidth]);
-    check(sw <= w + 1, `${state}: no sideways scrolling (${sw} px of ${w})`);
+    const [w, sw, sheet] = await page.evaluate(() => {
+      const p = document.querySelector('#sheet:not(.hidden)');
+      return [window.innerWidth, document.documentElement.scrollWidth, p ? [p.clientWidth, p.scrollWidth] : null];
+    });
+    check(sw <= w + 1 && (!sheet || sheet[1] <= sheet[0] + 1), `${state}: no sideways scrolling (${sw} px of ${w}${sheet ? `; the sheet ${sheet[1]} px of ${sheet[0]}` : ''})`);
   };
   const audio = () => page.evaluate(() => { const a = document.querySelector('#audio'); return { t: a.currentTime, paused: a.paused, src: a.currentSrc, rate: a.playbackRate, d: a.duration }; });
   const playing = (min = 0.5, timeout = 15000) => page.waitForFunction((m) => { const a = document.querySelector('#audio'); return !a.paused && a.currentTime > m; }, min, { timeout });
@@ -358,6 +363,20 @@ async function run(name, options) {
       s = await score();
       check(s.open && s.name === 'Storm surges' && s.time === '2:40' && s.line === 'Storm surges', `the magnifier names the chapter under the finger (${s.name}, ${s.time})`);
       await shot('6e-score-chapters');
+      // A long title and a long chapter name (an episode of the Dwarkesh Podcast, Nov 2026): the
+      // sheet stays as wide as the screen, the line under the score cut short instead.
+      const kept = await page.evaluate(() => {
+        const t = document.querySelector('.np-title');
+        const c = document.querySelector('.np-chapter-title');
+        const was = [t.textContent, c.textContent];
+        t.textContent = 'Paul Christiano – We could be 12 months away from AIs that can overthrow the government';
+        c.textContent = 'We could be 12 months away from AIs that can overthrow the government, and nobody would notice until afterwards';
+        return was;
+      });
+      await page.waitForTimeout(100);
+      await noSideScroll('the player with a long title and chapter');
+      if (mobile) await shot('6e-score-long-chapter');
+      await page.evaluate((was) => { document.querySelector('.np-title').textContent = was[0]; document.querySelector('.np-chapter-title').textContent = was[1]; }, kept);
       // (Back to the start before lifting: this episode is not to look started.)
       await chapterFinger.to(0);
       await chapterFinger.lift();
