@@ -165,7 +165,7 @@ async function work() {
   try {
     while (state.queue.length) {
       const ep = state.queue[0];
-      current = { id: ep.id, title: ep.title, show: ep.show, position: 0, total: ep.duration || 0, elapsed: 0, startedAt: Date.now() };
+      current = { id: ep.id, title: ep.title, show: ep.show, step: 'downloading', position: 0, total: ep.duration || 0, elapsed: 0, startedAt: Date.now() };
       await writeStatus();
       log(`transcribing ${ep.show}: ${ep.title}`);
       try {
@@ -175,7 +175,7 @@ async function work() {
         const entry = await transcribeEpisode(ep, m, {
           tmpFile: path.join(DATA, 'episode.audio'),
           onProgress: ({ position, elapsed }) => {
-            Object.assign(current, { position, elapsed });
+            Object.assign(current, { step: 'transcribing', position, elapsed });
             if (Date.now() - lastWrite > 15000) { lastWrite = Date.now(); writeStatus(); }
             if (Date.now() - lastLog > 300000) {
               lastLog = Date.now();

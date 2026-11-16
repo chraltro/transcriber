@@ -1637,6 +1637,8 @@ a.sheet-show:hover { color: var(--text); }
 .sheet-art { --size: 88px; width: 88px; }
 .sheet-head h2 { font-size: 1.2rem; overflow-wrap: anywhere; }
 .sheet-meta { margin: 8px 0 0; font: 11.5px var(--font-mono); letter-spacing: 0.03em; color: var(--muted); }
+/* where the server is with this episode's transcript (lib/serverjob.js) */
+.sheet-job { margin: 0; padding: 10px 12px; border-left: 2px solid var(--teal); background: var(--panel-2); border-radius: var(--r-sm); font-size: 13.5px; line-height: 1.45; color: var(--text); }
 .sheet-actions { margin-top: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .sheet-actions .btn { height: 44px; min-width: 0; padding: 0 12px; justify-content: flex-start; }
 .sheet-actions .btn > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

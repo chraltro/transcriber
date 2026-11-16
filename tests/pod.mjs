@@ -4,7 +4,7 @@
 // episode saved and played without a connection, and the transcript side joined to the player.
 // Screenshots of each state go to ui-shots/.
 import { chromium, webkit, devices } from 'playwright';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startWorld, SHOWS, episodeIdOf } from './pod-world.mjs';
 import { makeKeys, decrypt } from '../server/push.mjs';
@@ -183,6 +183,42 @@ async function run(name, options) {
     const fjord = todo.shows.find((s) => s.name === 'Fjordfunn');
     check(fjord?.fresh === true && fjord.backfill === 3 && fjord.lang === 'norwegian', `the workflow is told to transcribe the show's new episodes and its last three (${JSON.stringify(fjord)})`);
     check(todo.episodes.length === 1 && todo.episodes[0].title === 'Kaldtvannskorallene' && todo.episodes[0].feedUrl === world.feedUrl('fjord'), `and the one episode that was asked for (${todo.episodes.map((e) => e.title).join()})`);
+
+    /* ---------- how far the server is with them ---------- */
+    // The transcribing run writes library/status.json every minute (server/ci.mjs); the app looks
+    // at it every minute while in sight, and at once when it comes back into sight.
+    {
+      const rows = await page.evaluate(() => [...document.querySelectorAll('#show-list .ep')].map((li) => ({ id: li.dataset.id, title: li.querySelector('.ep-title').textContent })));
+      const asked = rows.find((r) => r.title === 'Kaldtvannskorallene');
+      const next = rows.find((r) => r.title !== 'Kaldtvannskorallene');
+      const report = (current, queue, ago = 20e3) => writeFile(join(world.data, 'library', 'status.json'), JSON.stringify({ updatedAt: Date.now() - ago, model: 'turbo', current, queue }));
+      const look = () => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      const tagOf = (title) => page.evaluate((t) => [...document.querySelectorAll('#show-list .ep')].find((li) => li.querySelector('.ep-title').textContent === t)?.querySelector('.tag')?.textContent || '', title);
+      await report({ id: asked.id, title: asked.title, show: 'Fjordfunn', step: 'transcribing', position: 1260, total: 2520, elapsed: 840 }, [{ id: next.id, title: next.title, show: 'Fjordfunn' }]);
+      await look();
+      await page.waitForFunction((t) => [...document.querySelectorAll('#show-list .ep')].some((li) => li.querySelector('.ep-title').textContent === t && /Transcribing/.test(li.textContent)), asked.title, { timeout: 5000 }).catch(() => {});
+      const onIt = await tagOf(asked.title);
+      const inLine = await tagOf(next.title);
+      check(onIt === 'Transcribing 50%' && inLine === 'Transcript in line, 1 ahead', `the rows say how far the server is with a transcript, and which wait (${onIt}; ${inLine})`);
+      await page.locator('#show-list .ep', { hasText: 'Kaldtvannskorallene' }).locator('.ep-main').click();
+      await page.waitForSelector('.ep-sheet .sheet-job:not(.hidden)');
+      const said = await page.locator('.ep-sheet .sheet-job').textContent();
+      check(said === 'The server is transcribing this: 50% done, about 15 min left.', `and the episode's sheet how far, and about how long is left (${said})`);
+      // Moving on while the sheet is open, the sheet follows.
+      await report({ id: asked.id, title: asked.title, show: 'Fjordfunn', step: 'uploading', position: 2520, total: 2520, elapsed: 1700 }, [{ id: next.id }]);
+      await look();
+      await page.waitForFunction(() => /ready in a minute/.test(document.querySelector('.ep-sheet .sheet-job')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
+      check(/sending it over: ready in a minute/.test(await page.locator('.ep-sheet .sheet-job').textContent()), 'and it follows the server as it moves on');
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('.ep-sheet', { state: 'detached' });
+      await shot('3b-show-transcribing');
+      // A run that stopped writing long ago (it ended without saying so) is not believed.
+      await report({ id: asked.id, step: 'transcribing', position: 100, total: 2520, elapsed: 60 }, [{ id: next.id }], 11 * 60e3);
+      await look();
+      await page.waitForFunction((t) => [...document.querySelectorAll('#show-list .ep')].some((li) => li.querySelector('.ep-title').textContent === t && /asked for/.test(li.textContent)), asked.title, { timeout: 5000 }).catch(() => {});
+      check((await tagOf(asked.title)) === 'Transcript asked for' && (await tagOf(next.title)) === '', `a report not written to for ten minutes is not believed (${await tagOf(asked.title)})`);
+      await report(null, []);
+    }
 
     /* ---------- what is new ---------- */
     await page.click(mobile ? '#tabbar [data-nav=listen]' : '#nav [data-nav=listen]');

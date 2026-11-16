@@ -74,7 +74,7 @@ A static copy (GitHub Pages) has no server: everything stays in the browser, and
 
 ## Transcripts on the server
 
-A followed show's page has **Transcribe new episodes** and **And the last** N, which goes back for older ones. Any episode has **Transcribe on the server**.
+A followed show's page has **Transcribe new episodes** and **And the last** N, which goes back for older ones. Any episode has **Transcribe on the server**. While the server works, an episode's row says how far it is ("Transcribing 42%", or "Transcript in line, 2 ahead"), its sheet says about how long is left, and so does the player's transcript button: the transcribing run writes `library/status.json` every minute (`server/ci.mjs`), the app reads it every minute while in sight (`lib/serverjob.js`), and a report not written to for ten minutes is not believed.
 
 The work runs on GitHub's runners (`.github/workflows/shows.yml`, `server/ci.mjs`, `server/plan.mjs`). Each run reads `/api/pod/transcribe` (which answers the workflow's GitHub token or the library's key, nobody else) and does new episodes first, then single requests, then the backfill. The five shows in `server/shows.mjs` are followed from the start, with Transcribe new episodes on.
 

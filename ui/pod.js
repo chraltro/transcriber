@@ -9,6 +9,7 @@ import { CHOICES } from '../lib/autosave.js';
 import { longPress, swipeActions, pullToRefresh } from './gestures.js';
 import { snapshot, swapIcon, closeUp, openUp } from './motion.js';
 import { notifyCard } from './notify.js';
+import { jobTag, jobText } from '../lib/serverjob.js';
 
 const $ = (id) => document.getElementById(id);
 const PAGE = 60;
@@ -56,6 +57,13 @@ export class Pod {
       const got = e.detail.arrived || [];
       if (got.length) this.toast(got.length === 1 ? `Transcript ready: ${got[0]}` : `${got.length} transcripts are ready`);
     });
+    // Where the server is with its transcripts: asked for every minute while the app is in sight
+    // (the transcribing run writes it every minute), and at once when it comes back into sight.
+    store.addEventListener('status', () => { this.paintRows(); this.episodeActions?.(); });
+    const lookAtServer = () => { if (document.visibilityState === 'visible' && store.server?.linked) store.loadStatus(); };
+    setInterval(lookAtServer, 60e3);
+    document.addEventListener('visibilitychange', lookAtServer);
+    store.addEventListener('link', lookAtServer);
     store.addEventListener('link', () => { this.status(); if (this.view === 'settings') this.settings(); if (this.view === 'home') this.home(); });
     store.addEventListener('sync', () => this.status());
     player.addEventListener('item', () => { this.paintRows(); this.counts(); if (this.view === 'queue') this.queue(); if (this.view === 'home') this.drawStarted(); });
@@ -343,7 +351,9 @@ export class Pod {
     const meta = li.querySelector('.ep-meta');
     // (Each part with the dot after it is one piece, so a line that wraps never starts with a dot.)
     meta.replaceChildren(...bits.map((b, i) => h('span.bit', { text: i < bits.length - 1 ? `${b} · ` : b })));
+    const job = this.transcriptOf(ep) ? null : store.job(ep.id);
     if (this.transcriptOf(ep)) meta.append(h('span.tag', { text: 'Transcript' }));
+    else if (job) meta.append(h(job.step ? 'span.tag.hot' : 'span.tag', { text: jobTag(job) }));
     else if (store.wanted(ep.id)) meta.append(h('span.tag', { text: 'Transcript asked for' }));
     if (saving != null) meta.append(h('span.tag.hot', { text: `Saving ${Math.round(saving * 100)}%` }));
     else if (downloads.has(ep.id)) meta.append(h('span.tag', { text: 'Saved' }));
@@ -1064,6 +1074,11 @@ export class Pod {
       const saving = downloads.progress(ep.id);
       const d = prog?.d || ep.duration || 0;
       sheet.querySelector('.sheet-meta').textContent = [whenText(ep.published), lengthText(ep.duration), status === 'done' ? 'Played' : status === 'started' ? leftText(now ? player.time : prog.p, d) : ''].filter(Boolean).join(' · ');
+      // Where the server is with its transcript, while it is on it or it waits.
+      const job = this.transcriptOf(ep) ? null : store.job(ep.id);
+      const said = jobText(job) || (store.wanted(ep.id) ? 'Asked for: the server picks it up at its next run, every half hour.' : '');
+      jobLine.textContent = said;
+      jobLine.classList.toggle('hidden', !said);
       actions.replaceChildren(...[
         h('button.btn.primary', { type: 'button', onclick: () => this.playOrPause(ep) }, icon(playing ? 'pause' : 'play'), h('span', { text: playing ? 'Pause' : status === 'started' ? 'Carry on' : status === 'done' ? 'Play again' : 'Play' })),
         store.queued(ep.id) && !now
@@ -1080,12 +1095,13 @@ export class Pod {
       ].filter(Boolean));
     };
     const art = h('div.art.sheet-art');
+    const jobLine = h('p.sheet-job.hidden', { 'aria-live': 'polite' });
     const sheet = h('div.ep-sheet', {},
       h('div.sheet-top', {},
         ep.sub && store.show(ep.sub) ? h('a.kicker.sheet-show', { href: `#/show/${ep.sub}`, text: ep.show || 'Show' }) : h('p.kicker', { text: ep.show || 'Episode' }),
         h('button.icon-btn', { type: 'button', 'aria-label': 'Close', onclick: () => closeSheet() }, icon('x'))),
       h('div.sheet-head', {}, art, h('div', {}, h('h2', { id: 'sheet-title', text: ep.title }), h('p.sheet-meta'))),
-      actions, tabs, chapters, notes,
+      jobLine, actions, tabs, chapters, notes,
       ep.link && /^https?:/.test(ep.link) ? h('a.ext', { href: ep.link, target: '_blank', rel: 'noopener noreferrer' }, icon('external'), h('span', { text: 'The episode\'s own page' })) : null);
     this.artInto(art, ep);
     this.episodeActions = draw;

@@ -7,6 +7,7 @@ import * as S from '../lib/podstate.js';
 import { parseFeed, episodeId, appLanguage } from '../lib/feed.js';
 import { tidy, fromNotes } from '../lib/chapters.js';
 import { getFeed, putFeed, dropFeed } from './library.js';
+import { freshStatus, serverJob } from '../lib/serverjob.js';
 
 const DOC = 'pod';
 const META = 'pod-meta';
@@ -301,6 +302,24 @@ export class PodStore extends EventTarget {
     this.emit('transcripts', { arrived: arrived.map((w) => w.title || this.transcripts.get(w.id).title) });
     return this.transcripts;
   }
+
+  /* ---------- what the server is transcribing ---------- */
+
+  // library/status.json (lib/serverjob.js): the episode the server is on, and the ones waiting.
+  async loadStatus() {
+    let status = null;
+    try {
+      const res = await fetch('library/status.json', { cache: 'no-cache' });
+      if (res.ok && /json/.test(res.headers.get('content-type') || '')) status = await res.json();
+    } catch {}
+    const was = this.serverStatus?.current?.id || null;
+    this.serverStatus = freshStatus(status);
+    this.emit('status');
+    // One finished (or the run ended): its transcript is in the library now.
+    if (was && was !== (this.serverStatus?.current?.id || null)) this.loadTranscripts().catch(() => {});
+  }
+
+  job(id) { return this.transcripts?.has(id) ? null : serverJob(this.serverStatus, id); }
 
   /* ---------- feeds ---------- */
 

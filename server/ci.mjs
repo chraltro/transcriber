@@ -159,21 +159,24 @@ for (const [i, ep] of queue.entries()) {
     continue;
   }
   const waiting = queue.slice(i + 1).map(({ id, title, show, published }) => ({ id, title, show, published }));
-  const current = { id: ep.id, title: ep.title, show: ep.show, position: 0, total: ep.duration || 0, startedAt: Date.now() };
+  // (What the app shows of it, lib/serverjob.js: the step, how far, at what pace; every minute.)
+  const current = { id: ep.id, title: ep.title, show: ep.show, step: 'downloading', position: 0, total: ep.duration || 0, startedAt: Date.now() };
   await status({ current, queue: waiting });
   log(`transcribing ${ep.show}: ${ep.title} (${Math.round((ep.duration || 0) / 60)} min)`);
   const tmpFile = path.join(os.tmpdir(), `${ep.id}.audio`);
   try {
-    let last = Date.now();
+    let last = 0;
+    let logged = Date.now();
     const entry = await transcribeEpisode(ep, models, {
       tmpFile,
       onProgress: ({ position, elapsed }) => {
-        if (Date.now() - last < 120000) return;
+        if (Date.now() - last < 60000) return;
         last = Date.now();
-        log(`  ${Math.round(position / 60)} min in, ${(position / Math.max(1, elapsed)).toFixed(2)}x realtime`);
-        status({ current: { ...current, position, elapsed }, queue: waiting });
+        if (last - logged >= 120000) { logged = last; log(`  ${Math.round(position / 60)} min in, ${(position / Math.max(1, elapsed)).toFixed(2)}x realtime`); }
+        status({ current: { ...current, step: 'transcribing', total: current.total || position, position, elapsed }, queue: waiting });
       },
     });
+    await status({ current: { ...current, step: 'uploading', total: entry.total || current.total, position: entry.total || current.total, elapsed: entry.took }, queue: waiting });
     const audioName = `${entry.id}.${entry.audioExt}`;
     delete entry.audioExt;
     entry.fixes = FIXES;

@@ -10,6 +10,7 @@ import { voiceAt } from '../lib/shape.js';
 import { Score } from './score.js';
 import { cutSeconds } from '../lib/quiet.js';
 import { swapIcon, swapText } from './motion.js';
+import { jobTag, jobText } from '../lib/serverjob.js';
 
 const $ = (id) => document.getElementById(id);
 // The row of buttons in the sheet, each opening its control in a panel under the row. (An iPhone
@@ -47,6 +48,8 @@ export class PlayerUI {
     player.addEventListener('skipped', (e) => toast(`Skipped ${fmtTime(e.detail.seconds)} of ads`, { label: 'Undo', run: () => player.undoSkip() }));
     player.addEventListener('blocked', () => toast('Tap play once more to start'));
     player.addEventListener('error', (e) => toast(e.detail.message));
+    store.addEventListener('status', () => this.transcriptButton());
+    store.addEventListener('transcripts', () => this.transcriptButton());
     store.addEventListener('change', (e) => {
       const keys = e.detail.keys || [];
       if (keys.includes('settings') || keys.some((k) => k.startsWith('subs/'))) { this.rate(); this.jumps(); this.trims(); this.ads(); }
@@ -349,7 +352,13 @@ export class PlayerUI {
 
       // What else there is to do with it: three buttons side by side.
       h('div.np-actions', {},
-        h('button.btn.ghost.np-transcript', { type: 'button', onclick: () => { const it = player.item; closeSheet({ then: () => this.openTranscript(it) }); } }, icon('lines'), h('span')),
+        h('button.btn.ghost.np-transcript', { type: 'button', onclick: () => {
+          const it = player.item;
+          // (The server on it already: what it says, not a second transcript made here.)
+          const job = !this.hasTranscript(it) && this.store.job?.(it.id);
+          if (job) { this.toast(jobText(job)); return; }
+          closeSheet({ then: () => this.openTranscript(it) });
+        } }, icon('lines'), h('span')),
         h('button.btn.ghost.np-details', { type: 'button', onclick: () => this.openEpisode(player.item) }, icon('alert'), h('span', { text: 'Episode notes' })),
         h('button.btn.ghost.np-out', { type: 'button', onclick: () => { closeSheet(); player.stop(); } }, icon('x'), h('span', { text: 'Take it out of the player' }))));
     this.sheet = sheet;
@@ -381,6 +390,15 @@ export class PlayerUI {
     if (over > 0) art.style.width = `${Math.max(120, Math.floor(art.offsetWidth - over))}px`;
   }
 
+  // Read it, make it, or (the server on it) how far the server is.
+  transcriptButton() {
+    const item = this.player.item;
+    const span = this.sheet?.querySelector('.np-transcript span');
+    if (!span || !item) return;
+    const job = !this.hasTranscript(item) && this.store.job?.(item.id);
+    span.textContent = this.hasTranscript(item) ? 'Read the transcript' : job ? jobTag(job) : 'Make a transcript';
+  }
+
   fill() {
     const { sheet, player } = this;
     const item = player.item;
@@ -388,7 +406,7 @@ export class PlayerUI {
     sheet.querySelector('.np-show').textContent = item.show || '';
     sheet.querySelector('.np-title').textContent = item.title || 'Episode';
     this.artInto(sheet.querySelector('.np-art'), item);
-    sheet.querySelector('.np-transcript span').textContent = this.hasTranscript(item) ? 'Read the transcript' : 'Make a transcript';
+    this.transcriptButton();
     sheet.querySelector('.np-details').classList.toggle('hidden', !item.sub && !item.url);
     this.toolValue('volume', `${Math.round(player.audio.volume * 100)}%`, false);
     this.jumps();
